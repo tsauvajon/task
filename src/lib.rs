@@ -1,5 +1,6 @@
 pub mod app;
 pub mod cli;
+pub mod commands;
 pub mod layout;
 pub mod repo_key;
 pub mod session;
