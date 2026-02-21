@@ -183,18 +183,18 @@ branch refs/heads/rewrite-in-rust\n\n";
         let cli = Cli::parse_from(["task", "start", "goto", "bump-deps"]);
         assert_eq!(
             cli.command,
-            Commands::Start {
+            Some(Commands::Start {
                 repo: "goto".to_string(),
                 branch: "bump-deps".to_string(),
                 base_ref: None,
-            }
+            })
         );
     }
 
     #[test]
     fn cli_parses_park_command_without_args() {
         let cli = Cli::parse_from(["task", "park"]);
-        assert_eq!(cli.command, Commands::Park);
+        assert_eq!(cli.command, Some(Commands::Park));
     }
 
     #[test]
@@ -202,9 +202,26 @@ branch refs/heads/rewrite-in-rust\n\n";
         let cli = Cli::parse_from(["task", "completions", "fish"]);
         assert_eq!(
             cli.command,
-            Commands::Completions {
+            Some(Commands::Completions {
                 shell: CompletionShell::Fish,
-            }
+            })
         );
+    }
+
+    #[test]
+    fn cli_parses_ui_command() {
+        let cli = Cli::parse_from(["task", "ui", "goto"]);
+        assert_eq!(
+            cli.command,
+            Some(Commands::Ui {
+                repo: Some("goto".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn cli_allows_no_command() {
+        let cli = Cli::parse_from(["task"]);
+        assert_eq!(cli.command, None);
     }
 }

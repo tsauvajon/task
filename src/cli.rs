@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(name = "task", about = "Task workflow helper")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
@@ -32,6 +32,8 @@ pub enum Commands {
     Path { repo: String, branch: String },
     #[command(about = "List tasks with open/parked status")]
     List { repo: Option<String> },
+    #[command(about = "Interactive task dashboard")]
+    Ui { repo: Option<String> },
     #[command(about = "Show raw git worktree list output")]
     Worktrees { repo: Option<String> },
     #[command(about = "Remove a task worktree")]
