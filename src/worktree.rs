@@ -1,10 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolveResult {
-    Resolved(String),
-    Ambiguous(Vec<String>),
-}
+use crate::session::session_name_for;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeEntry {
@@ -19,114 +15,6 @@ pub struct TaskRow {
     pub repo: String,
     pub branch: String,
     pub path: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct Layout {
-    repos_dir: PathBuf,
-    wt_dir: PathBuf,
-}
-
-impl Layout {
-    pub fn new(dev_root: impl AsRef<Path>) -> Self {
-        let dev_root = dev_root.as_ref().to_path_buf();
-        let repos_dir = dev_root.join("repos");
-        let wt_dir = dev_root.join("wt");
-        Self { repos_dir, wt_dir }
-    }
-
-    pub fn repo_gitdir_path(&self, repo_key: &str) -> PathBuf {
-        self.repos_dir.join(format!("{repo_key}.git"))
-    }
-
-    pub fn worktree_path(&self, repo_key: &str, branch: &str) -> PathBuf {
-        self.wt_dir.join(repo_key).join(branch)
-    }
-}
-
-pub fn normalize_repo_key(input: &str) -> String {
-    let mut key = input.trim().to_string();
-
-    if key.starts_with("ssh://") {
-        key = key.trim_start_matches("ssh://").to_string();
-    }
-    if key.starts_with("https://") {
-        key = key.trim_start_matches("https://").to_string();
-    }
-    if key.starts_with("http://") {
-        key = key.trim_start_matches("http://").to_string();
-    }
-
-    if key.starts_with("git@") {
-        key = key.trim_start_matches("git@").to_string();
-        if let Some((left, right)) = key.split_once(':') {
-            key = format!("{left}/{right}");
-        }
-    }
-
-    while key.starts_with('/') {
-        key.remove(0);
-    }
-
-    if let Some(stripped) = key.strip_suffix(".git") {
-        return stripped.to_string();
-    }
-
-    key
-}
-
-pub fn resolve_repo_key(query: &str, available_keys: &[String]) -> ResolveResult {
-    let normalized = normalize_repo_key(query);
-
-    if available_keys.iter().any(|key| key == &normalized) {
-        return ResolveResult::Resolved(normalized);
-    }
-
-    let mut matches = Vec::new();
-    for key in available_keys {
-        let base = key.rsplit('/').next().unwrap_or_default();
-        if key == &normalized || base == normalized || key.ends_with(&format!("/{normalized}")) {
-            matches.push(key.clone());
-        }
-    }
-    matches.sort();
-    matches.dedup();
-
-    if matches.is_empty() {
-        return ResolveResult::Resolved(normalized);
-    }
-
-    if matches.len() == 1 {
-        return ResolveResult::Resolved(matches[0].clone());
-    }
-
-    ResolveResult::Ambiguous(matches)
-}
-
-pub fn session_name_for(repo_key: &str, branch: &str) -> String {
-    let raw = format!("{repo_key}-{branch}");
-    let mut output = String::with_capacity(raw.len());
-
-    for ch in raw.chars() {
-        let mapped = match ch {
-            '/' | ':' | '.' => '_',
-            _ => ch,
-        };
-
-        if mapped.is_ascii_alphanumeric() || mapped == '_' || mapped == '-' {
-            output.push(mapped);
-        }
-    }
-
-    if output.len() > 80 {
-        output.truncate(80);
-    }
-
-    if output.is_empty() {
-        return "devtask".to_string();
-    }
-
-    output
 }
 
 pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {

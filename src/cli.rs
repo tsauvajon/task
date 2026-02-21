@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper")]
@@ -45,4 +45,13 @@ pub enum Commands {
     Prune { repo: String },
     #[command(about = "Run project checks for current task")]
     Done { worktree_path: Option<String> },
+    #[command(about = "Generate shell completion scripts")]
+    Completions { shell: CompletionShell },
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CompletionShell {
+    Bash,
+    Fish,
+    Zsh,
 }

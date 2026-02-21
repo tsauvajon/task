@@ -1,16 +1,21 @@
 pub mod app;
 pub mod cli;
-pub mod core;
+pub mod layout;
+pub mod repo_key;
+pub mod session;
+pub mod worktree;
 
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use crate::cli::{Cli, Commands};
-    use crate::core::{
-        Layout, ResolveResult, TaskRow, WorktreeEntry, branch_from_ref, branch_from_worktree_path,
-        build_task_rows, normalize_repo_key, parse_worktree_porcelain, repo_key_from_common_dir,
-        resolve_repo_key, session_name_for,
+    use crate::cli::{Cli, Commands, CompletionShell};
+    use crate::layout::Layout;
+    use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
+    use crate::session::session_name_for;
+    use crate::worktree::{
+        TaskRow, WorktreeEntry, branch_from_ref, branch_from_worktree_path, build_task_rows,
+        parse_worktree_porcelain, repo_key_from_common_dir,
     };
 
     #[test]
@@ -78,29 +83,24 @@ mod tests {
 
     #[test]
     fn layout_builds_expected_paths() {
-        let layout = Layout::new("/home/thomas/dev");
+        let root = std::env::temp_dir().join("task-tests-dev-root");
+        let layout = Layout::new(&root);
         assert_eq!(
-            layout
-                .repo_gitdir_path("github.com/tsauvajon/goto")
-                .display()
-                .to_string(),
-            "/home/thomas/dev/repos/github.com/tsauvajon/goto.git"
+            layout.repo_gitdir_path("github.com/tsauvajon/goto"),
+            root.join("repos/github.com/tsauvajon/goto.git")
         );
         assert_eq!(
-            layout
-                .worktree_path("github.com/tsauvajon/goto", "bump-deps")
-                .display()
-                .to_string(),
-            "/home/thomas/dev/wt/github.com/tsauvajon/goto/bump-deps"
+            layout.worktree_path("github.com/tsauvajon/goto", "bump-deps"),
+            root.join("wt/github.com/tsauvajon/goto/bump-deps")
         );
     }
 
     #[test]
     fn parse_worktree_porcelain_collects_entries() {
-        let text = "worktree /mnt/linux/dev/repos/github.com/tsauvajon/task.git\n\
+        let text = "worktree /tmp/dev/repos/github.com/tsauvajon/task.git\n\
 bare\n\
 \n\
-worktree /mnt/linux/dev/wt/github.com/tsauvajon/task/rewrite-in-rust\n\
+worktree /tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust\n\
 HEAD 0123456789abcdef\n\
 branch refs/heads/rewrite-in-rust\n\n";
 
@@ -110,7 +110,7 @@ branch refs/heads/rewrite-in-rust\n\n";
         assert_eq!(
             entries[1],
             WorktreeEntry {
-                path: "/mnt/linux/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
+                path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
                 branch_ref: Some("refs/heads/rewrite-in-rust".to_string()),
                 is_bare: false,
             }
@@ -121,14 +121,14 @@ branch refs/heads/rewrite-in-rust\n\n";
     fn branch_from_worktree_path_supports_nested_branch_names() {
         let branch = branch_from_worktree_path(
             "github.com/tsauvajon/task",
-            "/mnt/linux/dev/wt/github.com/tsauvajon/task/feat/rewrite/rust",
+            "/tmp/dev/wt/github.com/tsauvajon/task/feat/rewrite/rust",
         );
         assert_eq!(branch, Some("feat/rewrite/rust".to_string()));
     }
 
     #[test]
     fn repo_key_from_common_dir_extracts_key() {
-        let key = repo_key_from_common_dir("/mnt/linux/dev/repos/github.com/tsauvajon/task.git");
+        let key = repo_key_from_common_dir("/tmp/dev/repos/github.com/tsauvajon/task.git");
         assert_eq!(key, Some("github.com/tsauvajon/task".to_string()));
     }
 
@@ -144,12 +144,12 @@ branch refs/heads/rewrite-in-rust\n\n";
     fn build_task_rows_marks_open_and_parked_states() {
         let entries = vec![
             WorktreeEntry {
-                path: "/mnt/linux/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
+                path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
                 branch_ref: Some("refs/heads/rewrite-in-rust".to_string()),
                 is_bare: false,
             },
             WorktreeEntry {
-                path: "/mnt/linux/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
+                path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
                 branch_ref: Some("refs/heads/bump-deps".to_string()),
                 is_bare: false,
             },
@@ -165,13 +165,13 @@ branch refs/heads/rewrite-in-rust\n\n";
                     status: "open".to_string(),
                     repo: "github.com/tsauvajon/task".to_string(),
                     branch: "rewrite-in-rust".to_string(),
-                    path: "/mnt/linux/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
                 },
                 TaskRow {
                     status: "parked".to_string(),
                     repo: "github.com/tsauvajon/task".to_string(),
                     branch: "bump-deps".to_string(),
-                    path: "/mnt/linux/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
                 },
             ]
         );
@@ -194,5 +194,16 @@ branch refs/heads/rewrite-in-rust\n\n";
     fn cli_parses_park_command_without_args() {
         let cli = Cli::parse_from(["task", "park"]);
         assert_eq!(cli.command, Commands::Park);
+    }
+
+    #[test]
+    fn cli_parses_completions_command() {
+        let cli = Cli::parse_from(["task", "completions", "fish"]);
+        assert_eq!(
+            cli.command,
+            Commands::Completions {
+                shell: CompletionShell::Fish,
+            }
+        );
     }
 }

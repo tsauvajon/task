@@ -2,14 +2,23 @@ use std::collections::HashSet;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::cli::{Cli, Commands};
-use crate::core::{
-    Layout, ResolveResult, branch_from_worktree_path, build_task_rows, normalize_repo_key,
-    parse_worktree_porcelain, repo_key_from_common_dir, resolve_repo_key, session_name_for,
+use clap::CommandFactory;
+use clap_complete::{generate, shells};
+use comfy_table::{Cell, Color, ContentArrangement, Table};
+use dialoguer::{Select, theme::ColorfulTheme};
+use owo_colors::OwoColorize;
+
+use crate::cli::{Cli, Commands, CompletionShell};
+use crate::layout::Layout;
+use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
+use crate::session::session_name_for;
+use crate::worktree::{
+    TaskRow, branch_from_worktree_path, build_task_rows, parse_worktree_porcelain,
+    repo_key_from_common_dir,
 };
 
 pub fn run(cli: Cli) -> i32 {
@@ -35,6 +44,7 @@ pub fn run(cli: Cli) -> i32 {
         } => cmd_clean(&layout, &repo, &branch, force),
         Commands::Prune { repo } => cmd_prune(&layout, &repo),
         Commands::Done { worktree_path } => cmd_done(worktree_path.as_deref()),
+        Commands::Completions { shell } => cmd_completions(shell),
     };
 
     match result {
@@ -44,6 +54,19 @@ pub fn run(cli: Cli) -> i32 {
             1
         }
     }
+}
+
+fn cmd_completions(shell: CompletionShell) -> Result<(), String> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+
+    match shell {
+        CompletionShell::Bash => generate(shells::Bash, &mut command, name, &mut io::stdout()),
+        CompletionShell::Fish => generate(shells::Fish, &mut command, name, &mut io::stdout()),
+        CompletionShell::Zsh => generate(shells::Zsh, &mut command, name, &mut io::stdout()),
+    }
+
+    Ok(())
 }
 
 fn default_dev_root() -> PathBuf {
@@ -290,9 +313,8 @@ fn cmd_path(layout: &Layout, repo_arg: &str, branch: &str) -> Result<(), String>
 fn cmd_list(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
     ensure_layout(layout)?;
     let open_sessions = tmux_sessions();
-    println!("{:<7} {:<35} {:<28} PATH", "STATUS", "REPO", "BRANCH");
 
-    let mut rows_printed = 0usize;
+    let mut rows: Vec<TaskRow> = Vec::new();
     if let Some(repo_arg) = repo_arg {
         let repo_key = resolve_repo_key_input(layout, repo_arg)?;
         let gitdir = layout.repo_gitdir_path(&repo_key);
@@ -300,9 +322,11 @@ fn cmd_list(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
             return Err(format!("Repo not found: {repo_key}"));
         }
 
-        rows_printed += print_repo_tasks(&repo_key, &gitdir, &open_sessions)?;
-        if rows_printed == 0 {
+        rows.extend(repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+        if rows.is_empty() {
             log(&format!("No tasks found for {repo_key}"));
+        } else {
+            print_task_rows_table(&rows);
         }
         return Ok(());
     }
@@ -310,14 +334,16 @@ fn cmd_list(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
     let repo_keys = available_repo_keys(layout)?;
     for repo_key in repo_keys {
         let gitdir = layout.repo_gitdir_path(&repo_key);
-        rows_printed += print_repo_tasks(&repo_key, &gitdir, &open_sessions)?;
+        rows.extend(repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
     }
 
-    if rows_printed == 0 {
+    if rows.is_empty() {
         log(&format!(
             "No tasks found under {}",
             default_dev_root().join("wt").display()
         ));
+    } else {
+        print_task_rows_table(&rows);
     }
 
     Ok(())
@@ -637,42 +663,19 @@ fn choose_repo_key_interactive(query: &str, choices: &[String]) -> Result<String
         ));
     }
 
-    if !command_exists("fzf") {
-        return Err(format!(
-            "Multiple repositories match '{query}': {}. Install fzf or use a full repo key.",
-            choices.join(" ")
-        ));
+    let prompt = format!("Multiple repositories match '{query}'. Choose one:");
+    let index = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(prompt)
+        .items(choices)
+        .default(0)
+        .interact_opt()
+        .map_err(|error| error.to_string())?;
+
+    if let Some(index) = index {
+        return Ok(choices[index].clone());
     }
 
-    let mut child = Command::new("fzf")
-        .args([
-            "--prompt=repo> ",
-            "--height=40%",
-            "--reverse",
-            "--border",
-            &format!("--header=Multiple repos match '{query}' - choose one"),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(choices.join("\n").as_bytes())
-            .map_err(|e| e.to_string())?;
-    }
-
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        return Err("Selection cancelled.".to_string());
-    }
-
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if selected.is_empty() {
-        return Err("Selection cancelled.".to_string());
-    }
-    Ok(selected)
+    Err("Selection cancelled.".to_string())
 }
 
 fn clone_bare_repo(layout: &Layout, repo_url: &str, repo_key: &str) -> Result<(), String> {
@@ -855,11 +858,11 @@ fn launch_workspace(repo_key: &str, branch: &str, path: &Path) -> Result<(), Str
     Ok(())
 }
 
-fn print_repo_tasks(
+fn repo_task_rows(
     repo_key: &str,
     gitdir: &Path,
     open_sessions: &HashSet<String>,
-) -> Result<usize, String> {
+) -> Result<Vec<TaskRow>, String> {
     let output = run_capture(
         "git",
         &[
@@ -874,17 +877,31 @@ fn print_repo_tasks(
 
     let entries = parse_worktree_porcelain(&output);
     let open_session_list: Vec<String> = open_sessions.iter().cloned().collect();
-    let rows = build_task_rows(repo_key, &entries, &open_session_list);
-    for row in &rows {
-        println!(
-            "{:<7} {:<35} {:<28} {}",
-            row.status,
-            row.repo,
-            row.branch,
-            row.path.display()
-        );
+    Ok(build_task_rows(repo_key, &entries, &open_session_list))
+}
+
+fn print_task_rows_table(rows: &[TaskRow]) {
+    let mut table = Table::new();
+    table
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec!["STATUS", "REPO", "BRANCH", "PATH"]);
+
+    for row in rows {
+        let status_cell = match row.status.as_str() {
+            "open" => Cell::new("open").fg(Color::Green),
+            "parked" => Cell::new("parked").fg(Color::Yellow),
+            _ => Cell::new(&row.status),
+        };
+
+        table.add_row(vec![
+            status_cell,
+            Cell::new(&row.repo),
+            Cell::new(&row.branch),
+            Cell::new(row.path.display().to_string()),
+        ]);
     }
-    Ok(rows.len())
+
+    println!("{table}");
 }
 
 fn tmux_sessions() -> HashSet<String> {
@@ -1015,11 +1032,11 @@ fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> 
 }
 
 fn log(message: &str) {
-    println!("==> {message}");
+    println!("{} {}", "==>".bright_blue().bold(), message);
 }
 
 fn warn(message: &str) {
-    eprintln!("warning: {message}");
+    eprintln!("{} {}", "warning:".yellow().bold(), message);
 }
 
 #[cfg(test)]

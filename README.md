@@ -35,4 +35,18 @@ worktrees   Show raw git worktree list output
 clean       Remove a task worktree
 prune       Prune stale worktree metadata
 done        Run project checks for current task
+completions Generate shell completion scripts
 ```
+
+Generate completions:
+
+```bash
+task completions bash > task.bash-completion
+task completions fish > task.fish
+```
+
+## Terminal UI
+
+- `comfy-table` renders status tables for `task list`
+- `dialoguer` provides arrow-key interactive selection for ambiguous repo names
+- `owo-colors` styles status and warning output
