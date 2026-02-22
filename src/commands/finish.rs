@@ -1,11 +1,18 @@
 use std::fs;
 
 use crate::layout::Layout;
+use crate::session::session_name_for;
 
-pub fn run(layout: &Layout, repo_arg: &str, branch: &str, force: bool) -> Result<(), String> {
-    let repo_key = super::resolve_repo_key_input(layout, repo_arg)?;
+pub fn run(
+    layout: &Layout,
+    repo_arg: Option<&str>,
+    branch_arg: Option<&str>,
+    force: bool,
+) -> Result<(), String> {
+    let (repo_arg, branch) = super::resolve_repo_branch_inputs(repo_arg, branch_arg)?;
+    let repo_key = super::resolve_repo_key_input(layout, &repo_arg)?;
     let gitdir = layout.repo_gitdir_path(&repo_key);
-    let worktree = layout.worktree_path(&repo_key, branch);
+    let worktree = layout.worktree_path(&repo_key, &branch);
 
     if !gitdir.is_dir() {
         return Err(format!("Repo not found: {repo_key}"));
@@ -30,6 +37,13 @@ pub fn run(layout: &Layout, repo_arg: &str, branch: &str, force: bool) -> Result
                 "Worktree has uncommitted changes. Use --force if you really want to remove it."
                     .to_string(),
             );
+        }
+    }
+
+    if super::command_exists("tmux") {
+        let session = session_name_for(&repo_key, &branch);
+        if super::tmux_has_session(&session) {
+            super::run_status("tmux", &["kill-session", "-t", &session], None)?;
         }
     }
 

@@ -466,6 +466,34 @@ pub(super) fn current_task_info() -> Result<(String, String, PathBuf), String> {
     Ok((repo_key, branch, root))
 }
 
+pub(super) fn current_repo_key() -> Option<String> {
+    current_task_info().ok().map(|(repo_key, _, _)| repo_key)
+}
+
+pub(super) fn resolve_repo_branch_inputs(
+    repo_arg: Option<&str>,
+    branch_arg: Option<&str>,
+) -> Result<(String, String), String> {
+    if let (Some(repo_arg), Some(branch_arg)) = (repo_arg, branch_arg) {
+        return Ok((repo_arg.to_string(), branch_arg.to_string()));
+    }
+
+    let (current_repo, current_branch, _) = current_task_info()?;
+    let repo = repo_arg.unwrap_or(&current_repo).to_string();
+    let branch = branch_arg.unwrap_or(&current_branch).to_string();
+    Ok((repo, branch))
+}
+
+pub(super) fn resolve_repo_input(repo_arg: Option<&str>) -> Result<String, String> {
+    if let Some(repo_arg) = repo_arg {
+        return Ok(repo_arg.to_string());
+    }
+
+    current_repo_key().ok_or_else(|| {
+        "Repository not specified and current directory is not a task worktree.".to_string()
+    })
+}
+
 pub(super) fn command_exists(name: &str) -> bool {
     if name.contains('/') {
         return Path::new(name).exists();

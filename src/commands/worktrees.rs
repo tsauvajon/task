@@ -5,7 +5,11 @@ use crate::layout::Layout;
 pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
     super::ensure_layout(layout)?;
 
-    if let Some(repo_arg) = repo_arg {
+    let repo_arg = repo_arg
+        .map(str::to_string)
+        .or_else(super::current_repo_key);
+
+    if let Some(repo_arg) = repo_arg.as_deref() {
         let repo_key = super::resolve_repo_key_input(layout, repo_arg)?;
         let gitdir = layout.repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {

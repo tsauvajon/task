@@ -1,9 +1,10 @@
 pub mod bootstrap;
-pub mod clean;
+pub mod check;
 pub mod clone;
+pub mod complete;
 pub mod completions;
 pub mod doctor;
-pub mod done;
+pub mod finish;
 pub mod list;
 pub mod open;
 pub mod park;
@@ -32,19 +33,24 @@ pub fn run(cli: Cli) -> Result<(), String> {
             branch,
             base_ref,
         }) => start::run(&layout, &repo, &branch, base_ref.as_deref()),
-        Some(Commands::Open { repo, branch }) => open::run(&layout, &repo, &branch),
+        Some(Commands::Open { repo, branch }) => {
+            open::run(&layout, repo.as_deref(), branch.as_deref())
+        }
         Some(Commands::Park) => park::run(&layout),
-        Some(Commands::Path { repo, branch }) => path::run(&layout, &repo, &branch),
+        Some(Commands::Path { repo, branch }) => {
+            path::run(&layout, repo.as_deref(), branch.as_deref())
+        }
         Some(Commands::List { repo }) => list::run(&layout, repo.as_deref()),
         Some(Commands::Ui { repo }) => ui::run(&layout, repo.as_deref()),
         Some(Commands::Worktrees { repo }) => worktrees::run(&layout, repo.as_deref()),
-        Some(Commands::Clean {
+        Some(Commands::Finish {
             repo,
             branch,
             force,
-        }) => clean::run(&layout, &repo, &branch, force),
-        Some(Commands::Prune { repo }) => prune::run(&layout, &repo),
-        Some(Commands::Done { worktree_path }) => done::run(worktree_path.as_deref()),
+        }) => finish::run(&layout, repo.as_deref(), branch.as_deref(), force),
+        Some(Commands::Prune { repo }) => prune::run(&layout, repo.as_deref()),
+        Some(Commands::Check { worktree_path }) => check::run(worktree_path.as_deref()),
         Some(Commands::Completions { shell }) => completions::run(shell),
+        Some(Commands::Complete { words }) => complete::run(&layout, &words),
     }
 }

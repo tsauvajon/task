@@ -14,6 +14,20 @@ Or with Nix:
 nix build
 ```
 
+## Install
+
+Using your current setup (Nix + fish), install `task` to `~/.cargo/bin` with:
+
+```bash
+nix develop -c cargo install --path .
+```
+
+If `~/.cargo/bin` is not already on your `PATH`, add it in `~/.config/fish/config.fish`:
+
+```fish
+fish_add_path ~/.cargo/bin
+```
+
 ## Test
 
 ```bash
@@ -42,13 +56,22 @@ path        Print worktree path for a task
 list        List tasks with open/parked status
 ui          Interactive task dashboard
 worktrees   Show raw git worktree list output
-clean       Remove a task worktree
+finish      Remove a task worktree
 prune       Prune stale worktree metadata
-done        Run project checks for current task
+check       Run project checks for current task
 completions Generate shell completion scripts
 ```
 
-Generate completions:
+## Autocompletions
+
+For your fish setup, install completions to fish's default user completions path:
+
+```bash
+mkdir -p ~/.config/fish/completions
+task completions fish > ~/.config/fish/completions/task.fish
+```
+
+Other shells:
 
 ```bash
 task completions bash > task.bash-completion

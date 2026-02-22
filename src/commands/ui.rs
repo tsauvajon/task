@@ -24,12 +24,14 @@ type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 enum InputMode {
     Normal,
     Filter,
+    Create,
 }
 
 #[derive(Debug, Clone)]
 enum UiAction {
     Quit,
     Open(TaskRow),
+    Create { repo: String, branch: String },
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +40,7 @@ struct UiState {
     filtered_indices: Vec<usize>,
     selected: usize,
     filter: String,
+    create_branch: String,
     mode: InputMode,
     message: String,
     show_help: bool,
@@ -50,6 +53,7 @@ impl UiState {
             filtered_indices: Vec::new(),
             selected: 0,
             filter: String::new(),
+            create_branch: String::new(),
             mode: InputMode::Normal,
             message: "Ready".to_string(),
             show_help: false,
@@ -120,14 +124,18 @@ pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
     match ui_result? {
         UiAction::Quit => Ok(()),
         UiAction::Open(row) => super::launch_workspace(&row.repo, &row.branch, &row.path),
+        UiAction::Create { repo, branch } => super::start::run(layout, &repo, &branch, None),
     }
 }
 
 fn load_rows(layout: &Layout, repo_arg: Option<&str>) -> Result<Vec<TaskRow>, String> {
     let open_sessions = super::tmux_sessions();
     let mut rows = Vec::new();
+    let repo_arg = repo_arg
+        .map(str::to_string)
+        .or_else(super::current_repo_key);
 
-    if let Some(repo_arg) = repo_arg {
+    if let Some(repo_arg) = repo_arg.as_deref() {
         let repo_key = super::resolve_repo_key_input(layout, repo_arg)?;
         let gitdir = layout.repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {
@@ -209,6 +217,16 @@ fn run_event_loop(
                     KeyCode::Char('?') => {
                         state.show_help = !state.show_help;
                     }
+                    KeyCode::Char('c') => {
+                        state.mode = InputMode::Create;
+                        state.create_branch.clear();
+                        state.message = "Create mode: type branch name".to_string();
+                    }
+                    KeyCode::Char('f') => {
+                        finish_selected(layout, state)?;
+                        let rows = load_rows(layout, repo_arg)?;
+                        state.set_rows(rows);
+                    }
                     KeyCode::Char('r') => {
                         let rows = load_rows(layout, repo_arg)?;
                         state.set_rows(rows);
@@ -250,6 +268,39 @@ fn run_event_loop(
                     }
                     _ => {}
                 },
+                InputMode::Create => match key.code {
+                    KeyCode::Esc => {
+                        state.mode = InputMode::Normal;
+                        state.message = "Create cancelled".to_string();
+                    }
+                    KeyCode::Enter => {
+                        let branch = state.create_branch.trim();
+                        if branch.is_empty() {
+                            state.message = "Branch name cannot be empty".to_string();
+                            continue;
+                        }
+
+                        let repo = if let Some(row) = state.selected_row() {
+                            row.repo.clone()
+                        } else if let Some(repo_arg) = repo_arg {
+                            super::resolve_repo_input(Some(repo_arg))?
+                        } else {
+                            super::resolve_repo_input(None)?
+                        };
+
+                        return Ok(UiAction::Create {
+                            repo,
+                            branch: branch.to_string(),
+                        });
+                    }
+                    KeyCode::Backspace => {
+                        state.create_branch.pop();
+                    }
+                    KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        state.create_branch.push(ch);
+                    }
+                    _ => {}
+                },
             }
         }
     }
@@ -276,13 +327,29 @@ fn park_selected(state: &mut UiState) -> Result<(), String> {
     Ok(())
 }
 
+fn finish_selected(layout: &Layout, state: &mut UiState) -> Result<(), String> {
+    let Some(row) = state.selected_row().cloned() else {
+        state.message = "No selected task".to_string();
+        return Ok(());
+    };
+
+    let session = session_name_for(&row.repo, &row.branch);
+    if super::tmux_has_session(&session) {
+        super::run_status("tmux", &["kill-session", "-t", &session], None)?;
+    }
+
+    super::finish::run(layout, Some(&row.repo), Some(&row.branch), false)?;
+    state.message = format!("Finished task: {} {}", row.repo, row.branch);
+    Ok(())
+}
+
 fn render(frame: &mut Frame, state: &UiState) {
     let outer = UiLayout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(10),
-            Constraint::Length(2),
+            Constraint::Length(19),
         ])
         .split(frame.area());
 
@@ -301,6 +368,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &UiState) {
     let mode = match state.mode {
         InputMode::Normal => "NORMAL",
         InputMode::Filter => "FILTER",
+        InputMode::Create => "CREATE",
     };
 
     let lines = vec![
@@ -323,7 +391,13 @@ fn render_header(frame: &mut Frame, area: Rect, state: &UiState) {
         ]),
         Line::from(vec![
             Span::styled("Filter: ", Style::default().fg(Color::Gray)),
-            Span::raw(if state.filter.is_empty() {
+            Span::raw(if state.mode == InputMode::Create {
+                if state.create_branch.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    state.create_branch.clone()
+                }
+            } else if state.filter.is_empty() {
                 "(none)".to_string()
             } else {
                 state.filter.clone()
@@ -413,10 +487,18 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
                 Span::raw(row.path.to_string_lossy().to_string()),
             ]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled("Actions: ", Style::default().fg(Color::Cyan)),
-                Span::raw("Enter open, p park, r refresh"),
-            ]),
+            Line::from(vec![Span::styled(
+                "Actions",
+                Style::default().fg(Color::Cyan),
+            )]),
+            Line::from("Enter  open selected task"),
+            Line::from("p      park selected task"),
+            Line::from("f      finish selected task"),
+            Line::from("c      create new task"),
+            Line::from("r      refresh task list"),
+            Line::from("/      enter filter mode"),
+            Line::from("?      toggle help"),
+            Line::from("q      quit"),
         ]
     } else {
         vec![
@@ -431,14 +513,48 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, state: &UiState) {
-    let keys = match state.mode {
-        InputMode::Normal => {
-            "↑/k ↓/j move   Enter open   p park   / filter   r refresh   ? help   q quit"
-        }
-        InputMode::Filter => {
-            "Type to filter   Backspace delete   Ctrl-U clear   Enter apply   Esc normal"
-        }
+    let mode = match state.mode {
+        InputMode::Normal => "NORMAL",
+        InputMode::Filter => "FILTER",
+        InputMode::Create => "CREATE",
     };
+
+    let keys = vec![
+        Line::from(vec![
+            Span::styled("Mode: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                mode,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from("Normal mode:"),
+        Line::from("↑/k       move up"),
+        Line::from("↓/j       move down"),
+        Line::from("Enter     open selected task"),
+        Line::from("p         park selected task"),
+        Line::from("f         finish selected task"),
+        Line::from("c         create new task"),
+        Line::from("r         refresh tasks"),
+        Line::from("/         enter filter mode"),
+        Line::from("?         toggle help"),
+        Line::from("q/Ctrl-C  quit"),
+        Line::from(""),
+        Line::from("Filter mode:"),
+        Line::from("Type      append filter text"),
+        Line::from("Backspace delete character"),
+        Line::from("Ctrl-U    clear filter"),
+        Line::from("Enter     apply and return to normal"),
+        Line::from("Esc       return to normal"),
+        Line::from(""),
+        Line::from("Create mode:"),
+        Line::from("Type      set new branch name"),
+        Line::from("Backspace delete character"),
+        Line::from("Enter     create and open new task"),
+        Line::from("Esc       return to normal"),
+    ];
 
     let footer = Paragraph::new(keys)
         .style(Style::default().fg(Color::Gray))
@@ -447,7 +563,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &UiState) {
 }
 
 fn render_help(frame: &mut Frame) {
-    let popup = centered_rect(70, 60, frame.area());
+    let popup = centered_rect(85, 85, frame.area());
     let lines = vec![
         Line::from(Span::styled(
             "Keybindings",
@@ -456,13 +572,30 @@ fn render_help(frame: &mut Frame) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("Navigation: ↑/k, ↓/j"),
-        Line::from("Open selected task: Enter"),
-        Line::from("Park selected task: p"),
-        Line::from("Refresh list: r"),
-        Line::from("Filter mode: /"),
-        Line::from("Toggle this help: ?"),
-        Line::from("Quit: q or Ctrl-C"),
+        Line::from("Normal mode:"),
+        Line::from("↑/k       move up"),
+        Line::from("↓/j       move down"),
+        Line::from("Enter     open selected task"),
+        Line::from("p         park selected task"),
+        Line::from("f         finish selected task"),
+        Line::from("c         create new task"),
+        Line::from("r         refresh tasks"),
+        Line::from("/         enter filter mode"),
+        Line::from("?         toggle help"),
+        Line::from("q/Ctrl-C  quit"),
+        Line::from(""),
+        Line::from("Filter mode:"),
+        Line::from("Type      append filter text"),
+        Line::from("Backspace delete character"),
+        Line::from("Ctrl-U    clear filter"),
+        Line::from("Enter     apply and return to normal"),
+        Line::from("Esc       return to normal"),
+        Line::from(""),
+        Line::from("Create mode:"),
+        Line::from("Type      set new branch name"),
+        Line::from("Backspace delete character"),
+        Line::from("Enter     create and open new task"),
+        Line::from("Esc       return to normal"),
     ];
 
     let help = Paragraph::new(lines)
