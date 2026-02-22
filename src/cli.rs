@@ -25,11 +25,17 @@ pub enum Commands {
         base_ref: Option<String>,
     },
     #[command(about = "Re-open a parked task")]
-    Open { repo: String, branch: String },
+    Open {
+        repo: Option<String>,
+        branch: Option<String>,
+    },
     #[command(about = "Park current task (stop tmux session)")]
     Park,
     #[command(about = "Print worktree path for a task")]
-    Path { repo: String, branch: String },
+    Path {
+        repo: Option<String>,
+        branch: Option<String>,
+    },
     #[command(about = "List tasks with open/parked status")]
     List { repo: Option<String> },
     #[command(about = "Interactive task dashboard")]
@@ -37,18 +43,20 @@ pub enum Commands {
     #[command(about = "Show raw git worktree list output")]
     Worktrees { repo: Option<String> },
     #[command(about = "Remove a task worktree")]
-    Clean {
-        repo: String,
-        branch: String,
+    Finish {
+        repo: Option<String>,
+        branch: Option<String>,
         #[arg(long)]
         force: bool,
     },
     #[command(about = "Prune stale worktree metadata")]
-    Prune { repo: String },
-    #[command(about = "Run project checks for current task")]
-    Done { worktree_path: Option<String> },
+    Prune { repo: Option<String> },
+    #[command(about = "Run project checks for current task", alias = "done")]
+    Check { worktree_path: Option<String> },
     #[command(about = "Generate shell completion scripts")]
     Completions { shell: CompletionShell },
+    #[command(name = "__complete", hide = true, trailing_var_arg = true)]
+    Complete { words: Vec<String> },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]

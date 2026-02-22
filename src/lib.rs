@@ -209,6 +209,60 @@ branch refs/heads/rewrite-in-rust\n\n";
     }
 
     #[test]
+    fn cli_parses_open_without_args() {
+        let cli = Cli::parse_from(["task", "open"]);
+        assert_eq!(
+            cli.command,
+            Some(Commands::Open {
+                repo: None,
+                branch: None,
+            })
+        );
+    }
+
+    #[test]
+    fn cli_parses_open_with_repo_only() {
+        let cli = Cli::parse_from(["task", "open", "goto"]);
+        assert_eq!(
+            cli.command,
+            Some(Commands::Open {
+                repo: Some("goto".to_string()),
+                branch: None,
+            })
+        );
+    }
+
+    #[test]
+    fn cli_parses_finish_with_force_only() {
+        let cli = Cli::parse_from(["task", "finish", "--force"]);
+        assert_eq!(
+            cli.command,
+            Some(Commands::Finish {
+                repo: None,
+                branch: None,
+                force: true,
+            })
+        );
+    }
+
+    #[test]
+    fn cli_parses_prune_without_repo() {
+        let cli = Cli::parse_from(["task", "prune"]);
+        assert_eq!(cli.command, Some(Commands::Prune { repo: None }));
+    }
+
+    #[test]
+    fn cli_parses_check_command() {
+        let cli = Cli::parse_from(["task", "check"]);
+        assert_eq!(
+            cli.command,
+            Some(Commands::Check {
+                worktree_path: None,
+            })
+        );
+    }
+
+    #[test]
     fn cli_parses_ui_command() {
         let cli = Cli::parse_from(["task", "ui", "goto"]);
         assert_eq!(
