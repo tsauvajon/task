@@ -246,10 +246,7 @@ branch refs/heads/rewrite-in-rust\n\n";
     #[test]
     fn cli_parses_rebase_without_args() {
         let cli = Cli::parse_from(["task", "rebase"]);
-        assert_eq!(
-            cli.command,
-            Some(Commands::Rebase { args: Vec::new() })
-        );
+        assert_eq!(cli.command, Some(Commands::Rebase { args: Vec::new() }));
     }
 
     #[test]

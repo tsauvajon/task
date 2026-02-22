@@ -239,24 +239,6 @@ pub(super) fn detect_default_base(gitdir: &Path) -> String {
         return "origin/master".to_string();
     }
 
-    if let Ok(head) = run_capture(
-        "git",
-        &[
-            "--git-dir",
-            gitdir_text.as_ref(),
-            "symbolic-ref",
-            "--quiet",
-            "--short",
-            "refs/remotes/origin/HEAD",
-        ],
-        None,
-    ) {
-        let head = head.trim();
-        if !head.is_empty() {
-            return head.to_string();
-        }
-    }
-
     "HEAD".to_string()
 }
 
@@ -714,10 +696,10 @@ mod tests {
 
     #[test]
     fn tmux_sessions_parses_names() {
-        let text = "task_a: 1 windows\nmain: 2 windows\n";
+        let text = "task_a: 1 windows\ndefault: 2 windows\n";
         let sessions = tmux_sessions_from_output(text);
         assert!(sessions.contains("task_a"));
-        assert!(sessions.contains("main"));
+        assert!(sessions.contains("default"));
     }
 
     #[test]
