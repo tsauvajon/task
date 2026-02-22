@@ -13,17 +13,7 @@ pub fn run(
     super::ensure_repo_available(layout, repo_arg, &repo_key)?;
 
     let gitdir = layout.repo_gitdir_path(&repo_key);
-    super::run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "fetch",
-            "--all",
-            "--prune",
-        ],
-        None,
-    )?;
+    super::fetch_origin_refs(&gitdir)?;
 
     let base_ref = base_ref
         .map(|value| value.to_string())

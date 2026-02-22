@@ -233,6 +233,37 @@ branch refs/heads/rewrite-in-rust\n\n";
     }
 
     #[test]
+    fn cli_parses_rebase_command() {
+        let cli = Cli::parse_from(["task", "rebase", "goto", "bump-deps"]);
+        assert_eq!(
+            cli.command,
+            Some(Commands::Rebase {
+                args: vec!["goto".to_string(), "bump-deps".to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn cli_parses_rebase_without_args() {
+        let cli = Cli::parse_from(["task", "rebase"]);
+        assert_eq!(
+            cli.command,
+            Some(Commands::Rebase { args: Vec::new() })
+        );
+    }
+
+    #[test]
+    fn cli_parses_rebase_with_query_arg() {
+        let cli = Cli::parse_from(["task", "rebase", "bump-deps"]);
+        assert_eq!(
+            cli.command,
+            Some(Commands::Rebase {
+                args: vec!["bump-deps".to_string()],
+            })
+        );
+    }
+
+    #[test]
     fn cli_parses_finish_with_force_only() {
         let cli = Cli::parse_from(["task", "finish", "--force"]);
         assert_eq!(

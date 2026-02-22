@@ -53,6 +53,8 @@ pub enum Commands {
     Prune { repo: Option<String> },
     #[command(about = "Run project checks for current task", alias = "done")]
     Check { worktree_path: Option<String> },
+    #[command(about = "Rebase task branch onto a base ref")]
+    Rebase { args: Vec<String> },
     #[command(about = "Generate shell completion scripts")]
     Completions { shell: CompletionShell },
     #[command(name = "__complete", hide = true, trailing_var_arg = true)]

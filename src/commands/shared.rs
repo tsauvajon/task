@@ -7,15 +7,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
-use dialoguer::{Select, theme::ColorfulTheme};
+use dialoguer::{theme::ColorfulTheme, Select};
 use owo_colors::OwoColorize;
 
 use crate::layout::Layout;
-use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
+use crate::repo_key::{normalize_repo_key, resolve_repo_key, ResolveResult};
 use crate::session::session_name_for;
 use crate::worktree::{
-    TaskRow, branch_from_worktree_path, build_task_rows, parse_worktree_porcelain,
-    repo_key_from_common_dir,
+    branch_from_worktree_path, build_task_rows, parse_worktree_porcelain, repo_key_from_common_dir,
+    TaskRow,
 };
 
 pub(super) fn default_dev_root() -> PathBuf {
@@ -191,24 +191,37 @@ pub(super) fn ensure_repo_available(
 }
 
 pub(super) fn detect_default_base(gitdir: &Path) -> String {
-    let gitdir_text = gitdir.to_string_lossy();
-    if run_status(
+    if let Ok(output) = run_capture(
         "git",
         &[
             "--git-dir",
-            gitdir_text.as_ref(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            "refs/remotes/origin/main",
+            gitdir.to_string_lossy().as_ref(),
+            "ls-remote",
+            "--symref",
+            "origin",
+            "HEAD",
         ],
         None,
-    )
-    .is_ok()
-    {
-        return "origin/main".to_string();
+    ) {
+        for line in output.lines() {
+            if let Some(target) = line.strip_prefix("ref: ") {
+                let target = target.trim();
+                if let Some(target) = target.strip_suffix(" HEAD")
+                    && let Some(branch) = target.strip_prefix("refs/heads/")
+                {
+                    let remote_branch = format!("origin/{branch}");
+                    if rev_exists(gitdir, &remote_branch) {
+                        return remote_branch;
+                    }
+                    if rev_exists(gitdir, branch) {
+                        return branch.to_string();
+                    }
+                }
+            }
+        }
     }
 
+    let gitdir_text = gitdir.to_string_lossy();
     if run_status(
         "git",
         &[
@@ -245,6 +258,21 @@ pub(super) fn detect_default_base(gitdir: &Path) -> String {
     }
 
     "HEAD".to_string()
+}
+
+pub(super) fn fetch_origin_refs(gitdir: &Path) -> Result<(), String> {
+    run_status(
+        "git",
+        &[
+            "--git-dir",
+            gitdir.to_string_lossy().as_ref(),
+            "fetch",
+            "origin",
+            "--prune",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ],
+        None,
+    )
 }
 
 pub(super) fn ref_exists(gitdir: &Path, reference: &str) -> bool {
@@ -353,6 +381,131 @@ pub(super) fn repo_task_rows(
     let entries = parse_worktree_porcelain(&output);
     let open_session_list: Vec<String> = open_sessions.iter().cloned().collect();
     Ok(build_task_rows(repo_key, &entries, &open_session_list))
+}
+
+pub(super) fn resolve_task_from_args(
+    layout: &Layout,
+    args: &[String],
+    usage: &str,
+) -> Result<(String, String), String> {
+    match args {
+        [] => {
+            let (repo_key, branch, _) = current_task_info()?;
+            Ok((repo_key, branch))
+        }
+        [query] => resolve_task_from_query(layout, query),
+        [repo_arg, branch] => {
+            let repo_key = resolve_repo_key_input(layout, repo_arg)?;
+            Ok((repo_key, branch.to_string()))
+        }
+        _ => Err(usage.to_string()),
+    }
+}
+
+pub(super) fn resolve_task_from_query(
+    layout: &Layout,
+    query: &str,
+) -> Result<(String, String), String> {
+    let tasks = all_tasks(layout)?;
+
+    let mut branch_exact: Vec<&TaskRow> = tasks.iter().filter(|row| row.branch == query).collect();
+    branch_exact.sort_by(|a, b| {
+        let a_key = format!("{}/{}", a.repo, a.branch);
+        let b_key = format!("{}/{}", b.repo, b.branch);
+        a_key.cmp(&b_key)
+    });
+    if branch_exact.len() == 1 {
+        let row = branch_exact[0];
+        return Ok((row.repo.clone(), row.branch.clone()));
+    }
+    if !branch_exact.is_empty() {
+        return choose_task_interactive(query, &branch_exact);
+    }
+
+    let mut branch_partial: Vec<&TaskRow> = tasks
+        .iter()
+        .filter(|row| row.branch.contains(query))
+        .collect();
+    branch_partial.sort_by(|a, b| {
+        let a_key = format!("{}/{}", a.repo, a.branch);
+        let b_key = format!("{}/{}", b.repo, b.branch);
+        a_key.cmp(&b_key)
+    });
+    if branch_partial.len() == 1 {
+        let row = branch_partial[0];
+        return Ok((row.repo.clone(), row.branch.clone()));
+    }
+    if !branch_partial.is_empty() {
+        return choose_task_interactive(query, &branch_partial);
+    }
+
+    let mut repo_matches: Vec<&TaskRow> = tasks
+        .iter()
+        .filter(|row| row.repo.contains(query))
+        .collect();
+    repo_matches.sort_by(|a, b| {
+        let a_key = format!("{}/{}", a.repo, a.branch);
+        let b_key = format!("{}/{}", b.repo, b.branch);
+        a_key.cmp(&b_key)
+    });
+
+    if repo_matches.is_empty() {
+        return Err(format!("No task matched '{query}'."));
+    }
+    if repo_matches.len() == 1 {
+        let row = repo_matches[0];
+        return Ok((row.repo.clone(), row.branch.clone()));
+    }
+
+    choose_task_interactive(query, &repo_matches)
+}
+
+fn all_tasks(layout: &Layout) -> Result<Vec<TaskRow>, String> {
+    let mut rows = Vec::new();
+    let open_sessions = tmux_sessions();
+    let repo_keys = available_repo_keys(layout)?;
+
+    for repo_key in repo_keys {
+        let gitdir = layout.repo_gitdir_path(&repo_key);
+        if !gitdir.is_dir() {
+            continue;
+        }
+        rows.extend(repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+    }
+
+    Ok(rows)
+}
+
+fn choose_task_interactive(query: &str, choices: &[&TaskRow]) -> Result<(String, String), String> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        let list = choices
+            .iter()
+            .map(|row| format!("{}/{}", row.repo, row.branch))
+            .collect::<Vec<String>>()
+            .join(" ");
+        return Err(format!(
+            "Multiple tasks match '{query}': {list}. Please specify repo and branch."
+        ));
+    }
+
+    let items = choices
+        .iter()
+        .map(|row| format!("{}/{}", row.repo, row.branch))
+        .collect::<Vec<String>>();
+
+    let index = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!("Multiple tasks match '{query}'. Choose one:"))
+        .items(&items)
+        .default(0)
+        .interact_opt()
+        .map_err(|error| error.to_string())?;
+
+    if let Some(index) = index {
+        let row = choices[index];
+        return Ok((row.repo.clone(), row.branch.clone()));
+    }
+
+    Err("Selection cancelled.".to_string())
 }
 
 pub(super) fn print_task_rows_table(rows: &[TaskRow]) {
@@ -471,11 +624,16 @@ pub(super) fn current_repo_key() -> Option<String> {
 }
 
 pub(super) fn resolve_repo_branch_inputs(
+    layout: &Layout,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
 ) -> Result<(String, String), String> {
     if let (Some(repo_arg), Some(branch_arg)) = (repo_arg, branch_arg) {
         return Ok((repo_arg.to_string(), branch_arg.to_string()));
+    }
+
+    if let (Some(query), None) = (repo_arg, branch_arg) {
+        return resolve_task_from_query(layout, query);
     }
 
     let (current_repo, current_branch, _) = current_task_info()?;

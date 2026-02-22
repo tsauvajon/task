@@ -10,6 +10,7 @@ pub mod open;
 pub mod park;
 pub mod path;
 pub mod prune;
+pub mod rebase;
 mod shared;
 pub mod start;
 pub mod ui;
@@ -50,6 +51,7 @@ pub fn run(cli: Cli) -> Result<(), String> {
         }) => finish::run(&layout, repo.as_deref(), branch.as_deref(), force),
         Some(Commands::Prune { repo }) => prune::run(&layout, repo.as_deref()),
         Some(Commands::Check { worktree_path }) => check::run(worktree_path.as_deref()),
+        Some(Commands::Rebase { args }) => rebase::run(&layout, &args),
         Some(Commands::Completions { shell }) => completions::run(shell),
         Some(Commands::Complete { words }) => complete::run(&layout, &words),
     }
