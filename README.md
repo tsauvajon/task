@@ -5,7 +5,7 @@ Rust rewrite of the `task` workflow CLI for git worktrees.
 ## Build
 
 ```bash
-cargo build
+nix develop -c cargo build
 ```
 
 Or with Nix:
@@ -17,7 +17,16 @@ nix build
 ## Test
 
 ```bash
-cargo test
+nix develop -c cargo test
+```
+
+## Toolchain
+
+Rust tooling comes from the Nix dev shell. Run formatting and linting with:
+
+```bash
+nix develop -c cargo fmt
+nix develop -c cargo clippy --workspace --all-targets --all-features -- -D warnings -D rust-2024-compatibility -A deprecated
 ```
 
 ## Commands
