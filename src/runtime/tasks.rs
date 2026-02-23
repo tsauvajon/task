@@ -3,7 +3,6 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dialoguer::{Select, theme::ColorfulTheme};
@@ -128,14 +127,6 @@ impl TaskResolver {
             if self.process.command_exists("corepack") {
                 let _ = self.process.run_status("corepack", &["enable"], None);
             }
-        }
-
-        if self.process.command_exists("codium") {
-            let _ = Command::new("codium")
-                .arg(path)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
         }
 
         if tmux::open_task_session(self.process, repo_key, branch, path)? == OpenResult::Attached {
