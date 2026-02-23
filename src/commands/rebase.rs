@@ -1,16 +1,16 @@
 use crate::git::commands as git_commands;
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::RuntimeEnvironment;
 
-pub fn run(layout: &WorkspacePaths, args: &[String]) -> Result<(), String> {
+pub fn run(context: &RuntimeEnvironment, args: &[String]) -> Result<(), String> {
     let input = parse_rebase_input(args)?;
-    let (repo_key, branch, base_ref) = resolve_rebase_target(layout, input)?;
+    let (repo_key, branch, base_ref) = resolve_rebase_target(context, input)?;
 
-    let gitdir = layout.repo_gitdir_path(&repo_key);
+    let gitdir = context.layout().repo_gitdir_path(&repo_key);
     if !gitdir.is_dir() {
         return Err(format!("Repo not found: {repo_key}"));
     }
 
-    let worktree = super::resolve_worktree_path(layout, &repo_key, &branch);
+    let worktree = context.resolve_worktree_path(&repo_key, &branch);
     if !worktree.join(".git").exists() {
         return Err(format!("Worktree not found: {}", worktree.display()));
     }
@@ -22,7 +22,7 @@ pub fn run(layout: &WorkspacePaths, args: &[String]) -> Result<(), String> {
         return Err(format!("Base ref not found: {base_ref}"));
     }
 
-    super::log(&format!("Rebasing {repo_key} {branch} onto {base_ref}"));
+    context.log(&format!("Rebasing {repo_key} {branch} onto {base_ref}"));
     git_commands::rebase(&worktree, &base_ref)
 }
 
@@ -59,28 +59,26 @@ fn parse_rebase_input(args: &[String]) -> Result<RebaseInput, String> {
 }
 
 fn resolve_rebase_target(
-    layout: &WorkspacePaths,
+    context: &RuntimeEnvironment,
     input: RebaseInput,
 ) -> Result<(String, String, Option<String>), String> {
     match input {
         RebaseInput::CurrentTask => {
-            let (repo_key, branch) = super::resolve_task_from_args(
-                layout,
+            let (repo_key, branch) = context.resolve_task_from_args(
                 &[],
                 "Usage: task rebase [query] | [repo branch [base-ref]]",
             )?;
             Ok((repo_key, branch, None))
         }
         RebaseInput::Query(query) => {
-            let (repo_key, branch) = super::resolve_task_from_args(
-                layout,
+            let (repo_key, branch) = context.resolve_task_from_args(
                 &[query],
                 "Usage: task rebase [query] | [repo branch [base-ref]]",
             )?;
             Ok((repo_key, branch, None))
         }
         RebaseInput::RepoBranch { repo_arg, branch } => {
-            let repo_key = super::resolve_repo_key_input(layout, &repo_arg)?;
+            let repo_key = context.resolve_repo_key_input(&repo_arg)?;
             Ok((repo_key, branch, None))
         }
         RebaseInput::RepoBranchBase {
@@ -88,7 +86,7 @@ fn resolve_rebase_target(
             branch,
             base_ref,
         } => {
-            let repo_key = super::resolve_repo_key_input(layout, &repo_arg)?;
+            let repo_key = context.resolve_repo_key_input(&repo_arg)?;
             Ok((repo_key, branch, Some(base_ref)))
         }
     }

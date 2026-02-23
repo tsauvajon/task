@@ -1,33 +1,32 @@
 use std::fs;
 
 use crate::git::commands as git_commands;
-use crate::runtime::session_name::task_session_name;
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::{RuntimeEnvironment, task_session_name};
 
 pub fn run(
-    layout: &WorkspacePaths,
+    context: &RuntimeEnvironment,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
     force: bool,
 ) -> Result<(), String> {
-    let (repo_arg, branch) = super::resolve_repo_branch_inputs(layout, repo_arg, branch_arg)?;
-    let repo_key = super::resolve_repo_key_input(layout, &repo_arg)?;
-    let gitdir = layout.repo_gitdir_path(&repo_key);
-    let worktree = super::resolve_worktree_path(layout, &repo_key, &branch);
+    let (repo_arg, branch) = context.resolve_repo_branch_inputs(repo_arg, branch_arg)?;
+    let repo_key = context.resolve_repo_key_input(&repo_arg)?;
+    let gitdir = context.layout().repo_gitdir_path(&repo_key);
+    let worktree = context.resolve_worktree_path(&repo_key, &branch);
 
     if !gitdir.is_dir() {
         return Err(format!("Repo not found: {repo_key}"));
     }
 
-    if super::command_exists("tmux") {
+    if context.command_exists("tmux") {
         let session = task_session_name(&repo_key, &branch);
-        if super::tmux_has_session(&session) {
-            super::run_status("tmux", &["kill-session", "-t", &session], None)?;
+        if context.tmux_has_session(&session) {
+            context.run_status("tmux", &["kill-session", "-t", &session], None)?;
         }
     }
 
     if !worktree.join(".git").exists() {
-        super::warn(&format!(
+        context.warn(&format!(
             "Worktree metadata is stale for {}. Pruning stale entries.",
             worktree.display()
         ));
@@ -41,7 +40,7 @@ pub fn run(
             if is_empty {
                 let _ = fs::remove_dir(&worktree);
             } else {
-                super::warn(&format!(
+                context.warn(&format!(
                     "Left non-worktree directory in place: {}",
                     worktree.display()
                 ));

@@ -1,16 +1,19 @@
 use std::collections::HashSet;
 
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::RuntimeEnvironment;
 
-pub fn run(layout: &WorkspacePaths, words: &[String]) -> Result<(), String> {
-    let values = completion_values(layout, words)?;
+pub fn run(context: &RuntimeEnvironment, words: &[String]) -> Result<(), String> {
+    let values = completion_values(context, words)?;
     for value in values {
         println!("{value}");
     }
     Ok(())
 }
 
-fn completion_values(layout: &WorkspacePaths, words: &[String]) -> Result<Vec<String>, String> {
+fn completion_values(
+    context: &RuntimeEnvironment,
+    words: &[String],
+) -> Result<Vec<String>, String> {
     if words.is_empty() {
         return Ok(top_level_commands());
     }
@@ -23,18 +26,18 @@ fn completion_values(layout: &WorkspacePaths, words: &[String]) -> Result<Vec<St
     let mut values = match command {
         "start" => {
             if arg_count <= 1 {
-                repo_candidates(layout)?
+                repo_candidates(context)?
             } else {
                 Vec::new()
             }
         }
         "open" => {
             if arg_count <= 1 {
-                let mut values = task_candidates(layout, None)?;
-                values.extend(repo_candidates(layout)?);
+                let mut values = task_candidates(context, None)?;
+                values.extend(repo_candidates(context)?);
                 values
             } else if arg_count == 2 {
-                task_candidates(layout, Some(&args[0]))?
+                task_candidates(context, Some(&args[0]))?
             } else {
                 Vec::new()
             }
@@ -44,10 +47,10 @@ fn completion_values(layout: &WorkspacePaths, words: &[String]) -> Result<Vec<St
                 if current.starts_with('-') && command == "finish" {
                     vec!["--force".to_string()]
                 } else {
-                    repo_candidates(layout)?
+                    repo_candidates(context)?
                 }
             } else if arg_count == 2 {
-                task_candidates(layout, Some(&args[0]))?
+                task_candidates(context, Some(&args[0]))?
             } else if command == "finish" && arg_count == 3 && current.starts_with('-') {
                 vec!["--force".to_string()]
             } else {
@@ -56,18 +59,18 @@ fn completion_values(layout: &WorkspacePaths, words: &[String]) -> Result<Vec<St
         }
         "rebase" => {
             if arg_count <= 1 {
-                let mut values = task_candidates(layout, None)?;
-                values.extend(repo_candidates(layout)?);
+                let mut values = task_candidates(context, None)?;
+                values.extend(repo_candidates(context)?);
                 values
             } else if arg_count == 2 {
-                task_candidates(layout, Some(&args[0]))?
+                task_candidates(context, Some(&args[0]))?
             } else {
                 Vec::new()
             }
         }
         "prune" | "list" | "ui" | "worktrees" => {
             if arg_count <= 1 {
-                repo_candidates(layout)?
+                repo_candidates(context)?
             } else {
                 Vec::new()
             }
@@ -104,9 +107,9 @@ fn top_level_commands() -> Vec<String> {
     .collect()
 }
 
-fn repo_candidates(layout: &WorkspacePaths) -> Result<Vec<String>, String> {
+fn repo_candidates(context: &RuntimeEnvironment) -> Result<Vec<String>, String> {
     let mut values = HashSet::new();
-    for key in super::available_repo_keys(layout)? {
+    for key in context.available_repo_keys()? {
         if let Some(short) = key.rsplit('/').next() {
             values.insert(short.to_string());
         }
@@ -129,22 +132,22 @@ fn filter_prefix(values: Vec<String>, current: &str) -> Vec<String> {
 }
 
 fn task_candidates(
-    layout: &WorkspacePaths,
+    context: &RuntimeEnvironment,
     repo_hint: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let keys = match repo_hint {
         Some(repo) => {
-            let resolved = super::resolve_repo_key_input(layout, repo)?;
+            let resolved = context.resolve_repo_key_input(repo)?;
             vec![resolved]
         }
-        None => super::available_repo_keys(layout)?,
+        None => context.available_repo_keys()?,
     };
 
     let open_sessions = HashSet::new();
     let mut values = HashSet::new();
     for repo_key in keys {
-        let gitdir = layout.repo_gitdir_path(&repo_key);
-        for row in super::repo_task_rows(&repo_key, &gitdir, &open_sessions)? {
+        let gitdir = context.layout().repo_gitdir_path(&repo_key);
+        for row in context.repo_task_rows(&repo_key, &gitdir, &open_sessions)? {
             values.insert(row.branch);
         }
     }

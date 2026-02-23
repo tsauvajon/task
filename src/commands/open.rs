@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal};
 use dialoguer::{Select, theme::ColorfulTheme};
 
 use crate::git::parsing::TaskRow;
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::RuntimeEnvironment;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MatchKind {
@@ -13,26 +13,26 @@ enum MatchKind {
 }
 
 pub fn run(
-    layout: &WorkspacePaths,
+    context: &RuntimeEnvironment,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
 ) -> Result<(), String> {
     if let (Some(query), None) = (repo_arg, branch_arg) {
-        let row = select_task_by_query(layout, query)?;
-        return super::launch_workspace(&row.repo, &row.branch, &row.path);
+        let row = select_task_by_query(context, query)?;
+        return context.launch_workspace(&row.repo, &row.branch, &row.path);
     }
 
-    let (repo_arg, branch) = super::resolve_repo_branch_inputs(layout, repo_arg, branch_arg)?;
-    let repo_key = super::resolve_repo_key_input(layout, &repo_arg)?;
-    let worktree = super::resolve_worktree_path(layout, &repo_key, &branch);
+    let (repo_arg, branch) = context.resolve_repo_branch_inputs(repo_arg, branch_arg)?;
+    let repo_key = context.resolve_repo_key_input(&repo_arg)?;
+    let worktree = context.resolve_worktree_path(&repo_key, &branch);
     if !worktree.join(".git").exists() {
         return Err(format!("Worktree not found: {}", worktree.display()));
     }
-    super::launch_workspace(&repo_key, &branch, &worktree)
+    context.launch_workspace(&repo_key, &branch, &worktree)
 }
 
-fn select_task_by_query(layout: &WorkspacePaths, query: &str) -> Result<TaskRow, String> {
-    let all_rows = all_task_rows(layout)?;
+fn select_task_by_query(context: &RuntimeEnvironment, query: &str) -> Result<TaskRow, String> {
+    let all_rows = all_task_rows(context)?;
     if all_rows.is_empty() {
         return Err("No tasks found. Run 'task start <repo> <branch>' first.".to_string());
     }
@@ -52,13 +52,13 @@ fn select_task_by_query(layout: &WorkspacePaths, query: &str) -> Result<TaskRow,
     resolve_match(query, &repo_matches, "repository")
 }
 
-fn all_task_rows(layout: &WorkspacePaths) -> Result<Vec<TaskRow>, String> {
+fn all_task_rows(context: &RuntimeEnvironment) -> Result<Vec<TaskRow>, String> {
     let mut rows = Vec::new();
     let open_sessions = HashSet::new();
 
-    for repo_key in super::available_repo_keys(layout)? {
-        let gitdir = layout.repo_gitdir_path(&repo_key);
-        rows.extend(super::repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+    for repo_key in context.available_repo_keys()? {
+        let gitdir = context.layout().repo_gitdir_path(&repo_key);
+        rows.extend(context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
     }
 
     rows.sort_by(|left, right| {

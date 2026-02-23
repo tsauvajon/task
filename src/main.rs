@@ -1,10 +1,15 @@
 use clap::Parser;
 
-use task::command_line::Cli;
-use task::entrypoint;
+use task::commands::{self, Cli};
 
 fn main() {
     let cli = Cli::parse();
-    let code = entrypoint::run_cli_and_exit_code(cli);
+    let code = match commands::run(cli) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("error: {error}");
+            1
+        }
+    };
     std::process::exit(code);
 }
