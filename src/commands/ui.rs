@@ -14,9 +14,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 use ratatui::{Frame, Terminal};
 
-use crate::layout::Layout;
-use crate::session::session_name_for;
-use crate::worktree::TaskRow;
+use crate::git::parsing::TaskRow;
+use crate::runtime::session_name::task_session_name;
+use crate::workspace_paths::WorkspacePaths;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -107,7 +107,7 @@ impl UiState {
     }
 }
 
-pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String> {
     super::ensure_layout(layout)?;
     let rows = load_rows(layout, repo_arg)?;
     let mut state = UiState::new(rows);
@@ -128,7 +128,7 @@ pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
     }
 }
 
-fn load_rows(layout: &Layout, repo_arg: Option<&str>) -> Result<Vec<TaskRow>, String> {
+fn load_rows(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<Vec<TaskRow>, String> {
     let open_sessions = super::tmux_sessions();
     let mut rows = Vec::new();
     let repo_arg = repo_arg
@@ -189,7 +189,7 @@ fn restore_terminal(terminal: &mut AppTerminal) -> Result<(), String> {
 }
 
 fn run_event_loop(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: Option<&str>,
     terminal: &mut AppTerminal,
     state: &mut UiState,
@@ -316,7 +316,7 @@ fn park_selected(state: &mut UiState) -> Result<(), String> {
         return Err("tmux is not available. Run 'task list' to inspect tasks.".to_string());
     }
 
-    let session = session_name_for(&row.repo, &row.branch);
+    let session = task_session_name(&row.repo, &row.branch);
     if super::tmux_has_session(&session) {
         super::run_status("tmux", &["kill-session", "-t", &session], None)?;
         state.message = format!("Parked task: {} {}", row.repo, row.branch);
@@ -327,13 +327,13 @@ fn park_selected(state: &mut UiState) -> Result<(), String> {
     Ok(())
 }
 
-fn finish_selected(layout: &Layout, state: &mut UiState) -> Result<(), String> {
+fn finish_selected(layout: &WorkspacePaths, state: &mut UiState) -> Result<(), String> {
     let Some(row) = state.selected_row().cloned() else {
         state.message = "No selected task".to_string();
         return Ok(());
     };
 
-    let session = session_name_for(&row.repo, &row.branch);
+    let session = task_session_name(&row.repo, &row.branch);
     if super::tmux_has_session(&session) {
         super::run_status("tmux", &["kill-session", "-t", &session], None)?;
     }
@@ -480,7 +480,7 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
             ]),
             Line::from(vec![
                 Span::styled("Session: ", Style::default().fg(Color::Gray)),
-                Span::raw(session_name_for(&row.repo, &row.branch)),
+                Span::raw(task_session_name(&row.repo, &row.branch)),
             ]),
             Line::from(vec![
                 Span::styled("Path: ", Style::default().fg(Color::Gray)),

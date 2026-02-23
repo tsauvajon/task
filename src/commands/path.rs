@@ -1,7 +1,7 @@
-use crate::layout::Layout;
+use crate::workspace_paths::WorkspacePaths;
 
 pub fn run(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
 ) -> Result<(), String> {

@@ -1,21 +1,12 @@
-use crate::layout::Layout;
+use crate::git::commands as git_commands;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String> {
     let repo_arg = super::resolve_repo_input(repo_arg)?;
     let repo_key = super::resolve_repo_key_input(layout, &repo_arg)?;
     let gitdir = layout.repo_gitdir_path(&repo_key);
     if !gitdir.is_dir() {
         return Err(format!("Repo not found: {repo_key}"));
     }
-    super::run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "prune",
-            "--verbose",
-        ],
-        None,
-    )
+    git_commands::worktree_prune(&gitdir)
 }

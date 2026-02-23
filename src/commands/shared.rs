@@ -10,13 +10,14 @@ use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dialoguer::{Select, theme::ColorfulTheme};
 use owo_colors::OwoColorize;
 
-use crate::layout::Layout;
-use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
-use crate::session::session_name_for;
-use crate::worktree::{
-    TaskRow, branch_from_worktree_path, build_task_rows, parse_worktree_porcelain,
-    repo_key_from_common_dir,
+use crate::git::commands as git_commands;
+use crate::git::parsing::{
+    TaskRow, branch_from_worktree_path, build_task_rows, parse_repo_input,
+    parse_worktree_porcelain, repo_key_from_common_dir,
 };
+use crate::git::repo_resolution::{ResolveResult, resolve_repo_query};
+use crate::runtime::session_name::task_session_name;
+use crate::workspace_paths::WorkspacePaths;
 
 pub(super) fn default_dev_root() -> PathBuf {
     if let Ok(dev_root) = env::var("DEV_ROOT") {
@@ -27,7 +28,7 @@ pub(super) fn default_dev_root() -> PathBuf {
     PathBuf::from(home).join("dev")
 }
 
-pub(super) fn ensure_layout(layout: &Layout) -> Result<(), String> {
+pub(super) fn ensure_layout(layout: &WorkspacePaths) -> Result<(), String> {
     let repos = layout.repo_gitdir_path("");
     let repos_dir = repos
         .parent()
@@ -42,7 +43,7 @@ pub(super) fn ensure_layout(layout: &Layout) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn available_repo_keys(layout: &Layout) -> Result<Vec<String>, String> {
+pub(super) fn available_repo_keys(layout: &WorkspacePaths) -> Result<Vec<String>, String> {
     let repos_dir = layout
         .repo_gitdir_path("")
         .parent()
@@ -95,25 +96,20 @@ pub(super) fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(gitdirs)
 }
 
-pub(super) fn is_git_url(input: &str) -> bool {
-    input.starts_with("http://")
-        || input.starts_with("https://")
-        || input.starts_with("ssh://")
-        || input.starts_with("git@")
-}
+pub(super) fn resolve_repo_key_input(
+    layout: &WorkspacePaths,
+    repo_arg: &str,
+) -> Result<String, String> {
+    let parsed = parse_repo_input(repo_arg);
+    let has_clone_url = parsed.clone_url.is_some();
+    let normalized = parsed.repo_key;
 
-pub(super) fn resolve_repo_key_input(layout: &Layout, repo_arg: &str) -> Result<String, String> {
-    if is_git_url(repo_arg) {
-        return Ok(normalize_repo_key(repo_arg));
-    }
-
-    let normalized = normalize_repo_key(repo_arg);
-    if layout.repo_gitdir_path(&normalized).is_dir() {
+    if has_clone_url || layout.repo_gitdir_path(&normalized).is_dir() {
         return Ok(normalized);
     }
 
     let keys = available_repo_keys(layout)?;
-    match resolve_repo_key(&normalized, &keys) {
+    match resolve_repo_query(&normalized, &keys) {
         ResolveResult::Resolved(value) => Ok(value),
         ResolveResult::Ambiguous(choices) => choose_repo_key_interactive(repo_arg, &choices),
     }
@@ -146,7 +142,7 @@ pub(super) fn choose_repo_key_interactive(
 }
 
 pub(super) fn clone_bare_repo(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_url: &str,
     repo_key: &str,
 ) -> Result<(), String> {
@@ -156,24 +152,11 @@ pub(super) fn clone_bare_repo(
     }
 
     log(&format!("Cloning bare repo: {repo_url}"));
-    if let Some(parent) = gitdir.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-
-    run_status(
-        "git",
-        &[
-            "clone",
-            "--bare",
-            repo_url,
-            gitdir.to_string_lossy().as_ref(),
-        ],
-        None,
-    )
+    git_commands::clone_bare_repo(repo_url, &gitdir)
 }
 
 pub(super) fn ensure_repo_available(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: &str,
     repo_key: &str,
 ) -> Result<(), String> {
@@ -181,113 +164,14 @@ pub(super) fn ensure_repo_available(
     if gitdir.is_dir() {
         return Ok(());
     }
-    if is_git_url(repo_arg) {
-        return clone_bare_repo(layout, repo_arg, repo_key);
+    let parsed = parse_repo_input(repo_arg);
+    if let Some(clone_url) = parsed.clone_url {
+        return clone_bare_repo(layout, &clone_url, repo_key);
     }
     Err(format!(
         "Bare repo not found at {}. Use 'task clone <repo-url> {repo_key}'.",
         gitdir.display()
     ))
-}
-
-pub(super) fn detect_default_base(gitdir: &Path) -> String {
-    if let Ok(output) = run_capture(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "ls-remote",
-            "--symref",
-            "origin",
-            "HEAD",
-        ],
-        None,
-    ) {
-        for line in output.lines() {
-            if let Some(target) = line.strip_prefix("ref: ") {
-                let target = target.trim();
-                if let Some(target) = target.strip_suffix(" HEAD")
-                    && let Some(branch) = target.strip_prefix("refs/heads/")
-                {
-                    let remote_branch = format!("origin/{branch}");
-                    if rev_exists(gitdir, &remote_branch) {
-                        return remote_branch;
-                    }
-                    if rev_exists(gitdir, branch) {
-                        return branch.to_string();
-                    }
-                }
-            }
-        }
-    }
-
-    let gitdir_text = gitdir.to_string_lossy();
-    if run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir_text.as_ref(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            "refs/remotes/origin/master",
-        ],
-        None,
-    )
-    .is_ok()
-    {
-        return "origin/master".to_string();
-    }
-
-    "HEAD".to_string()
-}
-
-pub(super) fn fetch_origin_refs(gitdir: &Path) -> Result<(), String> {
-    run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "fetch",
-            "origin",
-            "--prune",
-            "+refs/heads/*:refs/remotes/origin/*",
-        ],
-        None,
-    )
-}
-
-pub(super) fn ref_exists(gitdir: &Path, reference: &str) -> bool {
-    run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            reference,
-        ],
-        None,
-    )
-    .is_ok()
-}
-
-pub(super) fn rev_exists(gitdir: &Path, revision: &str) -> bool {
-    let value = format!("{revision}^{{commit}}");
-    run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &value,
-        ],
-        None,
-    )
-    .is_ok()
 }
 
 pub(super) fn launch_workspace(repo_key: &str, branch: &str, path: &Path) -> Result<(), String> {
@@ -311,7 +195,7 @@ pub(super) fn launch_workspace(repo_key: &str, branch: &str, path: &Path) -> Res
     }
 
     if command_exists("tmux") {
-        let session = session_name_for(repo_key, branch);
+        let session = task_session_name(repo_key, branch);
         if !tmux_has_session(&session) {
             run_status(
                 "tmux",
@@ -348,24 +232,18 @@ pub(super) fn repo_task_rows(
     gitdir: &Path,
     open_sessions: &HashSet<String>,
 ) -> Result<Vec<TaskRow>, String> {
-    let output = run_capture(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "list",
-            "--porcelain",
-        ],
-        None,
-    )?;
+    let output = git_commands::worktree_list_porcelain(gitdir)?;
 
     let entries = parse_worktree_porcelain(&output);
     let open_session_list: Vec<String> = open_sessions.iter().cloned().collect();
     Ok(build_task_rows(repo_key, &entries, &open_session_list))
 }
 
-pub(super) fn resolve_worktree_path(layout: &Layout, repo_key: &str, branch: &str) -> PathBuf {
+pub(super) fn resolve_worktree_path(
+    layout: &WorkspacePaths,
+    repo_key: &str,
+    branch: &str,
+) -> PathBuf {
     let fallback = layout.worktree_path(repo_key, branch);
     let gitdir = layout.repo_gitdir_path(repo_key);
     if !gitdir.is_dir() {
@@ -383,7 +261,7 @@ pub(super) fn resolve_worktree_path(layout: &Layout, repo_key: &str, branch: &st
 }
 
 pub(super) fn resolve_task_from_args(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     args: &[String],
     usage: &str,
 ) -> Result<(String, String), String> {
@@ -402,7 +280,7 @@ pub(super) fn resolve_task_from_args(
 }
 
 pub(super) fn resolve_task_from_query(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     query: &str,
 ) -> Result<(String, String), String> {
     let tasks = all_tasks(layout)?;
@@ -459,7 +337,7 @@ pub(super) fn resolve_task_from_query(
     choose_task_interactive(query, &repo_matches)
 }
 
-fn all_tasks(layout: &Layout) -> Result<Vec<TaskRow>, String> {
+fn all_tasks(layout: &WorkspacePaths) -> Result<Vec<TaskRow>, String> {
     let mut rows = Vec::new();
     let open_sessions = tmux_sessions();
     let repo_keys = available_repo_keys(layout)?;
@@ -566,54 +444,23 @@ pub(super) fn tmux_has_session(session: &str) -> bool {
 }
 
 pub(super) fn current_task_info() -> Result<(String, String, PathBuf), String> {
-    let root = run_capture("git", &["rev-parse", "--show-toplevel"], None)?;
-    let root = PathBuf::from(root.trim());
-
-    let common_dir_raw = run_capture(
-        "git",
-        &[
-            "-C",
-            root.to_string_lossy().as_ref(),
-            "rev-parse",
-            "--git-common-dir",
-        ],
-        None,
-    )?;
-    let mut common_dir = PathBuf::from(common_dir_raw.trim());
-    if common_dir.is_relative() {
-        common_dir = root.join(common_dir);
-    }
-
-    let common_dir = fs::canonicalize(common_dir).map_err(|e| e.to_string())?;
+    let root = git_commands::current_root()?;
+    let common_dir = git_commands::git_common_dir(&root)?;
     let common_text = common_dir.to_string_lossy().to_string();
     let repo_key = repo_key_from_common_dir(&common_text).ok_or_else(|| {
         "Current repository is not managed by task. Run 'task list' to see parkable tasks."
             .to_string()
     })?;
 
-    let branch = run_capture(
-        "git",
-        &[
-            "-C",
-            root.to_string_lossy().as_ref(),
-            "symbolic-ref",
-            "--quiet",
-            "--short",
-            "HEAD",
-        ],
-        None,
-    )
-    .ok()
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
-    .or_else(|| branch_from_worktree_path(&repo_key, &root.to_string_lossy()))
-    .or_else(|| {
-        root.file_name()
-            .map(|name| name.to_string_lossy().to_string())
-    })
-    .ok_or_else(|| {
-        "Could not determine current task branch. Run 'task list' to inspect tasks.".to_string()
-    })?;
+    let branch = git_commands::current_branch(&root)
+        .or_else(|| branch_from_worktree_path(&repo_key, &root.to_string_lossy()))
+        .or_else(|| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        })
+        .ok_or_else(|| {
+            "Could not determine current task branch. Run 'task list' to inspect tasks.".to_string()
+        })?;
 
     Ok((repo_key, branch, root))
 }
@@ -623,7 +470,7 @@ pub(super) fn current_repo_key() -> Option<String> {
 }
 
 pub(super) fn resolve_repo_branch_inputs(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
 ) -> Result<(String, String), String> {

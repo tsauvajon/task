@@ -1,10 +1,11 @@
 use std::fs;
 
-use crate::layout::Layout;
-use crate::session::session_name_for;
+use crate::git::commands as git_commands;
+use crate::runtime::session_name::task_session_name;
+use crate::workspace_paths::WorkspacePaths;
 
 pub fn run(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
     force: bool,
@@ -19,7 +20,7 @@ pub fn run(
     }
 
     if super::command_exists("tmux") {
-        let session = session_name_for(&repo_key, &branch);
+        let session = task_session_name(&repo_key, &branch);
         if super::tmux_has_session(&session) {
             super::run_status("tmux", &["kill-session", "-t", &session], None)?;
         }
@@ -30,17 +31,7 @@ pub fn run(
             "Worktree metadata is stale for {}. Pruning stale entries.",
             worktree.display()
         ));
-        super::run_status(
-            "git",
-            &[
-                "--git-dir",
-                gitdir.to_string_lossy().as_ref(),
-                "worktree",
-                "prune",
-                "--verbose",
-            ],
-            None,
-        )?;
+        git_commands::worktree_prune(&gitdir)?;
 
         if worktree.exists() {
             let is_empty = fs::read_dir(&worktree)
@@ -60,16 +51,7 @@ pub fn run(
     }
 
     if !force {
-        let status = super::run_capture(
-            "git",
-            &[
-                "-C",
-                worktree.to_string_lossy().as_ref(),
-                "status",
-                "--porcelain",
-            ],
-            None,
-        )?;
+        let status = git_commands::status_porcelain(&worktree)?;
         if !status.trim().is_empty() {
             return Err(
                 "Worktree has uncommitted changes. Use --force if you really want to remove it."
@@ -78,18 +60,7 @@ pub fn run(
         }
     }
 
-    let mut args = vec![
-        "--git-dir".to_string(),
-        gitdir.to_string_lossy().to_string(),
-        "worktree".to_string(),
-        "remove".to_string(),
-    ];
-    if force {
-        args.push("--force".to_string());
-    }
-    args.push(worktree.to_string_lossy().to_string());
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    super::run_status("git", &arg_refs, None)?;
+    git_commands::worktree_remove(&gitdir, &worktree, force)?;
 
     if let Some(parent) = worktree.parent() {
         let _ = fs::remove_dir(parent);

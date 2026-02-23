@@ -3,8 +3,8 @@ use std::io::{self, IsTerminal};
 
 use dialoguer::{Select, theme::ColorfulTheme};
 
-use crate::layout::Layout;
-use crate::worktree::TaskRow;
+use crate::git::parsing::TaskRow;
+use crate::workspace_paths::WorkspacePaths;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MatchKind {
@@ -13,7 +13,7 @@ enum MatchKind {
 }
 
 pub fn run(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
 ) -> Result<(), String> {
@@ -31,7 +31,7 @@ pub fn run(
     super::launch_workspace(&repo_key, &branch, &worktree)
 }
 
-fn select_task_by_query(layout: &Layout, query: &str) -> Result<TaskRow, String> {
+fn select_task_by_query(layout: &WorkspacePaths, query: &str) -> Result<TaskRow, String> {
     let all_rows = all_task_rows(layout)?;
     if all_rows.is_empty() {
         return Err("No tasks found. Run 'task start <repo> <branch>' first.".to_string());
@@ -52,7 +52,7 @@ fn select_task_by_query(layout: &Layout, query: &str) -> Result<TaskRow, String>
     resolve_match(query, &repo_matches, "repository")
 }
 
-fn all_task_rows(layout: &Layout) -> Result<Vec<TaskRow>, String> {
+fn all_task_rows(layout: &WorkspacePaths) -> Result<Vec<TaskRow>, String> {
     let mut rows = Vec::new();
     let open_sessions = HashSet::new();
 
@@ -165,7 +165,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{MatchKind, match_repo_name, match_task_name, resolve_match};
-    use crate::worktree::TaskRow;
+    use crate::git::parsing::TaskRow;
 
     #[test]
     fn task_name_match_prefers_exact() {

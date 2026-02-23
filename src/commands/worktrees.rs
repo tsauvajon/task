@@ -1,8 +1,9 @@
 use std::path::Path;
 
-use crate::layout::Layout;
+use crate::git::commands as git_commands;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String> {
     super::ensure_layout(layout)?;
 
     let repo_arg = repo_arg
@@ -15,16 +16,7 @@ pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
         if !gitdir.is_dir() {
             return Err(format!("Repo not found: {repo_key}"));
         }
-        let output = super::run_capture(
-            "git",
-            &[
-                "--git-dir",
-                gitdir.to_string_lossy().as_ref(),
-                "worktree",
-                "list",
-            ],
-            None,
-        )?;
+        let output = git_commands::worktree_list(&gitdir)?;
         print!("{output}");
         return Ok(());
     }
@@ -46,16 +38,7 @@ pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
         println!();
         println!("[{repo_key}]");
         let gitdir = layout.repo_gitdir_path(&repo_key);
-        let output = super::run_capture(
-            "git",
-            &[
-                "--git-dir",
-                gitdir.to_string_lossy().as_ref(),
-                "worktree",
-                "list",
-            ],
-            None,
-        )?;
+        let output = git_commands::worktree_list(&gitdir)?;
         print!("{output}");
     }
 

@@ -1,7 +1,7 @@
-use crate::layout::Layout;
-use crate::worktree::TaskRow;
+use crate::git::parsing::TaskRow;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String> {
     super::ensure_layout(layout)?;
     let open_sessions = super::tmux_sessions();
 
