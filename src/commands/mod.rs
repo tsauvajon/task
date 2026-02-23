@@ -18,6 +18,7 @@ pub mod ui;
 pub mod worktrees;
 
 use crate::runtime::environment::RuntimeEnvironment;
+use crate::runtime::setup;
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper")]
@@ -30,8 +31,11 @@ pub struct Cli {
 pub enum Command {
     #[command(about = "Prepare workspace and asdf Node plugin")]
     Bootstrap,
-    #[command(about = "Check toolchain and workspace health")]
-    Doctor,
+    #[command(about = "Check toolchain/workspace health and optionally apply fixes")]
+    Doctor {
+        #[arg(long)]
+        fix: bool,
+    },
     #[command(about = "Clone bare repo into configured repos directory")]
     Clone {
         repo_url: String,
@@ -88,12 +92,27 @@ pub enum CompletionShell {
 }
 
 pub fn run(cli: Cli) -> Result<(), String> {
+    match cli.command {
+        Some(Command::Completions { shell }) => completions::run(shell),
+        Some(Command::Complete { words }) => {
+            let context = RuntimeEnvironment::try_new_if_configured()?;
+            complete::run(context.as_ref(), &words)
+        }
+        command => run_with_context(command),
+    }
+}
+
+fn run_with_context(command: Option<Command>) -> Result<(), String> {
     let context = RuntimeEnvironment::new()?;
 
-    match cli.command {
+    if should_auto_onboard(command.as_ref()) {
+        setup::ensure_first_run_setup(&context)?;
+    }
+
+    match command {
         None => ui::run(&context, None),
         Some(Command::Bootstrap) => bootstrap::run(&context),
-        Some(Command::Doctor) => doctor::run(&context),
+        Some(Command::Doctor { fix }) => doctor::run(&context, fix),
         Some(Command::Clone { repo_url, repo_key }) => clone::run(&context, &repo_url, repo_key),
         Some(Command::Start {
             repo,
@@ -118,16 +137,35 @@ pub fn run(cli: Cli) -> Result<(), String> {
         Some(Command::Prune { repo }) => prune::run(&context, repo.as_deref()),
         Some(Command::Check { worktree_path }) => check::run(&context, worktree_path.as_deref()),
         Some(Command::Rebase { args }) => rebase::run(&context, &args),
-        Some(Command::Completions { shell }) => completions::run(shell),
-        Some(Command::Complete { words }) => complete::run(&context, &words),
+        Some(Command::Completions { .. }) | Some(Command::Complete { .. }) => {
+            unreachable!("completion commands are handled before runtime initialization")
+        }
     }
+}
+
+fn should_auto_onboard(command: Option<&Command>) -> bool {
+    matches!(
+        command,
+        None | Some(Command::Clone { .. })
+            | Some(Command::Start { .. })
+            | Some(Command::Open { .. })
+            | Some(Command::Park)
+            | Some(Command::Path { .. })
+            | Some(Command::List { .. })
+            | Some(Command::Ui { .. })
+            | Some(Command::Worktrees { .. })
+            | Some(Command::Finish { .. })
+            | Some(Command::Prune { .. })
+            | Some(Command::Check { .. })
+            | Some(Command::Rebase { .. })
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command, CompletionShell};
+    use super::{Cli, Command, CompletionShell, should_auto_onboard};
 
     #[test]
     fn cli_parses_start_command() {
@@ -239,6 +277,29 @@ mod tests {
                 worktree_path: None,
             })
         );
+    }
+
+    #[test]
+    fn cli_parses_doctor_fix_flag() {
+        let cli = Cli::parse_from(["task", "doctor", "--fix"]);
+        assert_eq!(cli.command, Some(Command::Doctor { fix: true }));
+    }
+
+    #[test]
+    fn cli_parses_doctor_without_fix_flag() {
+        let cli = Cli::parse_from(["task", "doctor"]);
+        assert_eq!(cli.command, Some(Command::Doctor { fix: false }));
+    }
+
+    #[test]
+    fn auto_onboarding_skips_bootstrap_and_doctor() {
+        assert!(!should_auto_onboard(Some(&Command::Bootstrap)));
+        assert!(!should_auto_onboard(Some(&Command::Doctor { fix: false })));
+        assert!(should_auto_onboard(Some(&Command::Start {
+            repo: "goto".to_string(),
+            branch: "feature".to_string(),
+            base_ref: None,
+        })));
     }
 
     #[test]

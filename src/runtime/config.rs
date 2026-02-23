@@ -27,15 +27,24 @@ struct VscodiumConfigFile {
 }
 
 impl TaskConfig {
+    pub fn load_if_present() -> Result<Option<Self>, String> {
+        let config_path = config_file_path()?;
+        if !config_path.is_file() {
+            return Ok(None);
+        }
+
+        load_config(&config_path).map(Some)
+    }
+
     pub fn load_or_initialize() -> Result<Self, String> {
         let config_path = config_file_path()?;
         if config_path.is_file() {
             return load_config(&config_path);
         }
 
-        if !is_interactive() {
+        if !is_interactive_terminal() {
             return Err(format!(
-                "Missing config file at {}. Run task in an interactive terminal to initialize it.",
+                "Missing config file at {}. Run task in an interactive terminal to initialize it (for example: 'task doctor --fix' or 'task bootstrap').",
                 config_path.display()
             ));
         }
@@ -155,14 +164,18 @@ fn expand_path(value: &str, home: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(value))
 }
 
-fn config_file_path() -> Result<PathBuf, String> {
+pub fn config_file_path() -> Result<PathBuf, String> {
+    Ok(config_dir_path()?.join("config.toml"))
+}
+
+pub fn config_dir_path() -> Result<PathBuf, String> {
     if let Ok(base) = std::env::var("XDG_CONFIG_HOME") {
         let base = PathBuf::from(base);
-        return Ok(base.join("task/config.toml"));
+        return Ok(base.join("task"));
     }
 
     let home = home_dir()?;
-    Ok(home.join(".config/task/config.toml"))
+    Ok(home.join(".config/task"))
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -171,7 +184,7 @@ fn home_dir() -> Result<PathBuf, String> {
         .map_err(|_| "HOME is not set".to_string())
 }
 
-fn is_interactive() -> bool {
+pub fn is_interactive_terminal() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 

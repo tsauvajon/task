@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::runtime::environment::RuntimeEnvironment;
 
-pub fn run(context: &RuntimeEnvironment, words: &[String]) -> Result<(), String> {
+pub fn run(context: Option<&RuntimeEnvironment>, words: &[String]) -> Result<(), String> {
     let values = completion_values(context, words)?;
     for value in values {
         println!("{value}");
@@ -11,7 +11,7 @@ pub fn run(context: &RuntimeEnvironment, words: &[String]) -> Result<(), String>
 }
 
 fn completion_values(
-    context: &RuntimeEnvironment,
+    context: Option<&RuntimeEnvironment>,
     words: &[String],
 ) -> Result<Vec<String>, String> {
     if words.is_empty() {
@@ -75,6 +75,13 @@ fn completion_values(
                 Vec::new()
             }
         }
+        "doctor" => {
+            if arg_count <= 1 {
+                vec!["--fix".to_string()]
+            } else {
+                Vec::new()
+            }
+        }
         "completions" => vec!["bash".to_string(), "fish".to_string(), "zsh".to_string()],
         _ => Vec::new(),
     };
@@ -107,7 +114,11 @@ fn top_level_commands() -> Vec<String> {
     .collect()
 }
 
-fn repo_candidates(context: &RuntimeEnvironment) -> Result<Vec<String>, String> {
+fn repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<String>, String> {
+    let Some(context) = context else {
+        return Ok(Vec::new());
+    };
+
     let mut values = HashSet::new();
     for key in context.available_repo_keys()? {
         if let Some(short) = key.rsplit('/').next() {
@@ -132,9 +143,13 @@ fn filter_prefix(values: Vec<String>, current: &str) -> Vec<String> {
 }
 
 fn task_candidates(
-    context: &RuntimeEnvironment,
+    context: Option<&RuntimeEnvironment>,
     repo_hint: Option<&str>,
 ) -> Result<Vec<String>, String> {
+    let Some(context) = context else {
+        return Ok(Vec::new());
+    };
+
     let keys = match repo_hint {
         Some(repo) => {
             let resolved = context.resolve_repo_key_input(repo)?;
@@ -155,4 +170,23 @@ fn task_candidates(
     let mut values: Vec<String> = values.into_iter().collect();
     values.sort();
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::completion_values;
+
+    #[test]
+    fn doctor_completion_includes_fix_flag() {
+        let values = completion_values(None, &["doctor".to_string(), "".to_string()])
+            .expect("doctor completion values");
+        assert_eq!(values, vec!["--fix".to_string()]);
+    }
+
+    #[test]
+    fn top_level_completion_available_without_configured_context() {
+        let values = completion_values(None, &[]).expect("top-level completion values");
+        assert!(values.contains(&"doctor".to_string()));
+        assert!(values.contains(&"bootstrap".to_string()));
+    }
 }
