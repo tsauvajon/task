@@ -59,6 +59,7 @@ worktrees   Show raw git worktree list output
 finish      Remove a task worktree
 prune       Prune stale worktree metadata
 check       Run project checks for current task
+rebase      Rebase current branch onto source branch
 completions Generate shell completion scripts
 ```
 

@@ -20,7 +20,7 @@
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
         };
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        rustToolchain = pkgs.rust-bin.nightly.latest.default.override {
           extensions = [
             "clippy"
             "rustfmt"

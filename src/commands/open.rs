@@ -22,9 +22,9 @@ pub fn run(
         return super::launch_workspace(&row.repo, &row.branch, &row.path);
     }
 
-    let (repo_arg, branch) = super::resolve_repo_branch_inputs(repo_arg, branch_arg)?;
+    let (repo_arg, branch) = super::resolve_repo_branch_inputs(layout, repo_arg, branch_arg)?;
     let repo_key = super::resolve_repo_key_input(layout, &repo_arg)?;
-    let worktree = layout.worktree_path(&repo_key, &branch);
+    let worktree = super::resolve_worktree_path(layout, &repo_key, &branch);
     if !worktree.join(".git").exists() {
         return Err(format!("Worktree not found: {}", worktree.display()));
     }
