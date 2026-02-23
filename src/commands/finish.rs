@@ -18,12 +18,11 @@ pub fn run(
         return Err(format!("Repo not found: {repo_key}"));
     }
 
-    if context.command_exists("tmux") {
-        let session = task_session_name(&repo_key, &branch);
-        if context.tmux_has_session(&session) {
-            context.run_status("tmux", &["kill-session", "-t", &session], None)?;
-        }
-    }
+    let session = if context.command_exists("tmux") {
+        Some(task_session_name(&repo_key, &branch))
+    } else {
+        None
+    };
 
     if !worktree.join(".git").exists() {
         context.warn(&format!(
@@ -46,6 +45,7 @@ pub fn run(
                 ));
             }
         }
+        kill_tmux_session_if_present(context, session.as_deref())?;
         return Ok(());
     }
 
@@ -63,6 +63,23 @@ pub fn run(
 
     if let Some(parent) = worktree.parent() {
         let _ = fs::remove_dir(parent);
+    }
+
+    kill_tmux_session_if_present(context, session.as_deref())?;
+
+    Ok(())
+}
+
+fn kill_tmux_session_if_present(
+    context: &RuntimeEnvironment,
+    session: Option<&str>,
+) -> Result<(), String> {
+    let Some(session) = session else {
+        return Ok(());
+    };
+
+    if context.tmux_has_session(session) {
+        context.run_status("tmux", &["kill-session", "-t", session], None)?;
     }
 
     Ok(())

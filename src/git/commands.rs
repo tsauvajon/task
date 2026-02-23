@@ -221,7 +221,8 @@ pub fn worktree_remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<()
     }
     args.push(worktree.to_string_lossy().to_string());
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_git_status(&arg_refs, None)
+    let cwd = worktree_remove_cwd(gitdir);
+    run_git_status(&arg_refs, cwd.as_deref())
 }
 
 pub fn status_porcelain(worktree: &Path) -> Result<String, String> {
@@ -343,11 +344,15 @@ fn worktree_prune_args(gitdir: &Path) -> Vec<String> {
     ]
 }
 
+fn worktree_remove_cwd(gitdir: &Path) -> Option<PathBuf> {
+    gitdir.parent().map(Path::to_path_buf)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::worktree_prune_args;
+    use super::{worktree_prune_args, worktree_remove_cwd};
 
     #[test]
     fn worktree_prune_uses_immediate_expiry() {
@@ -363,6 +368,15 @@ mod tests {
                 "--expire",
                 "now",
             ]
+        );
+    }
+
+    #[test]
+    fn worktree_remove_uses_repo_parent_as_cwd() {
+        let cwd = worktree_remove_cwd(Path::new("/tmp/repos/github.com/acme/tool.git"));
+        assert_eq!(
+            cwd,
+            Some(Path::new("/tmp/repos/github.com/acme").to_path_buf())
         );
     }
 }
