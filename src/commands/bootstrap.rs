@@ -1,5 +1,6 @@
-use crate::runtime::RuntimeEnvironment;
-use crate::tools::{asdf, nodejs};
+use crate::runtime::environment::RuntimeEnvironment;
+use crate::tools::asdf;
+use crate::tools::nodejs::runtime::{corepack_available, enable_corepack, node_available};
 
 pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     context.ensure_layout()?;
@@ -25,8 +26,8 @@ pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
         }
     }
 
-    if nodejs::node_available(context.process()) && nodejs::corepack_available(context.process()) {
-        let _ = nodejs::enable_corepack(context.process());
+    if node_available(context.process()) && corepack_available(context.process()) {
+        let _ = enable_corepack(context.process());
         context.log("Enabled corepack");
     }
 

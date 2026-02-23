@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 
-use crate::runtime::TaskStatus;
+use crate::runtime::task_rows::TaskStatus;
 
 use super::state::{InputMode, UiState};
 

@@ -3,7 +3,8 @@ use std::io::{self, IsTerminal};
 
 use dialoguer::{Select, theme::ColorfulTheme};
 
-use crate::runtime::{RuntimeEnvironment, TaskRow};
+use crate::runtime::environment::RuntimeEnvironment;
+use crate::runtime::task_rows::TaskRow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MatchKind {
@@ -164,7 +165,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{MatchKind, match_repo_name, match_task_name, resolve_match};
-    use crate::runtime::{TaskRow, TaskStatus};
+    use crate::runtime::task_rows::{TaskRow, TaskStatus};
 
     #[test]
     fn task_name_match_prefers_exact() {

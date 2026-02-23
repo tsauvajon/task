@@ -1,9 +1,9 @@
 use std::fs;
 
-use crate::runtime::RuntimeEnvironment;
-use crate::tools::git::{status_porcelain, worktree_prune, worktree_remove};
-use crate::tools::tmux;
-use crate::tools::vscodium;
+use crate::runtime::environment::RuntimeEnvironment;
+use crate::tools::git::worktrees::{status_porcelain, worktree_prune, worktree_remove};
+use crate::tools::tmux::workflow::finish_task_session;
+use crate::tools::vscodium::workflow::cleanup_task_state;
 
 pub fn run(
     context: &RuntimeEnvironment,
@@ -42,12 +42,12 @@ pub fn run(
             }
         }
 
-        if let Err(error) = vscodium::cleanup_task_state(&repo_key, &branch) {
+        finish_task_session(context.process(), &repo_key, &branch)?;
+        if let Err(error) = cleanup_task_state(&repo_key, &branch) {
             context.warn(&format!(
                 "Failed to remove task editor state for {repo_key} {branch}: {error}"
             ));
         }
-        tmux::finish_task_session(context.process(), &repo_key, &branch)?;
         return Ok(());
     }
 
@@ -67,12 +67,12 @@ pub fn run(
         let _ = fs::remove_dir(parent);
     }
 
-    if let Err(error) = vscodium::cleanup_task_state(&repo_key, &branch) {
+    finish_task_session(context.process(), &repo_key, &branch)?;
+    if let Err(error) = cleanup_task_state(&repo_key, &branch) {
         context.warn(&format!(
             "Failed to remove task editor state for {repo_key} {branch}: {error}"
         ));
     }
-    tmux::finish_task_session(context.process(), &repo_key, &branch)?;
 
     Ok(())
 }
