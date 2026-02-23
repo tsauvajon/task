@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Table
 
 use crate::runtime::task_rows::TaskStatus;
 
-use super::state::{InputMode, UiState};
+use super::state::{InputMode, UiState, ViewMode};
 
 pub(super) fn render(frame: &mut Frame, state: &UiState) {
     let outer = UiLayout::default()
@@ -22,17 +22,56 @@ pub(super) fn render(frame: &mut Frame, state: &UiState) {
 }
 
 fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
-    let open_count = state
-        .rows
-        .iter()
-        .filter(|row| row.status == TaskStatus::Open)
-        .count();
-    let total_count = state.rows.len();
-
     let chunks = UiLayout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(area);
+
+    match state.view {
+        ViewMode::Tasks => render_tasks(frame, chunks[0], state),
+        ViewMode::Repos => render_repos(frame, chunks[0], state),
+    }
+
+    let mode = match state.mode {
+        InputMode::Normal => "NORMAL",
+        InputMode::Filter => "FILTER",
+        InputMode::CreateTask => "CREATE TASK",
+        InputMode::CloneRepo => "CLONE REPO",
+    };
+    let mode_style = match state.mode {
+        InputMode::Normal => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        InputMode::Filter => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        InputMode::CreateTask => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        InputMode::CloneRepo => Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    };
+
+    let actions = actions_for_mode(state);
+
+    let details_lines = actions;
+
+    let details_panel = Paragraph::new(details_lines).block(
+        Block::default()
+            .title(Line::from(Span::styled(mode, mode_style)))
+            .borders(Borders::ALL),
+    );
+    frame.render_widget(details_panel, chunks[1]);
+}
+
+fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
+    let open_count = state
+        .task_rows
+        .iter()
+        .filter(|row| row.status == TaskStatus::Open)
+        .count();
+    let total_count = state.task_rows.len();
 
     let header = Row::new(vec!["STATUS", "REPO", "BRANCH", "PATH"]).style(
         Style::default()
@@ -40,8 +79,8 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
             .add_modifier(Modifier::BOLD),
     );
 
-    let rows = state.filtered_indices.iter().filter_map(|index| {
-        let row = state.rows.get(*index)?;
+    let rows = state.task_filtered_indices.iter().filter_map(|index| {
+        let row = state.task_rows.get(*index)?;
         let status_style = match row.status {
             TaskStatus::Open => Style::default()
                 .fg(Color::Green)
@@ -86,74 +125,113 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
     .highlight_symbol("▶ ");
 
     let mut table_state = TableState::default();
-    if !state.filtered_indices.is_empty() {
-        table_state.select(Some(state.selected));
+    if !state.task_filtered_indices.is_empty() {
+        table_state.select(Some(state.task_selected));
     }
-    frame.render_stateful_widget(table, chunks[0], &mut table_state);
+    frame.render_stateful_widget(table, area, &mut table_state);
+}
 
-    let mode = match state.mode {
-        InputMode::Normal => "NORMAL",
-        InputMode::Filter => "FILTER",
-        InputMode::Create => "CREATE",
-    };
-    let mode_style = match state.mode {
-        InputMode::Normal => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        InputMode::Filter => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-        InputMode::Create => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    };
+fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
+    let repos_count = state.repo_rows.len();
 
-    let actions = vec![
-        Line::from(match state.mode {
-            InputMode::Normal => "Enter  open selected task",
-            InputMode::Filter => "Type   append filter text",
-            InputMode::Create => "Type   set new branch name",
-        }),
-        Line::from(match state.mode {
-            InputMode::Normal => "p      park selected task",
-            InputMode::Filter | InputMode::Create => "Backsp delete character",
-        }),
-        Line::from(match state.mode {
-            InputMode::Normal => "f      finish selected task",
-            InputMode::Filter => "Ctrl-U clear filter",
-            InputMode::Create => "Enter  create and open task",
-        }),
-        Line::from(match state.mode {
-            InputMode::Normal => "c      create new task",
-            InputMode::Filter => "Enter  apply and return",
-            InputMode::Create => "Esc    return to normal",
-        }),
-        Line::from(match state.mode {
-            InputMode::Normal => "r      refresh task list",
-            InputMode::Filter => "Esc    return to normal",
-            InputMode::Create => "?      toggle help",
-        }),
-        Line::from(match state.mode {
-            InputMode::Normal => "/      enter filter mode",
-            InputMode::Filter => "?      toggle help",
-            InputMode::Create => "q      quit",
-        }),
-        Line::from(match state.mode {
-            InputMode::Normal => "?      toggle help",
-            InputMode::Filter | InputMode::Create => "",
-        }),
-        Line::from(match state.mode {
-            InputMode::Normal => "q      quit",
-            InputMode::Filter | InputMode::Create => "",
-        }),
-    ];
-
-    let details_panel = Paragraph::new(actions).block(
-        Block::default()
-            .title(Line::from(Span::styled(mode, mode_style)))
-            .borders(Borders::ALL),
+    let header = Row::new(vec!["REPO", "OPEN", "PARKED"]).style(
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     );
-    frame.render_widget(details_panel, chunks[1]);
+
+    let rows = state.repo_rows.iter().map(|row| {
+        Row::new(vec![
+            Cell::from(row.repo.clone()),
+            Cell::from(row.open_tasks.to_string()).style(
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Cell::from(row.parked_tasks.to_string()).style(Style::default().fg(Color::Yellow)),
+        ])
+    });
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(20),
+            Constraint::Length(8),
+            Constraint::Length(8),
+        ],
+    )
+    .header(header)
+    .block(
+        Block::default()
+            .title("Repos")
+            .title(
+                Line::from(Span::styled(
+                    format!("{} total", repos_count),
+                    Style::default().fg(Color::Gray),
+                ))
+                .right_aligned(),
+            )
+            .borders(Borders::ALL),
+    )
+    .row_highlight_style(
+        Style::default()
+            .bg(Color::Rgb(25, 25, 40))
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol("▶ ");
+
+    let mut table_state = TableState::default();
+    if !state.repo_rows.is_empty() {
+        table_state.select(Some(state.repo_selected));
+    }
+    frame.render_stateful_widget(table, area, &mut table_state);
+}
+
+fn actions_for_mode(state: &UiState) -> Vec<Line<'static>> {
+    match state.mode {
+        InputMode::Normal => match state.view {
+            ViewMode::Tasks => vec![
+                Line::from("Tab     switch to repos view"),
+                Line::from("Enter  open selected task"),
+                Line::from("c      create new task"),
+                Line::from("p      park selected task"),
+                Line::from("f      finish selected task"),
+                Line::from("/      enter filter mode"),
+                Line::from("r      refresh tasks"),
+                Line::from("?      toggle help"),
+                Line::from("q      quit"),
+            ],
+            ViewMode::Repos => vec![
+                Line::from("Tab     switch to tasks view"),
+                Line::from("Enter  open selected repo tasks"),
+                Line::from("c      clone repo interactively"),
+                Line::from("r      refresh repos"),
+                Line::from("?      toggle help"),
+                Line::from("q      quit"),
+            ],
+        },
+        InputMode::Filter => vec![
+            Line::from("Type   append filter text"),
+            Line::from("Backsp delete character"),
+            Line::from("Ctrl-U clear filter"),
+            Line::from("Enter  apply and return"),
+            Line::from("Esc    return to normal"),
+        ],
+        InputMode::CreateTask => vec![
+            Line::from("Type   set new branch name"),
+            Line::from("Backsp delete character"),
+            Line::from("Enter  create and open task"),
+            Line::from("Esc    return to normal"),
+        ],
+        InputMode::CloneRepo => vec![
+            Line::from("Type   <repo-url> [repo-key]"),
+            Line::from("Backsp delete character"),
+            Line::from("Ctrl-U clear input"),
+            Line::from("Enter  clone repository"),
+            Line::from("Esc    return to normal"),
+            Line::from(format!("Input: {}", state.clone_input)),
+        ],
+    }
 }
 
 fn render_help(frame: &mut Frame) {
@@ -166,17 +244,25 @@ fn render_help(frame: &mut Frame) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("Normal mode:"),
+        Line::from("Normal mode (all views):"),
         Line::from("↑/k       move up"),
         Line::from("↓/j       move down"),
+        Line::from("Tab       switch Tasks/Repos view"),
+        Line::from("?         toggle help"),
+        Line::from("q/Ctrl-C  quit"),
+        Line::from(""),
+        Line::from("Tasks view:"),
         Line::from("Enter     open selected task"),
         Line::from("p         park selected task"),
         Line::from("f         finish selected task"),
         Line::from("c         create new task"),
         Line::from("r         refresh tasks"),
         Line::from("/         enter filter mode"),
-        Line::from("?         toggle help"),
-        Line::from("q/Ctrl-C  quit"),
+        Line::from(""),
+        Line::from("Repos view:"),
+        Line::from("Enter     open selected repo tasks"),
+        Line::from("c         clone repo interactively"),
+        Line::from("r         refresh repos"),
         Line::from(""),
         Line::from("Filter mode:"),
         Line::from("Type      append filter text"),
@@ -185,10 +271,17 @@ fn render_help(frame: &mut Frame) {
         Line::from("Enter     apply and return to normal"),
         Line::from("Esc       return to normal"),
         Line::from(""),
-        Line::from("Create mode:"),
+        Line::from("Create task mode:"),
         Line::from("Type      set new branch name"),
         Line::from("Backspace delete character"),
         Line::from("Enter     create and open new task"),
+        Line::from("Esc       return to normal"),
+        Line::from(""),
+        Line::from("Clone repo mode:"),
+        Line::from("Type      <repo-url> [repo-key]"),
+        Line::from("Backspace delete character"),
+        Line::from("Ctrl-U    clear input"),
+        Line::from("Enter     clone repository"),
         Line::from("Esc       return to normal"),
     ];
 

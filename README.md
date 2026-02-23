@@ -16,16 +16,16 @@ setup explicitly with `task bootstrap` or `task doctor --fix`.
 ## Core commands
 
 ```text
-task doctor         Check toolchain/workspace health
-task doctor --fix   Check and apply automatic fixes
-task bootstrap      Run full setup explicitly
+task                Open interactive TUI
+
+task repo clone     Clone a bare repo into repos dir
 task start <name>   Create/open a task worktree
+task check          Run project checks for current task
+
+task park           Park current task
 task list           Show open and parked tasks
 task open <name>    Re-open a parked task
-task park           Park current task
-task check          Run project checks for current task
 task finish <name>  Remove a finished task worktree
-task ui             Open interactive dashboard
 ```
 
 ## Build and test

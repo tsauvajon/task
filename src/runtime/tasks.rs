@@ -112,7 +112,7 @@ impl TaskResolver {
             return self.clone_bare_repo(&clone_url, repo_key);
         }
         Err(format!(
-            "Bare repo not found at {}. Use 'task clone <repo-url> {repo_key}'.",
+            "Bare repo not found at {}. Use 'task repo clone <repo-url> {repo_key}'.",
             gitdir.display()
         ))
     }

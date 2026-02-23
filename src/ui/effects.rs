@@ -1,39 +1,47 @@
 use crate::runtime::environment::RuntimeEnvironment;
 
 use super::state::{UiAction, UiState};
-use super::tasks::{finish_selected, load_rows, park_selected, resolve_create_repo};
+use super::tasks::{
+    clone_from_input, finish_selected, load_repo_rows, load_task_rows, park_selected,
+    resolve_create_repo,
+};
 
-pub(super) fn refresh_rows(
+pub(super) fn refresh_task_rows(
     context: &RuntimeEnvironment,
-    repo_arg: Option<&str>,
     state: &mut UiState,
 ) -> Result<(), String> {
-    let rows = load_rows(context, repo_arg)?;
-    state.set_rows(rows);
+    let rows = load_task_rows(context, state.task_repo_scope.as_deref())?;
+    state.set_task_rows(rows);
+    Ok(())
+}
+
+pub(super) fn refresh_repo_rows(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+) -> Result<(), String> {
+    let rows = load_repo_rows(context)?;
+    state.set_repo_rows(rows);
     Ok(())
 }
 
 pub(super) fn finish_and_refresh(
     context: &RuntimeEnvironment,
-    repo_arg: Option<&str>,
     state: &mut UiState,
 ) -> Result<(), String> {
     finish_selected(context, state)?;
-    refresh_rows(context, repo_arg, state)
+    refresh_task_rows(context, state)
 }
 
 pub(super) fn park_and_refresh(
     context: &RuntimeEnvironment,
-    repo_arg: Option<&str>,
     state: &mut UiState,
 ) -> Result<(), String> {
     park_selected(context, state)?;
-    refresh_rows(context, repo_arg, state)
+    refresh_task_rows(context, state)
 }
 
 pub(super) fn create_action(
     context: &RuntimeEnvironment,
-    repo_arg: Option<&str>,
     state: &UiState,
 ) -> Result<UiAction, String> {
     let branch = state.create_branch.trim();
@@ -41,9 +49,23 @@ pub(super) fn create_action(
         return Err("Branch name cannot be empty".to_string());
     }
 
-    let repo = resolve_create_repo(context, state, repo_arg)?;
+    let repo = resolve_create_repo(context, state, state.task_repo_scope.as_deref())?;
     Ok(UiAction::Create {
         repo,
         branch: branch.to_string(),
     })
+}
+
+pub(super) fn clone_and_refresh(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+) -> Result<String, String> {
+    let cloned_repo = clone_from_input(context, &state.clone_input)?;
+    refresh_repo_rows(context, state)?;
+    if let Some(repo) = state.task_repo_scope.as_deref()
+        && repo == cloned_repo
+    {
+        refresh_task_rows(context, state)?;
+    }
+    Ok(cloned_repo)
 }

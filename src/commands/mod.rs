@@ -13,6 +13,7 @@ pub mod park;
 pub mod path;
 pub mod prune;
 pub mod rebase;
+pub mod repo;
 pub mod start;
 pub mod ui;
 pub mod worktrees;
@@ -36,10 +37,10 @@ pub enum Command {
         #[arg(long)]
         fix: bool,
     },
-    #[command(about = "Clone bare repo into configured repos directory")]
-    Clone {
-        repo_url: String,
-        repo_key: Option<String>,
+    #[command(about = "Manage repositories")]
+    Repo {
+        #[command(subcommand)]
+        command: RepoCommand,
     },
     #[command(about = "Create/open a task worktree")]
     Start {
@@ -61,7 +62,7 @@ pub enum Command {
     },
     #[command(about = "List tasks with open/parked status")]
     List { repo: Option<String> },
-    #[command(about = "Interactive task dashboard")]
+    #[command(about = "Open interactive TUI")]
     Ui { repo: Option<String> },
     #[command(about = "Show raw git worktree list output")]
     Worktrees { repo: Option<String> },
@@ -82,6 +83,17 @@ pub enum Command {
     Completions { shell: CompletionShell },
     #[command(name = "__complete", hide = true, trailing_var_arg = true)]
     Complete { words: Vec<String> },
+}
+
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum RepoCommand {
+    #[command(about = "List repositories")]
+    List,
+    #[command(about = "Clone bare repo into configured repos directory")]
+    Clone {
+        repo_url: String,
+        repo_key: Option<String>,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -113,7 +125,7 @@ fn run_with_context(command: Option<Command>) -> Result<(), String> {
         None => ui::run(&context, None),
         Some(Command::Bootstrap) => bootstrap::run(&context),
         Some(Command::Doctor { fix }) => doctor::run(&context, fix),
-        Some(Command::Clone { repo_url, repo_key }) => clone::run(&context, &repo_url, repo_key),
+        Some(Command::Repo { command }) => repo::run(&context, command),
         Some(Command::Start {
             repo,
             branch,
@@ -146,7 +158,7 @@ fn run_with_context(command: Option<Command>) -> Result<(), String> {
 fn should_auto_onboard(command: Option<&Command>) -> bool {
     matches!(
         command,
-        None | Some(Command::Clone { .. })
+        None | Some(Command::Repo { .. })
             | Some(Command::Start { .. })
             | Some(Command::Open { .. })
             | Some(Command::Park)
@@ -165,7 +177,7 @@ fn should_auto_onboard(command: Option<&Command>) -> bool {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command, CompletionShell, should_auto_onboard};
+    use super::{Cli, Command, CompletionShell, RepoCommand, should_auto_onboard};
 
     #[test]
     fn cli_parses_start_command() {
@@ -309,6 +321,31 @@ mod tests {
             cli.command,
             Some(Command::Ui {
                 repo: Some("goto".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn cli_parses_repo_list_command() {
+        let cli = Cli::parse_from(["task", "repo", "list"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Repo {
+                command: RepoCommand::List,
+            })
+        );
+    }
+
+    #[test]
+    fn cli_parses_repo_clone_command() {
+        let cli = Cli::parse_from(["task", "repo", "clone", "git@github.com:me/app.git", "app"]);
+        assert_eq!(
+            cli.command,
+            Some(Command::Repo {
+                command: RepoCommand::Clone {
+                    repo_url: "git@github.com:me/app.git".to_string(),
+                    repo_key: Some("app".to_string()),
+                },
             })
         );
     }
