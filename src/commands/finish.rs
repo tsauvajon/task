@@ -1,7 +1,8 @@
 use std::fs;
 
 use crate::git::commands as git_commands;
-use crate::runtime::{RuntimeEnvironment, task_session_name};
+use crate::runtime::RuntimeEnvironment;
+use crate::tmux;
 
 pub fn run(
     context: &RuntimeEnvironment,
@@ -17,12 +18,6 @@ pub fn run(
     if !gitdir.is_dir() {
         return Err(format!("Repo not found: {repo_key}"));
     }
-
-    let session = if context.command_exists("tmux") {
-        Some(task_session_name(&repo_key, &branch))
-    } else {
-        None
-    };
 
     if !worktree.join(".git").exists() {
         context.warn(&format!(
@@ -45,7 +40,8 @@ pub fn run(
                 ));
             }
         }
-        kill_tmux_session_if_present(context, session.as_deref())?;
+
+        tmux::finish_task_session(context.process(), &repo_key, &branch)?;
         return Ok(());
     }
 
@@ -65,22 +61,7 @@ pub fn run(
         let _ = fs::remove_dir(parent);
     }
 
-    kill_tmux_session_if_present(context, session.as_deref())?;
-
-    Ok(())
-}
-
-fn kill_tmux_session_if_present(
-    context: &RuntimeEnvironment,
-    session: Option<&str>,
-) -> Result<(), String> {
-    let Some(session) = session else {
-        return Ok(());
-    };
-
-    if context.tmux_has_session(session) {
-        context.run_status("tmux", &["kill-session", "-t", session], None)?;
-    }
+    tmux::finish_task_session(context.process(), &repo_key, &branch)?;
 
     Ok(())
 }

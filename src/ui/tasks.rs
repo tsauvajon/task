@@ -1,5 +1,6 @@
 use crate::git::parsing::TaskRow;
-use crate::runtime::{RuntimeEnvironment, task_session_name};
+use crate::runtime::RuntimeEnvironment;
+use crate::tmux::{self, ParkResult};
 
 use super::state::UiState;
 
@@ -46,16 +47,15 @@ pub(super) fn park_selected(
         return Ok(());
     };
 
-    if !context.command_exists("tmux") {
+    if !tmux::is_available(context.process()) {
         return Err("tmux is not available. Run 'task list' to inspect tasks.".to_string());
     }
 
-    let session = task_session_name(&row.repo, &row.branch);
-    if context.tmux_has_session(&session) {
-        context.run_status("tmux", &["kill-session", "-t", &session], None)?;
-        state.message = format!("Parked task: {} {}", row.repo, row.branch);
-    } else {
-        state.message = format!("Task already parked: {} {}", row.repo, row.branch);
+    match tmux::park_task(context.process(), &row.repo, &row.branch)? {
+        ParkResult::Parked => state.message = format!("Parked task: {} {}", row.repo, row.branch),
+        ParkResult::AlreadyParked => {
+            state.message = format!("Task already parked: {} {}", row.repo, row.branch)
+        }
     }
 
     Ok(())
@@ -69,11 +69,6 @@ pub(super) fn finish_selected(
         state.message = "No selected task".to_string();
         return Ok(());
     };
-
-    let session = task_session_name(&row.repo, &row.branch);
-    if context.tmux_has_session(&session) {
-        context.run_status("tmux", &["kill-session", "-t", &session], None)?;
-    }
 
     crate::commands::finish::run(context, Some(&row.repo), Some(&row.branch), false)?;
     state.message = format!("Finished task: {} {}", row.repo, row.branch);
