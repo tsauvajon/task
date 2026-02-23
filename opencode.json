@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "build": {
+      "prompt": "In this repository, whenever you make code changes, also bump the crate version in Cargo.toml using semantic versioning. Use MAJOR for breaking changes, MINOR for backward-compatible features, and PATCH for fixes, refactors, tests, docs, and chores that do not break compatibility. If the current work already includes a version bump, do not bump twice. Mention the chosen bump level in your final summary."
+    }
+  },
+  "command": {
+    "bump-version": {
+      "description": "Bump Cargo.toml version using semver",
+      "template": "Update Cargo.toml package.version for this change using semantic versioning (major for breaking changes, minor for new backward-compatible features, patch for fixes/chore/docs/tests/refactors). Return the old and new versions and a one-line rationale."
+    }
+  }
+}
