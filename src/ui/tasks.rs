@@ -1,5 +1,4 @@
-use crate::git::parsing::TaskRow;
-use crate::runtime::RuntimeEnvironment;
+use crate::runtime::{RuntimeEnvironment, TaskRow};
 use crate::tmux::{self, ParkResult};
 
 use super::state::UiState;

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::git::commands as git_commands;
+use crate::git::worktree_list;
 use crate::runtime::RuntimeEnvironment;
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
@@ -16,7 +16,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), S
         if !gitdir.is_dir() {
             return Err(format!("Repo not found: {repo_key}"));
         }
-        let output = git_commands::worktree_list(&gitdir)?;
+        let output = worktree_list(&gitdir)?;
         print!("{output}");
         return Ok(());
     }
@@ -39,7 +39,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), S
         println!();
         println!("[{repo_key}]");
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
-        let output = git_commands::worktree_list(&gitdir)?;
+        let output = worktree_list(&gitdir)?;
         print!("{output}");
     }
 

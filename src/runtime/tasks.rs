@@ -8,14 +8,14 @@ use std::process::{Command, Stdio};
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dialoguer::{Select, theme::ColorfulTheme};
 
-use crate::git::commands as git_commands;
-use crate::git::parsing::{
-    TaskRow, branch_from_worktree_path, build_task_rows, parse_repo_input,
-    parse_worktree_porcelain, repo_key_from_common_dir,
+use crate::git::{
+    ResolveResult, branch_from_worktree_path, clone_bare_repo, current_branch, current_root,
+    git_common_dir, parse_repo_input, parse_worktree_porcelain, repo_key_from_common_dir,
+    resolve_repo_query, worktree_list_porcelain,
 };
-use crate::git::repo_resolution::{ResolveResult, resolve_repo_query};
 use crate::runtime::paths::WorkspacePaths;
 use crate::runtime::process::ProcessRunner;
+use crate::runtime::task_rows::{TaskRow, build_task_rows};
 use crate::tmux::{self, OpenResult};
 
 #[derive(Debug, Clone)]
@@ -95,7 +95,7 @@ impl TaskResolver {
         }
 
         self.process.log(&format!("Cloning bare repo: {repo_url}"));
-        git_commands::clone_bare_repo(repo_url, &gitdir)
+        clone_bare_repo(repo_url, &gitdir)
     }
 
     pub fn ensure_repo_available(&self, repo_arg: &str, repo_key: &str) -> Result<(), String> {
@@ -152,7 +152,7 @@ impl TaskResolver {
         gitdir: &Path,
         open_sessions: &HashSet<String>,
     ) -> Result<Vec<TaskRow>, String> {
-        let output = git_commands::worktree_list_porcelain(gitdir)?;
+        let output = worktree_list_porcelain(gitdir)?;
 
         let entries = parse_worktree_porcelain(&output);
         let open_session_list: Vec<String> = open_sessions.iter().cloned().collect();
@@ -280,15 +280,15 @@ impl TaskResolver {
     }
 
     pub fn current_task_info(&self) -> Result<(String, String, PathBuf), String> {
-        let root = git_commands::current_root()?;
-        let common_dir = git_commands::git_common_dir(&root)?;
+        let root = current_root()?;
+        let common_dir = git_common_dir(&root)?;
         let common_text = common_dir.to_string_lossy().to_string();
         let repo_key = repo_key_from_common_dir(&common_text).ok_or_else(|| {
             "Current repository is not managed by task. Run 'task list' to see parkable tasks."
                 .to_string()
         })?;
 
-        let branch = git_commands::current_branch(&root)
+        let branch = current_branch(&root)
             .or_else(|| branch_from_worktree_path(&repo_key, &root.to_string_lossy()))
             .or_else(|| {
                 root.file_name()

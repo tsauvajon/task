@@ -1,4 +1,4 @@
-use crate::git::commands as git_commands;
+use crate::git::worktree_prune;
 use crate::runtime::RuntimeEnvironment;
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
@@ -8,5 +8,5 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), S
     if !gitdir.is_dir() {
         return Err(format!("Repo not found: {repo_key}"));
     }
-    git_commands::worktree_prune(&gitdir)
+    worktree_prune(&gitdir)
 }

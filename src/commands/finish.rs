@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::git::commands as git_commands;
+use crate::git::{status_porcelain, worktree_prune, worktree_remove};
 use crate::runtime::RuntimeEnvironment;
 use crate::tmux;
 
@@ -24,7 +24,7 @@ pub fn run(
             "Worktree metadata is stale for {}. Pruning stale entries.",
             worktree.display()
         ));
-        git_commands::worktree_prune(&gitdir)?;
+        worktree_prune(&gitdir)?;
 
         if worktree.exists() {
             let is_empty = fs::read_dir(&worktree)
@@ -46,7 +46,7 @@ pub fn run(
     }
 
     if !force {
-        let status = git_commands::status_porcelain(&worktree)?;
+        let status = status_porcelain(&worktree)?;
         if !status.trim().is_empty() {
             return Err(
                 "Worktree has uncommitted changes. Use --force if you really want to remove it."
@@ -55,7 +55,7 @@ pub fn run(
         }
     }
 
-    git_commands::worktree_remove(&gitdir, &worktree, force)?;
+    worktree_remove(&gitdir, &worktree, force)?;
 
     if let Some(parent) = worktree.parent() {
         let _ = fs::remove_dir(parent);
