@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::runner::run_git_status;
+use super::runner::run_git_capture;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInput {
@@ -28,6 +28,19 @@ pub fn parse_repo_input(input: &str) -> RepoInput {
         repo_key,
         clone_url,
     }
+}
+
+pub fn default_clone_url(input: &str) -> String {
+    let trimmed = input.trim();
+    if is_git_url(trimmed) {
+        return trimmed.to_string();
+    }
+
+    if looks_like_host_path(trimmed) {
+        return format!("https://{trimmed}");
+    }
+
+    trimmed.to_string()
 }
 
 pub fn normalize_repo_key(input: &str) -> String {
@@ -103,7 +116,7 @@ pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    run_git_status(
+    run_git_capture(
         &[
             "clone",
             "--bare",
@@ -112,6 +125,7 @@ pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<(), String> {
         ],
         None,
     )
+    .map(|_| ())
 }
 
 fn is_git_url(input: &str) -> bool {
@@ -121,9 +135,18 @@ fn is_git_url(input: &str) -> bool {
         || input.starts_with("git@")
 }
 
+fn looks_like_host_path(input: &str) -> bool {
+    let mut parts = input.split('/');
+    let host = parts.next().unwrap_or_default();
+    let has_path = parts.next().is_some();
+    host.contains('.') && has_path
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ResolveResult, normalize_repo_key, parse_repo_input, resolve_repo_query};
+    use super::{
+        ResolveResult, default_clone_url, normalize_repo_key, parse_repo_input, resolve_repo_query,
+    };
 
     #[test]
     fn normalize_repo_key_handles_git_urls() {
@@ -172,6 +195,26 @@ mod tests {
         let parsed = parse_repo_input("github.com/tsauvajon/goto");
         assert_eq!(parsed.repo_key, "github.com/tsauvajon/goto");
         assert_eq!(parsed.clone_url, None);
+    }
+
+    #[test]
+    fn default_clone_url_keeps_protocol_urls() {
+        assert_eq!(
+            default_clone_url("git@github.com:tsauvajon/goto.git"),
+            "git@github.com:tsauvajon/goto.git"
+        );
+        assert_eq!(
+            default_clone_url("https://github.com/tsauvajon/goto.git"),
+            "https://github.com/tsauvajon/goto.git"
+        );
+    }
+
+    #[test]
+    fn default_clone_url_prefixes_https_for_host_paths() {
+        assert_eq!(
+            default_clone_url("github.com/tsauvajon/goto"),
+            "https://github.com/tsauvajon/goto"
+        );
     }
 
     #[test]

@@ -1,21 +1,28 @@
 use crate::runtime::environment::RuntimeEnvironment;
-use crate::runtime::task_rows::TaskRow;
+use crate::runtime::task_rows::{TaskRow, TaskStatus};
+use crate::tools::git::repo::{default_clone_url, parse_repo_input};
 use crate::tools::tmux::sessions::is_available;
 use crate::tools::tmux::workflow::{ParkResult, park_task};
 
-use super::state::UiState;
+use super::state::{RepoRow, UiState};
 
-pub(super) fn load_rows(
+pub(super) fn initial_repo_scope(
     context: &RuntimeEnvironment,
     repo_arg: Option<&str>,
+) -> Option<String> {
+    repo_arg
+        .map(str::to_string)
+        .or_else(|| context.current_repo_key())
+}
+
+pub(super) fn load_task_rows(
+    context: &RuntimeEnvironment,
+    repo_scope: Option<&str>,
 ) -> Result<Vec<TaskRow>, String> {
     let open_sessions = context.tmux_sessions();
     let mut rows = Vec::new();
-    let repo_arg = repo_arg
-        .map(str::to_string)
-        .or_else(|| context.current_repo_key());
 
-    if let Some(repo_arg) = repo_arg.as_deref() {
+    if let Some(repo_arg) = repo_scope {
         let repo_key = context.resolve_repo_key_input(repo_arg)?;
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {
@@ -39,11 +46,39 @@ pub(super) fn load_rows(
     Ok(rows)
 }
 
+pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow>, String> {
+    let open_sessions = context.tmux_sessions();
+    let mut rows = Vec::new();
+
+    for repo_key in context.available_repo_keys()? {
+        let gitdir = context.layout().repo_gitdir_path(&repo_key);
+        if !gitdir.is_dir() {
+            continue;
+        }
+
+        let task_rows = context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?;
+        let open_tasks = task_rows
+            .iter()
+            .filter(|row| row.status == TaskStatus::Open)
+            .count();
+        let parked_tasks = task_rows.len().saturating_sub(open_tasks);
+
+        rows.push(RepoRow {
+            repo: repo_key,
+            open_tasks,
+            parked_tasks,
+        });
+    }
+
+    rows.sort_by(|left, right| left.repo.cmp(&right.repo));
+    Ok(rows)
+}
+
 pub(super) fn park_selected(
     context: &RuntimeEnvironment,
     state: &mut UiState,
 ) -> Result<(), String> {
-    let Some(row) = state.selected_row().cloned() else {
+    let Some(row) = state.selected_task_row().cloned() else {
         state.message = "No selected task".to_string();
         return Ok(());
     };
@@ -66,7 +101,7 @@ pub(super) fn finish_selected(
     context: &RuntimeEnvironment,
     state: &mut UiState,
 ) -> Result<(), String> {
-    let Some(row) = state.selected_row().cloned() else {
+    let Some(row) = state.selected_task_row().cloned() else {
         state.message = "No selected task".to_string();
         return Ok(());
     };
@@ -79,15 +114,76 @@ pub(super) fn finish_selected(
 pub(super) fn resolve_create_repo(
     context: &RuntimeEnvironment,
     state: &UiState,
-    repo_arg: Option<&str>,
+    repo_scope: Option<&str>,
 ) -> Result<String, String> {
-    if let Some(row) = state.selected_row() {
+    if let Some(row) = state.selected_task_row() {
         return Ok(row.repo.clone());
     }
 
-    if let Some(repo_arg) = repo_arg {
+    if let Some(repo_arg) = repo_scope {
         return context.resolve_repo_input(Some(repo_arg));
     }
 
     context.resolve_repo_input(None)
+}
+
+pub(super) fn clone_from_input(
+    context: &RuntimeEnvironment,
+    input: &str,
+) -> Result<String, String> {
+    let (repo_url, explicit_repo_key) = parse_clone_input_args(input)?;
+    let parsed = parse_repo_input(repo_url);
+    let clone_url = parsed
+        .clone_url
+        .unwrap_or_else(|| default_clone_url(repo_url));
+    let repo_key = explicit_repo_key.unwrap_or(parsed.repo_key);
+
+    context.ensure_layout()?;
+    context.clone_bare_repo(&clone_url, &repo_key)?;
+    Ok(repo_key)
+}
+
+fn parse_clone_input_args(input: &str) -> Result<(&str, Option<String>), String> {
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Err("Clone input cannot be empty".to_string());
+    }
+    if tokens.len() > 2 {
+        return Err("Use format: <repo-url> [repo-key]".to_string());
+    }
+
+    Ok((tokens[0], tokens.get(1).map(|token| (*token).to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_clone_input_args;
+
+    #[test]
+    fn parse_clone_input_accepts_url_only() {
+        let parsed =
+            parse_clone_input_args("git@github.com:me/app.git").expect("parse clone input");
+        assert_eq!(parsed.0, "git@github.com:me/app.git");
+        assert_eq!(parsed.1, None);
+    }
+
+    #[test]
+    fn parse_clone_input_accepts_url_and_key() {
+        let parsed = parse_clone_input_args("git@github.com:me/app.git github.com/me/app")
+            .expect("parse clone input");
+        assert_eq!(parsed.0, "git@github.com:me/app.git");
+        assert_eq!(parsed.1, Some("github.com/me/app".to_string()));
+    }
+
+    #[test]
+    fn parse_clone_input_rejects_empty_value() {
+        let error = parse_clone_input_args("  ").expect_err("expected error");
+        assert_eq!(error, "Clone input cannot be empty");
+    }
+
+    #[test]
+    fn parse_clone_input_rejects_too_many_parts() {
+        let error = parse_clone_input_args("a b c").expect_err("expected error");
+        assert_eq!(error, "Use format: <repo-url> [repo-key]");
+    }
 }

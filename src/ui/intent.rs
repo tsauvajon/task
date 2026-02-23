@@ -5,14 +5,15 @@ use super::state::InputMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UiIntent {
     Quit,
+    SwitchView,
     MoveNext,
     MovePrev,
     ToggleHelp,
     OpenSelected,
     EnterFilterMode,
-    EnterCreateMode,
+    EnterCreateTaskMode,
     FinishSelected,
-    RefreshRows,
+    RefreshCurrentView,
     ParkSelected,
     FilterCancel,
     FilterApply,
@@ -23,6 +24,11 @@ pub(super) enum UiIntent {
     CreateSubmit,
     CreateBackspace,
     CreateAppend(char),
+    CloneCancel,
+    CloneSubmit,
+    CloneBackspace,
+    CloneClear,
+    CloneAppend(char),
     Noop,
 }
 
@@ -34,20 +40,22 @@ pub(super) fn from_key(mode: InputMode, key: KeyEvent) -> UiIntent {
     match mode {
         InputMode::Normal => from_key_normal(key),
         InputMode::Filter => from_key_filter(key),
-        InputMode::Create => from_key_create(key),
+        InputMode::CreateTask => from_key_create(key),
+        InputMode::CloneRepo => from_key_clone(key),
     }
 }
 
 fn from_key_normal(key: KeyEvent) -> UiIntent {
     match key.code {
         KeyCode::Char('q') => UiIntent::Quit,
+        KeyCode::Tab => UiIntent::SwitchView,
         KeyCode::Down | KeyCode::Char('j') => UiIntent::MoveNext,
         KeyCode::Up | KeyCode::Char('k') => UiIntent::MovePrev,
         KeyCode::Char('/') => UiIntent::EnterFilterMode,
         KeyCode::Char('?') => UiIntent::ToggleHelp,
-        KeyCode::Char('c') => UiIntent::EnterCreateMode,
+        KeyCode::Char('c') => UiIntent::EnterCreateTaskMode,
         KeyCode::Char('f') => UiIntent::FinishSelected,
-        KeyCode::Char('r') => UiIntent::RefreshRows,
+        KeyCode::Char('r') => UiIntent::RefreshCurrentView,
         KeyCode::Char('p') => UiIntent::ParkSelected,
         KeyCode::Enter => UiIntent::OpenSelected,
         _ => UiIntent::Noop,
@@ -76,6 +84,19 @@ fn from_key_create(key: KeyEvent) -> UiIntent {
         KeyCode::Backspace => UiIntent::CreateBackspace,
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CreateAppend(ch)
+        }
+        _ => UiIntent::Noop,
+    }
+}
+
+fn from_key_clone(key: KeyEvent) -> UiIntent {
+    match key.code {
+        KeyCode::Esc => UiIntent::CloneCancel,
+        KeyCode::Enter => UiIntent::CloneSubmit,
+        KeyCode::Backspace => UiIntent::CloneBackspace,
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::CloneClear,
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            UiIntent::CloneAppend(ch)
         }
         _ => UiIntent::Noop,
     }
@@ -127,16 +148,40 @@ mod tests {
     #[test]
     fn create_mode_maps_create_intents() {
         assert_eq!(
-            from_key(InputMode::Create, key(KeyCode::Esc)),
+            from_key(InputMode::CreateTask, key(KeyCode::Esc)),
             UiIntent::CreateCancel
         );
         assert_eq!(
-            from_key(InputMode::Create, key(KeyCode::Enter)),
+            from_key(InputMode::CreateTask, key(KeyCode::Enter)),
             UiIntent::CreateSubmit
         );
         assert_eq!(
-            from_key(InputMode::Create, key(KeyCode::Char('b'))),
+            from_key(InputMode::CreateTask, key(KeyCode::Char('b'))),
             UiIntent::CreateAppend('b')
+        );
+    }
+
+    #[test]
+    fn normal_mode_maps_view_switch_intent() {
+        assert_eq!(
+            from_key(InputMode::Normal, key(KeyCode::Tab)),
+            UiIntent::SwitchView
+        );
+    }
+
+    #[test]
+    fn clone_mode_maps_clone_intents() {
+        assert_eq!(
+            from_key(InputMode::CloneRepo, key(KeyCode::Esc)),
+            UiIntent::CloneCancel
+        );
+        assert_eq!(
+            from_key(InputMode::CloneRepo, key(KeyCode::Enter)),
+            UiIntent::CloneSubmit
+        );
+        assert_eq!(
+            from_key(InputMode::CloneRepo, key(KeyCode::Char('g'))),
+            UiIntent::CloneAppend('g')
         );
     }
 
@@ -145,6 +190,7 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(from_key(InputMode::Normal, key), UiIntent::Quit);
         assert_eq!(from_key(InputMode::Filter, key), UiIntent::Quit);
-        assert_eq!(from_key(InputMode::Create, key), UiIntent::Quit);
+        assert_eq!(from_key(InputMode::CreateTask, key), UiIntent::Quit);
+        assert_eq!(from_key(InputMode::CloneRepo, key), UiIntent::Quit);
     }
 }
