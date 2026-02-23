@@ -269,11 +269,16 @@ impl TaskResolver {
     pub fn current_task_info(&self) -> Result<(String, String, PathBuf), String> {
         let root = current_root()?;
         let common_dir = git_common_dir(&root)?;
-        let repo_key =
-            repo_key_from_common_dir(&common_dir, self.layout.repos_dir()).ok_or_else(|| {
-                "Current repository is not managed by task. Run 'task list' to see parkable tasks."
-                    .to_string()
-            })?;
+        let repos_dir = self
+            .layout
+            .repo_gitdir_path("")
+            .parent()
+            .ok_or_else(|| "Could not resolve repos dir".to_string())?
+            .to_path_buf();
+        let repo_key = repo_key_from_common_dir(&common_dir, &repos_dir)?.ok_or_else(|| {
+            "Current repository is not managed by task. Run 'task list' to see parkable tasks."
+                .to_string()
+        })?;
 
         let branch = current_branch(&root)
             .or_else(|| branch_from_worktree_path(self.layout.wt_dir(), &repo_key, &root))
