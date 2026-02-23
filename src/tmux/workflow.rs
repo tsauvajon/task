@@ -28,16 +28,51 @@ pub fn open_task_session(
 
     let session = session_name(repo_key, branch);
     if !has_session(process, &session) {
+        if process.command_exists("opencode") {
+            process.run_status(
+                "tmux",
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    &session,
+                    "-c",
+                    path.to_string_lossy().as_ref(),
+                    "opencode",
+                ],
+                None,
+            )?;
+        } else {
+            process.warn("'opencode' is not available; opening tmux with shell panes only.");
+            process.run_status(
+                "tmux",
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    &session,
+                    "-c",
+                    path.to_string_lossy().as_ref(),
+                ],
+                None,
+            )?;
+        }
+
         process.run_status(
             "tmux",
             &[
-                "new-session",
-                "-d",
-                "-s",
-                &session,
+                "split-window",
+                "-v",
+                "-t",
+                &format!("{session}:0"),
                 "-c",
                 path.to_string_lossy().as_ref(),
             ],
+            None,
+        )?;
+        process.run_status(
+            "tmux",
+            &["select-pane", "-t", &format!("{session}:0.0")],
             None,
         )?;
     }
