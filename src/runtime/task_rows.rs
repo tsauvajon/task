@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::git::{WorktreeEntry, branch_from_ref, branch_from_worktree_path};
-use crate::tmux::session_name;
+use crate::tools::git::{WorktreeEntry, branch_from_ref, branch_from_worktree_path};
+use crate::tools::tmux::session_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRow {
@@ -54,7 +54,7 @@ pub fn build_task_rows(
 
 #[cfg(test)]
 mod tests {
-    use crate::git::WorktreeEntry;
+    use crate::tools::git::WorktreeEntry;
 
     use super::{TaskRow, build_task_rows};
 

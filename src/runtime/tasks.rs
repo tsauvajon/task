@@ -7,15 +7,16 @@ use std::path::{Path, PathBuf};
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dialoguer::{Select, theme::ColorfulTheme};
 
-use crate::git::{
+use crate::runtime::paths::WorkspacePaths;
+use crate::runtime::process::ProcessRunner;
+use crate::runtime::task_rows::{TaskRow, build_task_rows};
+use crate::tools::git::{
     ResolveResult, branch_from_worktree_path, clone_bare_repo, current_branch, current_root,
     git_common_dir, parse_repo_input, parse_worktree_porcelain, repo_key_from_common_dir,
     resolve_repo_query, worktree_list_porcelain,
 };
-use crate::runtime::paths::WorkspacePaths;
-use crate::runtime::process::ProcessRunner;
-use crate::runtime::task_rows::{TaskRow, build_task_rows};
-use crate::tmux::{self, OpenResult};
+use crate::tools::tmux::{self, OpenResult};
+use crate::tools::{asdf, direnv, nodejs};
 
 #[derive(Debug, Clone)]
 pub struct TaskResolver {
@@ -118,14 +119,14 @@ impl TaskResolver {
         branch: &str,
         path: &Path,
     ) -> Result<(), String> {
-        if path.join(".envrc").exists() && self.process.command_exists("direnv") {
-            let _ = self.process.run_status("direnv", &["allow"], Some(path));
+        if path.join(".envrc").exists() && direnv::is_available(self.process) {
+            let _ = direnv::allow(self.process, path);
         }
 
-        if path.join(".tool-versions").exists() && self.process.command_exists("asdf") {
-            self.process.run_status("asdf", &["install"], Some(path))?;
-            if self.process.command_exists("corepack") {
-                let _ = self.process.run_status("corepack", &["enable"], None);
+        if asdf::is_available(self.process) {
+            let installed = asdf::install_from_workspace_tool_versions(self.process, path)?;
+            if installed && nodejs::corepack_available(self.process) {
+                let _ = nodejs::enable_corepack(self.process);
             }
         }
 

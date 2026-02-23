@@ -1,4 +1,5 @@
 use crate::runtime::RuntimeEnvironment;
+use crate::tools::opencode;
 
 pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     let mut missing = false;
@@ -24,10 +25,7 @@ pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     }
 
     if context.command_exists("opencode") {
-        if context
-            .run_status("opencode", &["auth", "list"], None)
-            .is_ok()
-        {
+        if opencode::auth_storage_reachable(context.process()) {
             println!("[ok]      opencode auth storage reachable");
         } else {
             println!("[warn]    opencode auth storage not initialized yet");

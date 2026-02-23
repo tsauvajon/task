@@ -1,5 +1,5 @@
 use crate::runtime::RuntimeEnvironment;
-use crate::tmux::{self, ParkResult};
+use crate::tools::tmux::{self, ParkResult};
 
 pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     context.ensure_layout()?;
