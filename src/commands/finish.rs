@@ -3,6 +3,7 @@ use std::fs;
 use crate::git::{status_porcelain, worktree_prune, worktree_remove};
 use crate::runtime::RuntimeEnvironment;
 use crate::tmux;
+use crate::vscodium;
 
 pub fn run(
     context: &RuntimeEnvironment,
@@ -42,6 +43,11 @@ pub fn run(
         }
 
         tmux::finish_task_session(context.process(), &repo_key, &branch)?;
+        if let Err(error) = vscodium::cleanup_task_state(&repo_key, &branch) {
+            context.warn(&format!(
+                "Failed to remove task editor state for {repo_key} {branch}: {error}"
+            ));
+        }
         return Ok(());
     }
 
@@ -62,6 +68,11 @@ pub fn run(
     }
 
     tmux::finish_task_session(context.process(), &repo_key, &branch)?;
+    if let Err(error) = vscodium::cleanup_task_state(&repo_key, &branch) {
+        context.warn(&format!(
+            "Failed to remove task editor state for {repo_key} {branch}: {error}"
+        ));
+    }
 
     Ok(())
 }
