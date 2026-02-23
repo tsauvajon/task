@@ -164,12 +164,12 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{MatchKind, match_repo_name, match_task_name, resolve_match};
-    use crate::runtime::TaskRow;
+    use crate::runtime::{TaskRow, TaskStatus};
 
     #[test]
     fn task_name_match_prefers_exact() {
         let row = TaskRow {
-            status: "parked".to_string(),
+            status: TaskStatus::Parked,
             repo: "github.com/acme/tool".to_string(),
             branch: "feat/login".to_string(),
             path: PathBuf::from("/tmp/wt/tool/feat/login"),
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn repo_name_match_supports_short_repo() {
         let row = TaskRow {
-            status: "parked".to_string(),
+            status: TaskStatus::Parked,
             repo: "github.com/acme/tool".to_string(),
             branch: "feat/login".to_string(),
             path: PathBuf::from("/tmp/wt/tool/feat/login"),
@@ -193,13 +193,13 @@ mod tests {
     #[test]
     fn resolve_match_uses_single_exact_without_prompt() {
         let a = TaskRow {
-            status: "parked".to_string(),
+            status: TaskStatus::Parked,
             repo: "github.com/acme/tool".to_string(),
             branch: "feat/login".to_string(),
             path: PathBuf::from("/tmp/wt/tool/feat/login"),
         };
         let b = TaskRow {
-            status: "parked".to_string(),
+            status: TaskStatus::Parked,
             repo: "github.com/acme/other".to_string(),
             branch: "login-fix".to_string(),
             path: PathBuf::from("/tmp/wt/other/login-fix"),

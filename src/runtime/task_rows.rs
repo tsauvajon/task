@@ -5,10 +5,16 @@ use crate::tools::tmux::session_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRow {
-    pub status: String,
+    pub status: TaskStatus,
     pub repo: String,
     pub branch: String,
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TaskStatus {
+    Open,
+    Parked,
 }
 
 pub fn build_task_rows(
@@ -36,9 +42,9 @@ pub fn build_task_rows(
 
         let session = session_name(repo_key, &branch);
         let status = if open_sessions.iter().any(|name| name == &session) {
-            "open".to_string()
+            TaskStatus::Open
         } else {
-            "parked".to_string()
+            TaskStatus::Parked
         };
 
         rows.push(TaskRow {
@@ -56,7 +62,7 @@ pub fn build_task_rows(
 mod tests {
     use crate::tools::git::WorktreeEntry;
 
-    use super::{TaskRow, build_task_rows};
+    use super::{TaskRow, TaskStatus, build_task_rows};
 
     #[test]
     fn build_task_rows_marks_open_and_parked_states() {
@@ -80,13 +86,13 @@ mod tests {
             rows,
             vec![
                 TaskRow {
-                    status: "open".to_string(),
+                    status: TaskStatus::Open,
                     repo: "github.com/tsauvajon/task".to_string(),
                     branch: "rewrite-in-rust".to_string(),
                     path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
                 },
                 TaskRow {
-                    status: "parked".to_string(),
+                    status: TaskStatus::Parked,
                     repo: "github.com/tsauvajon/task".to_string(),
                     branch: "bump-deps".to_string(),
                     path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),

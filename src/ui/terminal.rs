@@ -9,17 +9,32 @@ use ratatui::backend::CrosstermBackend;
 
 pub(super) type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
-pub(super) fn init_terminal() -> Result<AppTerminal, String> {
-    enable_raw_mode().map_err(|e| e.to_string())?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).map_err(|e| e.to_string())?;
-    execute!(stdout, crossterm::event::EnableMouseCapture).map_err(|e| e.to_string())?;
-
-    let backend = CrosstermBackend::new(stdout);
-    Terminal::new(backend).map_err(|e| e.to_string())
+pub(super) struct TerminalGuard {
+    terminal: Option<AppTerminal>,
 }
 
-pub(super) fn restore_terminal(terminal: &mut AppTerminal) -> Result<(), String> {
+impl TerminalGuard {
+    pub(super) fn new() -> Result<Self, String> {
+        enable_raw_mode().map_err(|e| e.to_string())?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen).map_err(|e| e.to_string())?;
+        execute!(stdout, crossterm::event::EnableMouseCapture).map_err(|e| e.to_string())?;
+
+        let backend = CrosstermBackend::new(stdout);
+        let terminal = Terminal::new(backend).map_err(|e| e.to_string())?;
+        Ok(Self {
+            terminal: Some(terminal),
+        })
+    }
+
+    pub(super) fn terminal_mut(&mut self) -> &mut AppTerminal {
+        self.terminal
+            .as_mut()
+            .expect("terminal guard must contain terminal")
+    }
+}
+
+fn restore_terminal(terminal: &mut AppTerminal) -> Result<(), String> {
     disable_raw_mode().map_err(|e| e.to_string())?;
     execute!(
         terminal.backend_mut(),
@@ -29,4 +44,12 @@ pub(super) fn restore_terminal(terminal: &mut AppTerminal) -> Result<(), String>
     .map_err(|e| e.to_string())?;
     terminal.show_cursor().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        if let Some(terminal) = self.terminal.as_mut() {
+            let _ = restore_terminal(terminal);
+        }
+    }
 }

@@ -4,6 +4,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 
+use crate::runtime::TaskStatus;
+
 use super::state::{InputMode, UiState};
 
 pub(super) fn render(frame: &mut Frame, state: &UiState) {
@@ -20,7 +22,11 @@ pub(super) fn render(frame: &mut Frame, state: &UiState) {
 }
 
 fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
-    let open_count = state.rows.iter().filter(|row| row.status == "open").count();
+    let open_count = state
+        .rows
+        .iter()
+        .filter(|row| row.status == TaskStatus::Open)
+        .count();
     let total_count = state.rows.len();
 
     let chunks = UiLayout::default()
@@ -36,15 +42,14 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
 
     let rows = state.filtered_indices.iter().filter_map(|index| {
         let row = state.rows.get(*index)?;
-        let status_style = match row.status.as_str() {
-            "open" => Style::default()
+        let status_style = match row.status {
+            TaskStatus::Open => Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
-            "parked" => Style::default().fg(Color::Yellow),
-            _ => Style::default().fg(Color::Gray),
+            TaskStatus::Parked => Style::default().fg(Color::Yellow),
         };
         Some(Row::new(vec![
-            Cell::from(row.status.clone()).style(status_style),
+            Cell::from(status_label(row.status)).style(status_style),
             Cell::from(row.repo.clone()),
             Cell::from(row.branch.clone()),
             Cell::from(row.path.to_string_lossy().to_string()),
@@ -213,4 +218,11 @@ fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+fn status_label(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Open => "open",
+        TaskStatus::Parked => "parked",
+    }
 }
