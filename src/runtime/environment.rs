@@ -121,10 +121,6 @@ impl RuntimeEnvironment {
         self.tasks.tmux_sessions()
     }
 
-    pub fn tmux_has_session(&self, session: &str) -> bool {
-        self.tasks.tmux_has_session(session)
-    }
-
     pub fn current_task_info(&self) -> Result<(String, String, PathBuf), String> {
         self.tasks.current_task_info()
     }

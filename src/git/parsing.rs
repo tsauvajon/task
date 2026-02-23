@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::runtime::task_session_name;
+use crate::tmux::session_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInput {
@@ -192,7 +192,7 @@ pub fn build_task_rows(
             })
             .unwrap_or_else(|| "unknown".to_string());
 
-        let session = task_session_name(repo_key, &branch);
+        let session = session_name(repo_key, &branch);
         let status = if open_sessions.iter().any(|name| name == &session) {
             "open".to_string()
         } else {

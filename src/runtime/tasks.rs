@@ -16,7 +16,7 @@ use crate::git::parsing::{
 use crate::git::repo_resolution::{ResolveResult, resolve_repo_query};
 use crate::runtime::paths::WorkspacePaths;
 use crate::runtime::process::ProcessRunner;
-use crate::runtime::task_session_name;
+use crate::tmux::{self, OpenResult};
 
 #[derive(Debug, Clone)]
 pub struct TaskResolver {
@@ -138,34 +138,7 @@ impl TaskResolver {
                 .spawn();
         }
 
-        if self.process.command_exists("tmux") {
-            let session = task_session_name(repo_key, branch);
-            if !self.tmux_has_session(&session) {
-                self.process.run_status(
-                    "tmux",
-                    &[
-                        "new-session",
-                        "-d",
-                        "-s",
-                        &session,
-                        "-c",
-                        path.to_string_lossy().as_ref(),
-                    ],
-                    None,
-                )?;
-            }
-
-            if std::env::var("TMUX")
-                .ok()
-                .filter(|value| !value.is_empty())
-                .is_some()
-            {
-                self.process
-                    .run_status("tmux", &["switch-client", "-t", &session], None)?;
-            } else {
-                self.process
-                    .run_status("tmux", &["attach-session", "-t", &session], None)?;
-            }
+        if tmux::open_task_session(self.process, repo_key, branch, path)? == OpenResult::Attached {
             return Ok(());
         }
 
@@ -303,20 +276,7 @@ impl TaskResolver {
     }
 
     pub fn tmux_sessions(&self) -> HashSet<String> {
-        if !self.process.command_exists("tmux") {
-            return HashSet::new();
-        }
-
-        let output = match self.process.run_capture("tmux", &["ls"], None) {
-            Ok(output) => output,
-            Err(_) => return HashSet::new(),
-        };
-
-        tmux_sessions_from_output(&output)
-    }
-
-    pub fn tmux_has_session(&self, session: &str) -> bool {
-        self.process.tmux_has_session(session)
+        tmux::list_sessions(self.process)
     }
 
     pub fn current_task_info(&self) -> Result<(String, String, PathBuf), String> {
@@ -479,28 +439,11 @@ fn choose_task_interactive(query: &str, choices: &[&TaskRow]) -> Result<(String,
     Err("Selection cancelled.".to_string())
 }
 
-fn tmux_sessions_from_output(output: &str) -> HashSet<String> {
-    output
-        .lines()
-        .filter_map(|line| line.split(':').next())
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{collect_gitdirs, tmux_sessions_from_output};
+    use super::collect_gitdirs;
     use std::env;
     use std::fs;
-
-    #[test]
-    fn tmux_sessions_parses_names() {
-        let text = "task_a: 1 windows\ndefault: 2 windows\n";
-        let sessions = tmux_sessions_from_output(text);
-        assert!(sessions.contains("task_a"));
-        assert!(sessions.contains("default"));
-    }
 
     #[test]
     fn collect_gitdirs_finds_nested_bare_repos() {

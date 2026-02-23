@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use owo_colors::OwoColorize;
 
@@ -56,18 +56,6 @@ impl ProcessRunner {
             return Ok(());
         }
         Err(format!("command failed with status {status}"))
-    }
-
-    pub fn tmux_has_session(&self, session: &str) -> bool {
-        match Command::new("tmux")
-            .args(["has-session", "-t", session])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-        {
-            Ok(status) => status.success(),
-            Err(_) => false,
-        }
     }
 
     pub fn log(&self, message: &str) {

@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 
-use crate::runtime::task_session_name;
+use crate::tmux;
 
 use super::state::{InputMode, UiState};
 
@@ -145,7 +145,7 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
             ]),
             Line::from(vec![
                 Span::styled("Session: ", Style::default().fg(Color::Gray)),
-                Span::raw(task_session_name(&row.repo, &row.branch)),
+                Span::raw(tmux::session_name(&row.repo, &row.branch)),
             ]),
             Line::from(vec![
                 Span::styled("Path: ", Style::default().fg(Color::Gray)),
