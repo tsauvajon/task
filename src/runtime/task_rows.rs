@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::tools::git::{WorktreeEntry, branch_from_ref, branch_from_worktree_path};
 use crate::tools::tmux::session_name;
@@ -19,6 +19,7 @@ pub enum TaskStatus {
 
 pub fn build_task_rows(
     repo_key: &str,
+    wt_dir: &Path,
     entries: &[WorktreeEntry],
     open_sessions: &[String],
 ) -> Vec<TaskRow> {
@@ -29,9 +30,8 @@ pub fn build_task_rows(
             continue;
         }
 
-        let path_text = entry.path.to_string_lossy().to_string();
         let branch = branch_from_ref(entry.branch_ref.as_deref())
-            .or_else(|| branch_from_worktree_path(repo_key, &path_text))
+            .or_else(|| branch_from_worktree_path(wt_dir, repo_key, &entry.path))
             .or_else(|| {
                 entry
                     .path
@@ -60,12 +60,15 @@ pub fn build_task_rows(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use crate::tools::git::WorktreeEntry;
 
     use super::{TaskRow, TaskStatus, build_task_rows};
 
     #[test]
     fn build_task_rows_marks_open_and_parked_states() {
+        let wt_dir = Path::new("/tmp/dev/wt");
         let entries = vec![
             WorktreeEntry {
                 path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
@@ -80,7 +83,12 @@ mod tests {
         ];
 
         let open_sessions = vec!["github_com_tsauvajon_task-rewrite-in-rust".to_string()];
-        let rows = build_task_rows("github.com/tsauvajon/task", &entries, &open_sessions);
+        let rows = build_task_rows(
+            "github.com/tsauvajon/task",
+            wt_dir,
+            &entries,
+            &open_sessions,
+        );
 
         assert_eq!(
             rows,

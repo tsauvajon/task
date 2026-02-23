@@ -7,11 +7,18 @@ pub struct WorkspacePaths {
 }
 
 impl WorkspacePaths {
-    pub fn new(dev_root: impl AsRef<Path>) -> Self {
-        let dev_root = dev_root.as_ref().to_path_buf();
-        let repos_dir = dev_root.join("repos");
-        let wt_dir = dev_root.join("wt");
+    pub fn new(repos_dir: impl AsRef<Path>, wt_dir: impl AsRef<Path>) -> Self {
+        let repos_dir = repos_dir.as_ref().to_path_buf();
+        let wt_dir = wt_dir.as_ref().to_path_buf();
         Self { repos_dir, wt_dir }
+    }
+
+    pub fn repos_dir(&self) -> &Path {
+        &self.repos_dir
+    }
+
+    pub fn wt_dir(&self) -> &Path {
+        &self.wt_dir
     }
 
     pub fn repo_gitdir_path(&self, repo_key: &str) -> PathBuf {
@@ -29,15 +36,16 @@ mod tests {
 
     #[test]
     fn workspace_paths_build_expected_paths() {
-        let root = std::env::temp_dir().join("task-tests-dev-root");
-        let layout = WorkspacePaths::new(&root);
+        let repos_dir = std::env::temp_dir().join("task-tests-repos");
+        let wt_dir = std::env::temp_dir().join("task-tests-wt");
+        let layout = WorkspacePaths::new(&repos_dir, &wt_dir);
         assert_eq!(
             layout.repo_gitdir_path("github.com/tsauvajon/goto"),
-            root.join("repos/github.com/tsauvajon/goto.git")
+            repos_dir.join("github.com/tsauvajon/goto.git")
         );
         assert_eq!(
             layout.worktree_path("github.com/tsauvajon/goto", "bump-deps"),
-            root.join("wt/github.com/tsauvajon/goto/bump-deps")
+            wt_dir.join("github.com/tsauvajon/goto/bump-deps")
         );
     }
 }

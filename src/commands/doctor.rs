@@ -4,7 +4,8 @@ use crate::tools::opencode;
 pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     let mut missing = false;
 
-    println!("DEV_ROOT: {}", context.dev_root().display());
+    println!("repos_dir: {}", context.repos_dir().display());
+    println!("wt_dir: {}", context.wt_dir().display());
     for cmd in [
         "git", "tmux", "vim", "codium", "opencode", "nix", "direnv", "asdf",
     ] {
@@ -16,11 +17,10 @@ pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
         }
     }
 
-    let dev_root = context.dev_root();
-    if dev_root.join("repos").is_dir() && dev_root.join("wt").is_dir() {
-        println!("[ok]      {} layout", dev_root.display());
+    if context.repos_dir().is_dir() && context.wt_dir().is_dir() {
+        println!("[ok]      configured layout exists");
     } else {
-        println!("[missing] {} layout", dev_root.display());
+        println!("[missing] configured layout does not exist");
         missing = true;
     }
 

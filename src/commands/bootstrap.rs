@@ -3,7 +3,8 @@ use crate::tools::{asdf, nodejs};
 
 pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     context.ensure_layout()?;
-    context.log(&format!("Workspace root: {}", context.dev_root().display()));
+    context.log(&format!("Repos dir: {}", context.repos_dir().display()));
+    context.log(&format!("Worktrees dir: {}", context.wt_dir().display()));
 
     if !asdf::is_available(context.process()) {
         context.warn(

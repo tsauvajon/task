@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use crate::runtime::config::TaskConfig;
 use crate::runtime::paths::WorkspacePaths;
 use crate::runtime::process::ProcessRunner;
 use crate::runtime::task_rows::TaskRow;
@@ -9,42 +10,35 @@ use crate::runtime::tasks::TaskResolver;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeEnvironment {
-    dev_root: PathBuf,
     layout: WorkspacePaths,
     process: ProcessRunner,
     tasks: TaskResolver,
 }
 
 impl RuntimeEnvironment {
-    pub fn new() -> Self {
-        Self::from_dev_root(Self::default_dev_root())
+    pub fn new() -> Result<Self, String> {
+        let config = TaskConfig::load_or_initialize()?;
+        Ok(Self::from_paths(config.repos_dir, config.wt_dir))
     }
 
-    pub fn from_dev_root(dev_root: impl AsRef<Path>) -> Self {
-        let dev_root = dev_root.as_ref().to_path_buf();
-        let layout = WorkspacePaths::new(&dev_root);
+    pub fn from_paths(repos_dir: impl AsRef<Path>, wt_dir: impl AsRef<Path>) -> Self {
+        let layout = WorkspacePaths::new(repos_dir, wt_dir);
         let process = ProcessRunner;
         let tasks = TaskResolver::new(layout.clone(), process);
 
         Self {
-            dev_root,
             layout,
             process,
             tasks,
         }
     }
 
-    pub fn default_dev_root() -> PathBuf {
-        if let Ok(dev_root) = std::env::var("DEV_ROOT") {
-            return PathBuf::from(dev_root);
-        }
-
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home".to_string());
-        PathBuf::from(home).join("dev")
+    pub fn repos_dir(&self) -> &Path {
+        self.layout.repos_dir()
     }
 
-    pub fn dev_root(&self) -> &Path {
-        &self.dev_root
+    pub fn wt_dir(&self) -> &Path {
+        self.layout.wt_dir()
     }
 
     pub fn layout(&self) -> &WorkspacePaths {
@@ -174,6 +168,6 @@ impl RuntimeEnvironment {
 
 impl Default for RuntimeEnvironment {
     fn default() -> Self {
-        Self::new()
+        Self::new().expect("runtime environment")
     }
 }
