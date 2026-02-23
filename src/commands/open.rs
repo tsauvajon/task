@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::io::{self, IsTerminal};
 
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::{Select, theme::ColorfulTheme};
 
 use crate::layout::Layout;
 use crate::worktree::TaskRow;
@@ -24,7 +24,7 @@ pub fn run(
 
     let (repo_arg, branch) = super::resolve_repo_branch_inputs(layout, repo_arg, branch_arg)?;
     let repo_key = super::resolve_repo_key_input(layout, &repo_arg)?;
-    let worktree = layout.worktree_path(&repo_key, &branch);
+    let worktree = super::resolve_worktree_path(layout, &repo_key, &branch);
     if !worktree.join(".git").exists() {
         return Err(format!("Worktree not found: {}", worktree.display()));
     }
@@ -164,7 +164,7 @@ fn match_repo_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{match_repo_name, match_task_name, resolve_match, MatchKind};
+    use super::{MatchKind, match_repo_name, match_task_name, resolve_match};
     use crate::worktree::TaskRow;
 
     #[test]

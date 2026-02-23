@@ -7,15 +7,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::{Select, theme::ColorfulTheme};
 use owo_colors::OwoColorize;
 
 use crate::layout::Layout;
-use crate::repo_key::{normalize_repo_key, resolve_repo_key, ResolveResult};
+use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
 use crate::session::session_name_for;
 use crate::worktree::{
-    branch_from_worktree_path, build_task_rows, parse_worktree_porcelain, repo_key_from_common_dir,
-    TaskRow,
+    TaskRow, branch_from_worktree_path, build_task_rows, parse_worktree_porcelain,
+    repo_key_from_common_dir,
 };
 
 pub(super) fn default_dev_root() -> PathBuf {
@@ -363,6 +363,23 @@ pub(super) fn repo_task_rows(
     let entries = parse_worktree_porcelain(&output);
     let open_session_list: Vec<String> = open_sessions.iter().cloned().collect();
     Ok(build_task_rows(repo_key, &entries, &open_session_list))
+}
+
+pub(super) fn resolve_worktree_path(layout: &Layout, repo_key: &str, branch: &str) -> PathBuf {
+    let fallback = layout.worktree_path(repo_key, branch);
+    let gitdir = layout.repo_gitdir_path(repo_key);
+    if !gitdir.is_dir() {
+        return fallback;
+    }
+
+    let open_sessions = HashSet::new();
+    if let Ok(rows) = repo_task_rows(repo_key, &gitdir, &open_sessions)
+        && let Some(row) = rows.into_iter().find(|row| row.branch == branch)
+    {
+        return row.path;
+    }
+
+    fallback
 }
 
 pub(super) fn resolve_task_from_args(

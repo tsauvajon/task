@@ -36,7 +36,7 @@ pub fn run(layout: &Layout, args: &[String]) -> Result<(), String> {
         return Err(format!("Repo not found: {repo_key}"));
     }
 
-    let worktree = layout.worktree_path(&repo_key, &branch);
+    let worktree = super::resolve_worktree_path(layout, &repo_key, &branch);
     if !worktree.join(".git").exists() {
         return Err(format!("Worktree not found: {}", worktree.display()));
     }

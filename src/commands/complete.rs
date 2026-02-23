@@ -54,6 +54,17 @@ fn completion_values(layout: &Layout, words: &[String]) -> Result<Vec<String>, S
                 Vec::new()
             }
         }
+        "rebase" => {
+            if arg_count <= 1 {
+                let mut values = task_candidates(layout, None)?;
+                values.extend(repo_candidates(layout)?);
+                values
+            } else if arg_count == 2 {
+                task_candidates(layout, Some(&args[0]))?
+            } else {
+                Vec::new()
+            }
+        }
         "prune" | "list" | "ui" | "worktrees" => {
             if arg_count <= 1 {
                 repo_candidates(layout)?
@@ -85,6 +96,7 @@ fn top_level_commands() -> Vec<String> {
         "finish",
         "prune",
         "check",
+        "rebase",
         "completions",
     ]
     .into_iter()
