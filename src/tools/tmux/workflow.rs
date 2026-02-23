@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::runtime::ProcessRunner;
-use crate::vscodium;
+use crate::tools::vscodium;
 
 use super::{has_session, is_available, session_name};
 

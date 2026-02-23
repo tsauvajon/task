@@ -1,5 +1,5 @@
-use crate::git::{detect_default_base, fetch_origin_refs, rebase, rev_exists};
 use crate::runtime::RuntimeEnvironment;
+use crate::tools::git::{detect_default_base, fetch_origin_refs, rebase, rev_exists};
 
 pub fn run(context: &RuntimeEnvironment, args: &[String]) -> Result<(), String> {
     let input = parse_rebase_input(args)?;
