@@ -34,7 +34,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), S
     if rows.is_empty() {
         context.log(&format!(
             "No tasks found under {}",
-            context.dev_root().join("wt").display()
+            context.wt_dir().display()
         ));
     } else {
         context.print_task_rows_table(&rows);

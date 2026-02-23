@@ -195,15 +195,17 @@ pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
     entries
 }
 
-pub fn branch_from_worktree_path(repo_key: &str, worktree_path: &str) -> Option<String> {
-    let marker = format!("/wt/{repo_key}/");
-    if let Some(index) = worktree_path.find(&marker) {
-        let branch = &worktree_path[(index + marker.len())..];
-        if !branch.is_empty() {
-            return Some(branch.to_string());
-        }
+pub fn branch_from_worktree_path(
+    wt_dir: &Path,
+    repo_key: &str,
+    worktree_path: &Path,
+) -> Option<String> {
+    let relative = worktree_path.strip_prefix(wt_dir.join(repo_key)).ok()?;
+    if relative.as_os_str().is_empty() {
+        return None;
     }
-    None
+
+    Some(relative.to_string_lossy().to_string())
 }
 
 pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
@@ -266,8 +268,9 @@ branch refs/heads/rewrite-in-rust\n\n";
     #[test]
     fn branch_from_worktree_path_supports_nested_branch_names() {
         let branch = branch_from_worktree_path(
+            Path::new("/tmp/custom/wt"),
             "github.com/tsauvajon/task",
-            "/tmp/dev/wt/github.com/tsauvajon/task/feat/rewrite/rust",
+            Path::new("/tmp/custom/wt/github.com/tsauvajon/task/feat/rewrite/rust"),
         );
         assert_eq!(branch, Some("feat/rewrite/rust".to_string()));
     }

@@ -34,17 +34,8 @@ impl TaskResolver {
     }
 
     pub fn ensure_layout(&self) -> Result<(), String> {
-        let repos = self.layout.repo_gitdir_path("");
-        let repos_dir = repos
-            .parent()
-            .ok_or_else(|| "Could not resolve repos dir".to_string())?;
-        let wt_root = self.layout.worktree_path("", "");
-        let wt_dir = wt_root
-            .parent()
-            .ok_or_else(|| "Could not resolve wt dir".to_string())?;
-
-        fs::create_dir_all(repos_dir).map_err(|e| e.to_string())?;
-        fs::create_dir_all(wt_dir).map_err(|e| e.to_string())?;
+        fs::create_dir_all(self.layout.repos_dir()).map_err(|e| e.to_string())?;
+        fs::create_dir_all(self.layout.wt_dir()).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -148,7 +139,12 @@ impl TaskResolver {
 
         let entries = parse_worktree_porcelain(&output);
         let open_session_list: Vec<String> = open_sessions.iter().cloned().collect();
-        Ok(build_task_rows(repo_key, &entries, &open_session_list))
+        Ok(build_task_rows(
+            repo_key,
+            self.layout.wt_dir(),
+            &entries,
+            &open_session_list,
+        ))
     }
 
     pub fn resolve_worktree_path(&self, repo_key: &str, branch: &str) -> PathBuf {
@@ -273,14 +269,14 @@ impl TaskResolver {
     pub fn current_task_info(&self) -> Result<(String, String, PathBuf), String> {
         let root = current_root()?;
         let common_dir = git_common_dir(&root)?;
-        let common_text = common_dir.to_string_lossy().to_string();
-        let repo_key = repo_key_from_common_dir(&common_text).ok_or_else(|| {
-            "Current repository is not managed by task. Run 'task list' to see parkable tasks."
-                .to_string()
-        })?;
+        let repo_key =
+            repo_key_from_common_dir(&common_dir, self.layout.repos_dir()).ok_or_else(|| {
+                "Current repository is not managed by task. Run 'task list' to see parkable tasks."
+                    .to_string()
+            })?;
 
         let branch = current_branch(&root)
-            .or_else(|| branch_from_worktree_path(&repo_key, &root.to_string_lossy()))
+            .or_else(|| branch_from_worktree_path(self.layout.wt_dir(), &repo_key, &root))
             .or_else(|| {
                 root.file_name()
                     .map(|name| name.to_string_lossy().to_string())

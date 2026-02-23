@@ -26,10 +26,9 @@ pub fn git_common_dir(root: &Path) -> Result<PathBuf, String> {
     fs::canonicalize(common_dir).map_err(|e| e.to_string())
 }
 
-pub fn repo_key_from_common_dir(common_dir: &str) -> Option<String> {
-    let marker = "/repos/";
-    let index = common_dir.find(marker)?;
-    let mut key = common_dir[(index + marker.len())..].to_string();
+pub fn repo_key_from_common_dir(common_dir: &Path, repos_dir: &Path) -> Option<String> {
+    let relative = common_dir.strip_prefix(repos_dir).ok()?;
+    let mut key = relative.to_string_lossy().to_string();
     if key.ends_with(".git") {
         key.truncate(key.len() - 4);
     }
@@ -41,11 +40,16 @@ pub fn repo_key_from_common_dir(common_dir: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::repo_key_from_common_dir;
 
     #[test]
     fn repo_key_from_common_dir_extracts_key() {
-        let key = repo_key_from_common_dir("/tmp/dev/repos/github.com/tsauvajon/task.git");
+        let key = repo_key_from_common_dir(
+            Path::new("/tmp/custom/repos/github.com/tsauvajon/task.git"),
+            Path::new("/tmp/custom/repos"),
+        );
         assert_eq!(key, Some("github.com/tsauvajon/task".to_string()));
     }
 }

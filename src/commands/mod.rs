@@ -32,7 +32,7 @@ pub enum Command {
     Bootstrap,
     #[command(about = "Check toolchain and workspace health")]
     Doctor,
-    #[command(about = "Clone bare repo into ~/dev/repos")]
+    #[command(about = "Clone bare repo into configured repos directory")]
     Clone {
         repo_url: String,
         repo_key: Option<String>,
@@ -88,7 +88,7 @@ pub enum CompletionShell {
 }
 
 pub fn run(cli: Cli) -> Result<(), String> {
-    let context = RuntimeEnvironment::new();
+    let context = RuntimeEnvironment::new()?;
 
     match cli.command {
         None => ui::run(&context, None),

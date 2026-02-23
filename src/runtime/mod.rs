@@ -1,3 +1,4 @@
+mod config;
 mod environment;
 mod paths;
 mod process;
