@@ -1,9 +1,10 @@
 use std::path::Path;
 
-use crate::runtime::ProcessRunner;
-use crate::tools::vscodium;
+use crate::runtime::process::ProcessRunner;
+use crate::tools::vscodium::workflow::{close_task_windows, open_task_window};
 
-use super::{has_session, is_available, session_name};
+use super::naming::session_name;
+use super::sessions::{has_session, is_available};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParkResult {
@@ -51,7 +52,7 @@ pub fn open_task_session(
 
     let session = session_name(repo_key, branch);
     if !has_session(process, &session) {
-        if let Err(error) = vscodium::open_task_window(process, repo_key, branch, path) {
+        if let Err(error) = open_task_window(process, repo_key, branch, path) {
             process.warn(&format!(
                 "Failed to open VSCodium for {repo_key} {branch}: {error}"
             ));
@@ -131,7 +132,7 @@ pub fn park_task(
     for action in park_teardown_actions(has_tmux_session) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = vscodium::close_task_windows(process, repo_key, branch);
+                let _ = close_task_windows(process, repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
                 process.run_status("tmux", &["kill-session", "-t", &session], None)?;
@@ -155,7 +156,7 @@ pub fn finish_task_session(
     for action in finish_teardown_actions(tmux_available, has_tmux_session) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = vscodium::close_task_windows(process, repo_key, branch);
+                let _ = close_task_windows(process, repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
                 process.run_status("tmux", &["kill-session", "-t", &session], None)?;

@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "task"
-version = "0.5.2"
+version = "1.0.0"
 dependencies = [
  "clap",
  "clap_complete",

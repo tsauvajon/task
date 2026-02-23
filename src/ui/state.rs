@@ -1,4 +1,4 @@
-use crate::runtime::TaskRow;
+use crate::runtime::task_rows::TaskRow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputMode {

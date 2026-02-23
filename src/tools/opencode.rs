@@ -1,4 +1,4 @@
-use crate::runtime::ProcessRunner;
+use crate::runtime::process::ProcessRunner;
 
 pub fn auth_storage_reachable(process: ProcessRunner) -> bool {
     process

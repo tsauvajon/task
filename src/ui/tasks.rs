@@ -1,5 +1,7 @@
-use crate::runtime::{RuntimeEnvironment, TaskRow};
-use crate::tools::tmux::{self, ParkResult};
+use crate::runtime::environment::RuntimeEnvironment;
+use crate::runtime::task_rows::TaskRow;
+use crate::tools::tmux::sessions::is_available;
+use crate::tools::tmux::workflow::{ParkResult, park_task};
 
 use super::state::UiState;
 
@@ -46,11 +48,11 @@ pub(super) fn park_selected(
         return Ok(());
     };
 
-    if !tmux::is_available(context.process()) {
+    if !is_available(context.process()) {
         return Err("tmux is not available. Run 'task list' to inspect tasks.".to_string());
     }
 
-    match tmux::park_task(context.process(), &row.repo, &row.branch)? {
+    match park_task(context.process(), &row.repo, &row.branch)? {
         ParkResult::Parked => state.message = format!("Parked task: {} {}", row.repo, row.branch),
         ParkResult::AlreadyParked => {
             state.message = format!("Task already parked: {} {}", row.repo, row.branch)

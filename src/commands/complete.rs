@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::runtime::RuntimeEnvironment;
+use crate::runtime::environment::RuntimeEnvironment;
 
 pub fn run(context: &RuntimeEnvironment, words: &[String]) -> Result<(), String> {
     let values = completion_values(context, words)?;

@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use crate::runtime::ProcessRunner;
+use crate::runtime::process::ProcessRunner;
 
 const NODEJS_PLUGIN_REPO: &str = "https://github.com/asdf-vm/asdf-nodejs.git";
 

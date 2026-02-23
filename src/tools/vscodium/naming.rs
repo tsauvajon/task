@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use crate::tools::tmux;
+use crate::tools::tmux::naming::session_name;
 
 pub fn task_key(repo_key: &str, branch: &str) -> String {
-    tmux::session_name(repo_key, branch)
+    session_name(repo_key, branch)
 }
 
 pub fn codium_state_root() -> PathBuf {

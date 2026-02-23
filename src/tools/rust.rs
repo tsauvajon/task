@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::runtime::ProcessRunner;
+use crate::runtime::process::ProcessRunner;
 
 pub fn run_checks(process: ProcessRunner, path: &Path) -> Result<(), String> {
     process.run_status("cargo", &["fmt", "--all", "--check"], Some(path))?;

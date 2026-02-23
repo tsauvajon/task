@@ -17,7 +17,7 @@ pub mod start;
 pub mod ui;
 pub mod worktrees;
 
-use crate::runtime::RuntimeEnvironment;
+use crate::runtime::environment::RuntimeEnvironment;
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper")]

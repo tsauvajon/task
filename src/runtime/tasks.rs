@@ -10,12 +10,16 @@ use dialoguer::{Select, theme::ColorfulTheme};
 use crate::runtime::paths::WorkspacePaths;
 use crate::runtime::process::ProcessRunner;
 use crate::runtime::task_rows::{TaskRow, TaskStatus, build_task_rows};
-use crate::tools::git::{
-    ResolveResult, branch_from_worktree_path, clone_bare_repo, current_branch, current_root,
-    git_common_dir, parse_repo_input, parse_worktree_porcelain, repo_key_from_common_dir,
-    resolve_repo_query, worktree_list_porcelain,
+use crate::tools::git::context::{current_root, git_common_dir, repo_key_from_common_dir};
+use crate::tools::git::refs::current_branch;
+use crate::tools::git::repo::{
+    ResolveResult, clone_bare_repo, parse_repo_input, resolve_repo_query,
 };
-use crate::tools::tmux::{self, OpenResult};
+use crate::tools::git::worktrees::{
+    branch_from_worktree_path, parse_worktree_porcelain, worktree_list_porcelain,
+};
+use crate::tools::tmux::sessions::list_sessions;
+use crate::tools::tmux::workflow::{OpenResult, open_task_session};
 use crate::tools::{asdf, direnv, nodejs};
 
 #[derive(Debug, Clone)]
@@ -116,12 +120,12 @@ impl TaskResolver {
 
         if asdf::is_available(self.process) {
             let installed = asdf::install_from_workspace_tool_versions(self.process, path)?;
-            if installed && nodejs::corepack_available(self.process) {
-                let _ = nodejs::enable_corepack(self.process);
+            if installed && nodejs::runtime::corepack_available(self.process) {
+                let _ = nodejs::runtime::enable_corepack(self.process);
             }
         }
 
-        if tmux::open_task_session(self.process, repo_key, branch, path)? == OpenResult::Attached {
+        if open_task_session(self.process, repo_key, branch, path)? == OpenResult::Attached {
             return Ok(());
         }
 
@@ -263,7 +267,7 @@ impl TaskResolver {
     }
 
     pub fn tmux_sessions(&self) -> HashSet<String> {
-        tmux::list_sessions(self.process)
+        list_sessions(self.process)
     }
 
     pub fn current_task_info(&self) -> Result<(String, String, PathBuf), String> {

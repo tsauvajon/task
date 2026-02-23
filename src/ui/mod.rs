@@ -1,6 +1,6 @@
 use crossterm::event::{self, Event};
 
-use crate::runtime::RuntimeEnvironment;
+use crate::runtime::environment::RuntimeEnvironment;
 
 use self::effects::{create_action, finish_and_refresh, park_and_refresh, refresh_rows};
 use self::intent::{UiIntent, from_key};

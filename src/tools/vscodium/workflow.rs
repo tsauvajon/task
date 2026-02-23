@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use crate::runtime::ProcessRunner;
+use crate::runtime::process::ProcessRunner;
 
 use super::naming::task_user_data_dir;
 use super::process_match::{cmdline_matches_user_data_dir, parse_cmdline_bytes};

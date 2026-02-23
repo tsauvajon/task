@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::runtime::ProcessRunner;
+use crate::runtime::process::ProcessRunner;
 
 pub fn is_available(process: ProcessRunner) -> bool {
     process.command_exists("direnv")

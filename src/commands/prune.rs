@@ -1,5 +1,5 @@
-use crate::runtime::RuntimeEnvironment;
-use crate::tools::git::worktree_prune;
+use crate::runtime::environment::RuntimeEnvironment;
+use crate::tools::git::worktrees::worktree_prune;
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
     let repo_arg = context.resolve_repo_input(repo_arg)?;
