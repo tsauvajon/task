@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::runtime::process::ProcessRunner;
 use crate::tools::vscodium::workflow::{close_task_windows, open_task_window};
@@ -45,6 +45,7 @@ pub fn open_task_session(
     repo_key: &str,
     branch: &str,
     path: &Path,
+    codium_trusted_roots: &[PathBuf],
 ) -> Result<OpenResult, String> {
     if !is_available(process) {
         return Ok(OpenResult::Unavailable);
@@ -52,7 +53,8 @@ pub fn open_task_session(
 
     let session = session_name(repo_key, branch);
     if !has_session(process, &session) {
-        if let Err(error) = open_task_window(process, repo_key, branch, path) {
+        if let Err(error) = open_task_window(process, repo_key, branch, path, codium_trusted_roots)
+        {
             process.warn(&format!(
                 "Failed to open VSCodium for {repo_key} {branch}: {error}"
             ));

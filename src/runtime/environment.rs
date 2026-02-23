@@ -18,13 +18,25 @@ pub struct RuntimeEnvironment {
 impl RuntimeEnvironment {
     pub fn new() -> Result<Self, String> {
         let config = TaskConfig::load_or_initialize()?;
-        Ok(Self::from_paths(config.repos_dir, config.wt_dir))
+        Ok(Self::from_config(config))
+    }
+
+    fn from_config(config: TaskConfig) -> Self {
+        let layout = WorkspacePaths::new(config.repos_dir, config.wt_dir);
+        let process = ProcessRunner;
+        let tasks = TaskResolver::new(layout.clone(), process, config.codium_trusted_roots);
+
+        Self {
+            layout,
+            process,
+            tasks,
+        }
     }
 
     pub fn from_paths(repos_dir: impl AsRef<Path>, wt_dir: impl AsRef<Path>) -> Self {
         let layout = WorkspacePaths::new(repos_dir, wt_dir);
         let process = ProcessRunner;
-        let tasks = TaskResolver::new(layout.clone(), process);
+        let tasks = TaskResolver::new(layout.clone(), process, Vec::new());
 
         Self {
             layout,

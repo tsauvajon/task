@@ -9,12 +9,21 @@ use serde::{Deserialize, Serialize};
 pub struct TaskConfig {
     pub repos_dir: PathBuf,
     pub wt_dir: PathBuf,
+    pub codium_trusted_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TaskConfigFile {
     repos_dir: String,
     wt_dir: String,
+    #[serde(default)]
+    vscodium: Option<VscodiumConfigFile>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct VscodiumConfigFile {
+    #[serde(default)]
+    trusted_roots: Vec<String>,
 }
 
 impl TaskConfig {
@@ -68,7 +77,11 @@ fn bootstrap_config(config_path: &Path) -> Result<TaskConfig, String> {
         .interact_text()
         .map_err(|error| error.to_string())?;
 
-    let config = to_runtime_config(TaskConfigFile { repos_dir, wt_dir })?;
+    let config = to_runtime_config(TaskConfigFile {
+        repos_dir,
+        wt_dir,
+        vscodium: None,
+    })?;
     write_config(config_path, &config)?;
     Ok(config)
 }
@@ -86,6 +99,17 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<(), String> {
     let file = TaskConfigFile {
         repos_dir: config.repos_dir.display().to_string(),
         wt_dir: config.wt_dir.display().to_string(),
+        vscodium: if config.codium_trusted_roots.is_empty() {
+            None
+        } else {
+            Some(VscodiumConfigFile {
+                trusted_roots: config
+                    .codium_trusted_roots
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+            })
+        },
     };
     let text = toml::to_string_pretty(&file).map_err(|error| error.to_string())?;
     fs::write(config_path, text)
@@ -97,7 +121,22 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig, String> {
     let home = home_dir()?;
     let repos_dir = expand_path(file.repos_dir.trim(), &home)?;
     let wt_dir = expand_path(file.wt_dir.trim(), &home)?;
-    Ok(TaskConfig { repos_dir, wt_dir })
+    let codium_trusted_roots = file
+        .vscodium
+        .map(|config| {
+            config
+                .trusted_roots
+                .iter()
+                .map(|root| expand_path(root.trim(), &home))
+                .collect::<Result<Vec<PathBuf>, String>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(TaskConfig {
+        repos_dir,
+        wt_dir,
+        codium_trusted_roots,
+    })
 }
 
 fn expand_path(value: &str, home: &Path) -> Result<PathBuf, String> {
@@ -138,7 +177,8 @@ fn is_interactive() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_path;
+    use super::{TaskConfigFile, to_runtime_config};
+    use super::{VscodiumConfigFile, expand_path};
     use std::path::Path;
 
     #[test]
@@ -154,5 +194,32 @@ mod tests {
     fn expand_path_rejects_empty_values() {
         let home = Path::new("/tmp/home");
         assert!(expand_path("", home).is_err());
+    }
+
+    #[test]
+    fn to_runtime_config_supports_legacy_file_without_vscodium_section() {
+        let config = to_runtime_config(TaskConfigFile {
+            repos_dir: "~/dev/repos".to_string(),
+            wt_dir: "~/dev/wt".to_string(),
+            vscodium: None,
+        })
+        .expect("runtime config");
+
+        assert!(config.codium_trusted_roots.is_empty());
+    }
+
+    #[test]
+    fn to_runtime_config_expands_vscodium_trusted_roots() {
+        let config = to_runtime_config(TaskConfigFile {
+            repos_dir: "~/dev/repos".to_string(),
+            wt_dir: "~/dev/wt".to_string(),
+            vscodium: Some(VscodiumConfigFile {
+                trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_string()],
+            }),
+        })
+        .expect("runtime config");
+
+        assert_eq!(config.codium_trusted_roots.len(), 1);
+        assert!(config.codium_trusted_roots[0].ends_with("dev/wt/github.com/tsauvajon"));
     }
 }
