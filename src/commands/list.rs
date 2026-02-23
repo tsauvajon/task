@@ -1,5 +1,4 @@
-use crate::git::parsing::TaskRow;
-use crate::runtime::RuntimeEnvironment;
+use crate::runtime::{RuntimeEnvironment, TaskRow};
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
     context.ensure_layout()?;

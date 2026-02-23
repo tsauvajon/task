@@ -1,4 +1,4 @@
-use crate::git::parsing::parse_repo_input;
+use crate::git::parse_repo_input;
 use crate::runtime::RuntimeEnvironment;
 
 pub fn run(

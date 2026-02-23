@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use crate::git::parsing::TaskRow;
 use crate::runtime::paths::WorkspacePaths;
 use crate::runtime::process::ProcessRunner;
+use crate::runtime::task_rows::TaskRow;
 use crate::runtime::tasks::TaskResolver;
 
 #[derive(Debug, Clone)]

@@ -1,4 +1,4 @@
-use crate::git::commands as git_commands;
+use crate::git::{detect_default_base, fetch_origin_refs, rebase, rev_exists};
 use crate::runtime::RuntimeEnvironment;
 
 pub fn run(context: &RuntimeEnvironment, args: &[String]) -> Result<(), String> {
@@ -15,15 +15,15 @@ pub fn run(context: &RuntimeEnvironment, args: &[String]) -> Result<(), String> 
         return Err(format!("Worktree not found: {}", worktree.display()));
     }
 
-    git_commands::fetch_origin_refs(&gitdir)?;
+    fetch_origin_refs(&gitdir)?;
 
-    let base_ref = base_ref.unwrap_or_else(|| git_commands::detect_default_base(&gitdir));
-    if !git_commands::rev_exists(&gitdir, &base_ref) {
+    let base_ref = base_ref.unwrap_or_else(|| detect_default_base(&gitdir));
+    if !rev_exists(&gitdir, &base_ref) {
         return Err(format!("Base ref not found: {base_ref}"));
     }
 
     context.log(&format!("Rebasing {repo_key} {branch} onto {base_ref}"));
-    git_commands::rebase(&worktree, &base_ref)
+    rebase(&worktree, &base_ref)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,4 +1,4 @@
-use crate::git::parsing::TaskRow;
+use crate::runtime::TaskRow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputMode {
