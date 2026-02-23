@@ -15,8 +15,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Table
 use ratatui::{Frame, Terminal};
 
 use crate::git::parsing::TaskRow;
-use crate::runtime::session_name::task_session_name;
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::{RuntimeEnvironment, task_session_name};
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -107,9 +106,9 @@ impl UiState {
     }
 }
 
-pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String> {
-    super::ensure_layout(layout)?;
-    let rows = load_rows(layout, repo_arg)?;
+pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
+    context.ensure_layout()?;
+    let rows = load_rows(context, repo_arg)?;
     let mut state = UiState::new(rows);
 
     if state.rows.is_empty() {
@@ -117,35 +116,35 @@ pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String
     }
 
     let mut terminal = init_terminal()?;
-    let ui_result = run_event_loop(layout, repo_arg, &mut terminal, &mut state);
+    let ui_result = run_event_loop(context, repo_arg, &mut terminal, &mut state);
     let restore_result = restore_terminal(&mut terminal);
     restore_result?;
 
     match ui_result? {
         UiAction::Quit => Ok(()),
-        UiAction::Open(row) => super::launch_workspace(&row.repo, &row.branch, &row.path),
-        UiAction::Create { repo, branch } => super::start::run(layout, &repo, &branch, None),
+        UiAction::Open(row) => context.launch_workspace(&row.repo, &row.branch, &row.path),
+        UiAction::Create { repo, branch } => super::start::run(context, &repo, &branch, None),
     }
 }
 
-fn load_rows(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<Vec<TaskRow>, String> {
-    let open_sessions = super::tmux_sessions();
+fn load_rows(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<Vec<TaskRow>, String> {
+    let open_sessions = context.tmux_sessions();
     let mut rows = Vec::new();
     let repo_arg = repo_arg
         .map(str::to_string)
-        .or_else(super::current_repo_key);
+        .or_else(|| context.current_repo_key());
 
     if let Some(repo_arg) = repo_arg.as_deref() {
-        let repo_key = super::resolve_repo_key_input(layout, repo_arg)?;
-        let gitdir = layout.repo_gitdir_path(&repo_key);
+        let repo_key = context.resolve_repo_key_input(repo_arg)?;
+        let gitdir = context.layout().repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {
             return Err(format!("Repo not found: {repo_key}"));
         }
-        rows.extend(super::repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+        rows.extend(context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
     } else {
-        for repo_key in super::available_repo_keys(layout)? {
-            let gitdir = layout.repo_gitdir_path(&repo_key);
-            rows.extend(super::repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+        for repo_key in context.available_repo_keys()? {
+            let gitdir = context.layout().repo_gitdir_path(&repo_key);
+            rows.extend(context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
         }
     }
 
@@ -189,7 +188,7 @@ fn restore_terminal(terminal: &mut AppTerminal) -> Result<(), String> {
 }
 
 fn run_event_loop(
-    layout: &WorkspacePaths,
+    context: &RuntimeEnvironment,
     repo_arg: Option<&str>,
     terminal: &mut AppTerminal,
     state: &mut UiState,
@@ -223,18 +222,18 @@ fn run_event_loop(
                         state.message = "Create mode: type branch name".to_string();
                     }
                     KeyCode::Char('f') => {
-                        finish_selected(layout, state)?;
-                        let rows = load_rows(layout, repo_arg)?;
+                        finish_selected(context, state)?;
+                        let rows = load_rows(context, repo_arg)?;
                         state.set_rows(rows);
                     }
                     KeyCode::Char('r') => {
-                        let rows = load_rows(layout, repo_arg)?;
+                        let rows = load_rows(context, repo_arg)?;
                         state.set_rows(rows);
                         state.message = "Refreshed task list".to_string();
                     }
                     KeyCode::Char('p') => {
-                        park_selected(state)?;
-                        let rows = load_rows(layout, repo_arg)?;
+                        park_selected(context, state)?;
+                        let rows = load_rows(context, repo_arg)?;
                         state.set_rows(rows);
                     }
                     KeyCode::Enter => {
@@ -283,9 +282,9 @@ fn run_event_loop(
                         let repo = if let Some(row) = state.selected_row() {
                             row.repo.clone()
                         } else if let Some(repo_arg) = repo_arg {
-                            super::resolve_repo_input(Some(repo_arg))?
+                            context.resolve_repo_input(Some(repo_arg))?
                         } else {
-                            super::resolve_repo_input(None)?
+                            context.resolve_repo_input(None)?
                         };
 
                         return Ok(UiAction::Create {
@@ -306,19 +305,19 @@ fn run_event_loop(
     }
 }
 
-fn park_selected(state: &mut UiState) -> Result<(), String> {
+fn park_selected(context: &RuntimeEnvironment, state: &mut UiState) -> Result<(), String> {
     let Some(row) = state.selected_row().cloned() else {
         state.message = "No selected task".to_string();
         return Ok(());
     };
 
-    if !super::command_exists("tmux") {
+    if !context.command_exists("tmux") {
         return Err("tmux is not available. Run 'task list' to inspect tasks.".to_string());
     }
 
     let session = task_session_name(&row.repo, &row.branch);
-    if super::tmux_has_session(&session) {
-        super::run_status("tmux", &["kill-session", "-t", &session], None)?;
+    if context.tmux_has_session(&session) {
+        context.run_status("tmux", &["kill-session", "-t", &session], None)?;
         state.message = format!("Parked task: {} {}", row.repo, row.branch);
     } else {
         state.message = format!("Task already parked: {} {}", row.repo, row.branch);
@@ -327,18 +326,18 @@ fn park_selected(state: &mut UiState) -> Result<(), String> {
     Ok(())
 }
 
-fn finish_selected(layout: &WorkspacePaths, state: &mut UiState) -> Result<(), String> {
+fn finish_selected(context: &RuntimeEnvironment, state: &mut UiState) -> Result<(), String> {
     let Some(row) = state.selected_row().cloned() else {
         state.message = "No selected task".to_string();
         return Ok(());
     };
 
     let session = task_session_name(&row.repo, &row.branch);
-    if super::tmux_has_session(&session) {
-        super::run_status("tmux", &["kill-session", "-t", &session], None)?;
+    if context.tmux_has_session(&session) {
+        context.run_status("tmux", &["kill-session", "-t", &session], None)?;
     }
 
-    super::finish::run(layout, Some(&row.repo), Some(&row.branch), false)?;
+    super::finish::run(context, Some(&row.repo), Some(&row.branch), false)?;
     state.message = format!("Finished task: {} {}", row.repo, row.branch);
     Ok(())
 }

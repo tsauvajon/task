@@ -1,20 +1,19 @@
 use std::env;
 use std::path::PathBuf;
 
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::RuntimeEnvironment;
 
-pub fn run(layout: &WorkspacePaths) -> Result<(), String> {
-    super::ensure_layout(layout)?;
-    super::log(&format!(
-        "Workspace root: {}",
-        super::default_dev_root().display()
-    ));
+pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
+    context.ensure_layout()?;
+    context.log(&format!("Workspace root: {}", context.dev_root().display()));
 
-    if super::command_exists("asdf") {
-        let plugins = super::run_capture("asdf", &["plugin", "list"], None).unwrap_or_default();
+    if context.command_exists("asdf") {
+        let plugins = context
+            .run_capture("asdf", &["plugin", "list"], None)
+            .unwrap_or_default();
         if !plugins.lines().any(|line| line.trim() == "nodejs") {
-            super::log("Installing asdf nodejs plugin");
-            super::run_status(
+            context.log("Installing asdf nodejs plugin");
+            context.run_status(
                 "asdf",
                 &[
                     "plugin",
@@ -34,26 +33,26 @@ pub fn run(layout: &WorkspacePaths) -> Result<(), String> {
             .join("bin")
             .join("import-release-team-keyring");
         if import_script.exists()
-            && let Err(error) = super::run_status(import_script.as_os_str(), &[], None)
+            && let Err(error) = context.run_status(import_script.as_os_str(), &[], None)
         {
-            super::warn(&format!("Could not import nodejs release keyring: {error}"));
+            context.warn(&format!("Could not import nodejs release keyring: {error}"));
         }
 
         let tool_versions = PathBuf::from(home).join(".tool-versions");
         if tool_versions.exists() {
-            super::log("Installing runtimes from ~/.tool-versions");
-            super::run_status("asdf", &["install"], None)?;
+            context.log("Installing runtimes from ~/.tool-versions");
+            context.run_status("asdf", &["install"], None)?;
         }
     } else {
-        super::warn(
+        context.warn(
             "asdf not found. Install toolchain first (nix profile install path:~/flakes#toolchain).",
         );
     }
 
-    if super::command_exists("node") && super::command_exists("corepack") {
-        let _ = super::run_status("corepack", &["enable"], None);
+    if context.command_exists("node") && context.command_exists("corepack") {
+        let _ = context.run_status("corepack", &["enable"], None);
     }
 
-    super::log("Bootstrap complete");
+    context.log("Bootstrap complete");
     Ok(())
 }

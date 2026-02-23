@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::runtime::session_name::task_session_name;
+use crate::runtime::task_session_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInput {

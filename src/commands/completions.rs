@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use crate::command_line::CompletionShell;
+use crate::commands::CompletionShell;
 
 pub fn run(shell: CompletionShell) -> Result<(), String> {
     let script = match shell {

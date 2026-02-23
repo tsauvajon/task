@@ -1,13 +1,13 @@
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::RuntimeEnvironment;
 
-pub fn run(_layout: &WorkspacePaths) -> Result<(), String> {
+pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     let mut missing = false;
 
-    println!("DEV_ROOT: {}", super::default_dev_root().display());
+    println!("DEV_ROOT: {}", context.dev_root().display());
     for cmd in [
         "git", "tmux", "vim", "codium", "opencode", "nix", "direnv", "asdf",
     ] {
-        if super::command_exists(cmd) {
+        if context.command_exists(cmd) {
             println!("[ok]      {cmd}");
         } else {
             println!("[missing] {cmd}");
@@ -15,7 +15,7 @@ pub fn run(_layout: &WorkspacePaths) -> Result<(), String> {
         }
     }
 
-    let dev_root = super::default_dev_root();
+    let dev_root = context.dev_root();
     if dev_root.join("repos").is_dir() && dev_root.join("wt").is_dir() {
         println!("[ok]      {} layout", dev_root.display());
     } else {
@@ -23,8 +23,11 @@ pub fn run(_layout: &WorkspacePaths) -> Result<(), String> {
         missing = true;
     }
 
-    if super::command_exists("opencode") {
-        if super::run_status("opencode", &["auth", "list"], None).is_ok() {
+    if context.command_exists("opencode") {
+        if context
+            .run_status("opencode", &["auth", "list"], None)
+            .is_ok()
+        {
             println!("[ok]      opencode auth storage reachable");
         } else {
             println!("[warn]    opencode auth storage not initialized yet");

@@ -1,26 +1,26 @@
 use std::fs;
 
 use crate::git::commands as git_commands;
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::RuntimeEnvironment;
 
 pub fn run(
-    layout: &WorkspacePaths,
+    context: &RuntimeEnvironment,
     repo_arg: &str,
     branch: &str,
     base_ref: Option<&str>,
 ) -> Result<(), String> {
-    super::ensure_layout(layout)?;
-    let repo_key = super::resolve_repo_key_input(layout, repo_arg)?;
-    super::ensure_repo_available(layout, repo_arg, &repo_key)?;
+    context.ensure_layout()?;
+    let repo_key = context.resolve_repo_key_input(repo_arg)?;
+    context.ensure_repo_available(repo_arg, &repo_key)?;
 
-    let gitdir = layout.repo_gitdir_path(&repo_key);
+    let gitdir = context.layout().repo_gitdir_path(&repo_key);
     git_commands::fetch_origin_refs(&gitdir)?;
 
     let base_ref = base_ref
         .map(|value| value.to_string())
         .unwrap_or_else(|| git_commands::detect_default_base(&gitdir));
 
-    let worktree = layout.worktree_path(&repo_key, branch);
+    let worktree = context.layout().worktree_path(&repo_key, branch);
     if worktree.exists() && !worktree.join(".git").exists() {
         return Err(format!(
             "Path exists but is not a git worktree: {}",
@@ -29,11 +29,11 @@ pub fn run(
     }
 
     if worktree.join(".git").exists() {
-        super::log(&format!(
+        context.log(&format!(
             "Reusing existing worktree: {}",
             worktree.display()
         ));
-        return super::launch_workspace(&repo_key, branch, &worktree);
+        return context.launch_workspace(&repo_key, branch, &worktree);
     }
 
     if let Some(parent) = worktree.parent() {
@@ -51,5 +51,5 @@ pub fn run(
         git_commands::worktree_add_from_base(&gitdir, &worktree, branch, &base_ref)?;
     }
 
-    super::launch_workspace(&repo_key, branch, &worktree)
+    context.launch_workspace(&repo_key, branch, &worktree)
 }

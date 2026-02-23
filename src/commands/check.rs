@@ -1,7 +1,9 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-pub fn run(worktree_path: Option<&str>) -> Result<(), String> {
+use crate::runtime::RuntimeEnvironment;
+
+pub fn run(context: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<(), String> {
     let path = resolve_check_path(worktree_path);
     if !path.is_dir() {
         return Err(format!("Path not found: {}", path.display()));
@@ -10,16 +12,16 @@ pub fn run(worktree_path: Option<&str>) -> Result<(), String> {
     let mut checked = false;
     if path.join("Cargo.toml").exists() {
         checked = true;
-        run_rust_checks(&path)?;
+        run_rust_checks(context, &path)?;
     }
 
     if path.join("package.json").exists() {
         checked = true;
-        run_js_checks(&path)?;
+        run_js_checks(context, &path)?;
     }
 
     if !checked {
-        super::warn("No Cargo.toml or package.json found. Nothing to run.");
+        context.warn("No Cargo.toml or package.json found. Nothing to run.");
     }
 
     Ok(())
@@ -37,10 +39,10 @@ fn resolve_check_path(worktree_path: Option<&str>) -> PathBuf {
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-fn run_rust_checks(path: &Path) -> Result<(), String> {
-    super::log("Running Rust checks");
-    super::run_status("cargo", &["fmt", "--all", "--check"], Some(path))?;
-    super::run_status(
+fn run_rust_checks(context: &RuntimeEnvironment, path: &Path) -> Result<(), String> {
+    context.log("Running Rust checks");
+    context.run_status("cargo", &["fmt", "--all", "--check"], Some(path))?;
+    context.run_status(
         "cargo",
         &[
             "clippy",
@@ -53,7 +55,7 @@ fn run_rust_checks(path: &Path) -> Result<(), String> {
         ],
         Some(path),
     )?;
-    super::run_status(
+    context.run_status(
         "cargo",
         &["test", "--workspace", "--all-features"],
         Some(path),
@@ -101,16 +103,16 @@ fn script_commands(runner: JsRunner) -> &'static [&'static [&'static str]] {
     }
 }
 
-fn run_js_checks(path: &Path) -> Result<(), String> {
-    super::log("Running JS checks");
-    let has_corepack = super::command_exists("corepack");
+fn run_js_checks(context: &RuntimeEnvironment, path: &Path) -> Result<(), String> {
+    context.log("Running JS checks");
+    let has_corepack = context.command_exists("corepack");
     if has_corepack {
-        let _ = super::run_status("corepack", &["enable"], None);
+        let _ = context.run_status("corepack", &["enable"], None);
     }
 
-    let has_pnpm = super::command_exists("pnpm");
+    let has_pnpm = context.command_exists("pnpm");
     let Some(runner) = resolve_js_runner(has_pnpm, has_corepack) else {
-        super::warn("pnpm/corepack not found. Skipping JS checks.");
+        context.warn("pnpm/corepack not found. Skipping JS checks.");
         return Ok(());
     };
 
@@ -119,12 +121,15 @@ fn run_js_checks(path: &Path) -> Result<(), String> {
         JsRunner::Corepack => "corepack",
     };
 
-    if super::run_status(program, install_args(runner), Some(path)).is_err() {
-        super::run_status(program, install_fallback_args(runner), Some(path))?;
+    if context
+        .run_status(program, install_args(runner), Some(path))
+        .is_err()
+    {
+        context.run_status(program, install_fallback_args(runner), Some(path))?;
     }
 
     for args in script_commands(runner) {
-        super::run_status(program, args, Some(path))?;
+        context.run_status(program, args, Some(path))?;
     }
 
     Ok(())

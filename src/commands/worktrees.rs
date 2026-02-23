@@ -1,18 +1,18 @@
 use std::path::Path;
 
 use crate::git::commands as git_commands;
-use crate::workspace_paths::WorkspacePaths;
+use crate::runtime::RuntimeEnvironment;
 
-pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String> {
-    super::ensure_layout(layout)?;
+pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
+    context.ensure_layout()?;
 
     let repo_arg = repo_arg
         .map(str::to_string)
-        .or_else(super::current_repo_key);
+        .or_else(|| context.current_repo_key());
 
     if let Some(repo_arg) = repo_arg.as_deref() {
-        let repo_key = super::resolve_repo_key_input(layout, repo_arg)?;
-        let gitdir = layout.repo_gitdir_path(&repo_key);
+        let repo_key = context.resolve_repo_key_input(repo_arg)?;
+        let gitdir = context.layout().repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {
             return Err(format!("Repo not found: {repo_key}"));
         }
@@ -21,11 +21,12 @@ pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String
         return Ok(());
     }
 
-    let repo_keys = super::available_repo_keys(layout)?;
+    let repo_keys = context.available_repo_keys()?;
     if repo_keys.is_empty() {
-        super::log(&format!(
+        context.log(&format!(
             "No repositories found in {}",
-            layout
+            context
+                .layout()
                 .repo_gitdir_path("")
                 .parent()
                 .unwrap_or(Path::new("/"))
@@ -37,7 +38,7 @@ pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String
     for repo_key in repo_keys {
         println!();
         println!("[{repo_key}]");
-        let gitdir = layout.repo_gitdir_path(&repo_key);
+        let gitdir = context.layout().repo_gitdir_path(&repo_key);
         let output = git_commands::worktree_list(&gitdir)?;
         print!("{output}");
     }
