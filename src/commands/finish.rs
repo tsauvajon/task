@@ -42,12 +42,12 @@ pub fn run(
             }
         }
 
-        tmux::finish_task_session(context.process(), &repo_key, &branch)?;
         if let Err(error) = vscodium::cleanup_task_state(&repo_key, &branch) {
             context.warn(&format!(
                 "Failed to remove task editor state for {repo_key} {branch}: {error}"
             ));
         }
+        tmux::finish_task_session(context.process(), &repo_key, &branch)?;
         return Ok(());
     }
 
@@ -67,12 +67,12 @@ pub fn run(
         let _ = fs::remove_dir(parent);
     }
 
-    tmux::finish_task_session(context.process(), &repo_key, &branch)?;
     if let Err(error) = vscodium::cleanup_task_state(&repo_key, &branch) {
         context.warn(&format!(
             "Failed to remove task editor state for {repo_key} {branch}: {error}"
         ));
     }
+    tmux::finish_task_session(context.process(), &repo_key, &branch)?;
 
     Ok(())
 }
