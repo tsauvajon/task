@@ -28,8 +28,8 @@ pub(super) fn load_rows(
     }
 
     rows.sort_by(|left, right| {
-        status_rank(&left.status)
-            .cmp(&status_rank(&right.status))
+        left.status
+            .cmp(&right.status)
             .then(left.repo.cmp(&right.repo))
             .then(left.branch.cmp(&right.branch))
     });
@@ -88,12 +88,4 @@ pub(super) fn resolve_create_repo(
     }
 
     context.resolve_repo_input(None)
-}
-
-fn status_rank(status: &str) -> u8 {
-    match status {
-        "open" => 0,
-        "parked" => 1,
-        _ => 2,
-    }
 }

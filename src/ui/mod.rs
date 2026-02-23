@@ -1,12 +1,16 @@
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event};
 
 use crate::runtime::RuntimeEnvironment;
 
+use self::effects::{create_action, finish_and_refresh, park_and_refresh, refresh_rows};
+use self::intent::{UiIntent, from_key};
 use self::render::render;
 use self::state::{InputMode, UiAction, UiState};
-use self::tasks::{finish_selected, load_rows, park_selected, resolve_create_repo};
-use self::terminal::{init_terminal, restore_terminal};
+use self::tasks::load_rows;
+use self::terminal::TerminalGuard;
 
+mod effects;
+mod intent;
 mod render;
 mod state;
 mod tasks;
@@ -21,10 +25,8 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), S
         state.message = "No tasks found. Press q to quit.".to_string();
     }
 
-    let mut terminal = init_terminal()?;
-    let ui_result = run_event_loop(context, repo_arg, &mut terminal, &mut state);
-    let restore_result = restore_terminal(&mut terminal);
-    restore_result?;
+    let mut terminal = TerminalGuard::new()?;
+    let ui_result = run_event_loop(context, repo_arg, terminal.terminal_mut(), &mut state);
 
     match ui_result? {
         UiAction::Quit => Ok(()),
@@ -48,100 +50,109 @@ fn run_event_loop(
 
         let event = event::read().map_err(|e| e.to_string())?;
         if let Event::Key(key) = event {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                return Ok(UiAction::Quit);
-            }
-
-            match state.mode {
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('q') => return Ok(UiAction::Quit),
-                    KeyCode::Down | KeyCode::Char('j') => state.move_next(),
-                    KeyCode::Up | KeyCode::Char('k') => state.move_prev(),
-                    KeyCode::Char('/') => {
-                        state.mode = InputMode::Filter;
-                        state.message = "Filter mode: type to refine tasks".to_string();
-                    }
-                    KeyCode::Char('?') => {
-                        state.show_help = !state.show_help;
-                    }
-                    KeyCode::Char('c') => {
-                        state.mode = InputMode::Create;
-                        state.create_branch.clear();
-                        state.message = "Create mode: type branch name".to_string();
-                    }
-                    KeyCode::Char('f') => {
-                        finish_selected(context, state)?;
-                        let rows = load_rows(context, repo_arg)?;
-                        state.set_rows(rows);
-                    }
-                    KeyCode::Char('r') => {
-                        let rows = load_rows(context, repo_arg)?;
-                        state.set_rows(rows);
-                        state.message = "Refreshed task list".to_string();
-                    }
-                    KeyCode::Char('p') => {
-                        park_selected(context, state)?;
-                        let rows = load_rows(context, repo_arg)?;
-                        state.set_rows(rows);
-                    }
-                    KeyCode::Enter => {
-                        if let Some(row) = state.selected_row() {
-                            return Ok(UiAction::Open(row.clone()));
-                        }
-                    }
-                    _ => {}
-                },
-                InputMode::Filter => match key.code {
-                    KeyCode::Esc => {
-                        state.mode = InputMode::Normal;
-                        state.message = "Returned to normal mode".to_string();
-                    }
-                    KeyCode::Enter => {
-                        state.mode = InputMode::Normal;
-                        state.message =
-                            format!("Filter applied: {} matches", state.filtered_indices.len());
-                    }
-                    KeyCode::Backspace => {
-                        state.filter.pop();
-                        state.apply_filter();
-                    }
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        state.filter.clear();
-                        state.apply_filter();
-                    }
-                    KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        state.filter.push(ch);
-                        state.apply_filter();
-                    }
-                    _ => {}
-                },
-                InputMode::Create => match key.code {
-                    KeyCode::Esc => {
-                        state.mode = InputMode::Normal;
-                        state.message = "Create cancelled".to_string();
-                    }
-                    KeyCode::Enter => {
-                        let branch = state.create_branch.trim();
-                        if branch.is_empty() {
-                            state.message = "Branch name cannot be empty".to_string();
-                            continue;
-                        }
-
-                        let repo = resolve_create_repo(context, state, repo_arg)?;
-                        return Ok(UiAction::Create {
-                            repo,
-                            branch: branch.to_string(),
-                        });
-                    }
-                    KeyCode::Backspace => {
-                        state.create_branch.pop();
-                    }
-                    KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        state.create_branch.push(ch);
-                    }
-                    _ => {}
-                },
+            let intent = from_key(state.mode, key);
+            if let Some(action) = apply_intent(context, repo_arg, state, intent)? {
+                return Ok(action);
             }
         }
+    }
+}
+
+fn apply_intent(
+    context: &RuntimeEnvironment,
+    repo_arg: Option<&str>,
+    state: &mut UiState,
+    intent: UiIntent,
+) -> Result<Option<UiAction>, String> {
+    match intent {
+        UiIntent::Quit => Ok(Some(UiAction::Quit)),
+        UiIntent::MoveNext => {
+            state.move_next();
+            Ok(None)
+        }
+        UiIntent::MovePrev => {
+            state.move_prev();
+            Ok(None)
+        }
+        UiIntent::ToggleHelp => {
+            state.show_help = !state.show_help;
+            Ok(None)
+        }
+        UiIntent::OpenSelected => {
+            if let Some(row) = state.selected_row() {
+                return Ok(Some(UiAction::Open(row.clone())));
+            }
+            Ok(None)
+        }
+        UiIntent::EnterFilterMode => {
+            state.mode = InputMode::Filter;
+            state.message = "Filter mode: type to refine tasks".to_string();
+            Ok(None)
+        }
+        UiIntent::EnterCreateMode => {
+            state.mode = InputMode::Create;
+            state.create_branch.clear();
+            state.message = "Create mode: type branch name".to_string();
+            Ok(None)
+        }
+        UiIntent::FinishSelected => {
+            finish_and_refresh(context, repo_arg, state)?;
+            Ok(None)
+        }
+        UiIntent::RefreshRows => {
+            refresh_rows(context, repo_arg, state)?;
+            state.message = "Refreshed task list".to_string();
+            Ok(None)
+        }
+        UiIntent::ParkSelected => {
+            park_and_refresh(context, repo_arg, state)?;
+            Ok(None)
+        }
+        UiIntent::FilterCancel => {
+            state.mode = InputMode::Normal;
+            state.message = "Returned to normal mode".to_string();
+            Ok(None)
+        }
+        UiIntent::FilterApply => {
+            state.mode = InputMode::Normal;
+            state.message = format!("Filter applied: {} matches", state.filtered_indices.len());
+            Ok(None)
+        }
+        UiIntent::FilterBackspace => {
+            state.filter.pop();
+            state.apply_filter();
+            Ok(None)
+        }
+        UiIntent::FilterClear => {
+            state.filter.clear();
+            state.apply_filter();
+            Ok(None)
+        }
+        UiIntent::FilterAppend(ch) => {
+            state.filter.push(ch);
+            state.apply_filter();
+            Ok(None)
+        }
+        UiIntent::CreateCancel => {
+            state.mode = InputMode::Normal;
+            state.message = "Create cancelled".to_string();
+            Ok(None)
+        }
+        UiIntent::CreateSubmit => match create_action(context, repo_arg, state) {
+            Ok(action) => Ok(Some(action)),
+            Err(message) => {
+                state.message = message;
+                Ok(None)
+            }
+        },
+        UiIntent::CreateBackspace => {
+            state.create_branch.pop();
+            Ok(None)
+        }
+        UiIntent::CreateAppend(ch) => {
+            state.create_branch.push(ch);
+            Ok(None)
+        }
+        UiIntent::Noop => Ok(None),
     }
 }

@@ -9,7 +9,7 @@ use dialoguer::{Select, theme::ColorfulTheme};
 
 use crate::runtime::paths::WorkspacePaths;
 use crate::runtime::process::ProcessRunner;
-use crate::runtime::task_rows::{TaskRow, build_task_rows};
+use crate::runtime::task_rows::{TaskRow, TaskStatus, build_task_rows};
 use crate::tools::git::{
     ResolveResult, branch_from_worktree_path, clone_bare_repo, current_branch, current_root,
     git_common_dir, parse_repo_input, parse_worktree_porcelain, repo_key_from_common_dir,
@@ -250,10 +250,9 @@ impl TaskResolver {
             .set_header(vec!["STATUS", "REPO", "BRANCH", "PATH"]);
 
         for row in rows {
-            let status_cell = match row.status.as_str() {
-                "open" => Cell::new("open").fg(Color::Green),
-                "parked" => Cell::new("parked").fg(Color::Yellow),
-                _ => Cell::new(&row.status),
+            let status_cell = match row.status {
+                TaskStatus::Open => Cell::new("open").fg(Color::Green),
+                TaskStatus::Parked => Cell::new("parked").fg(Color::Yellow),
             };
 
             table.add_row(vec![

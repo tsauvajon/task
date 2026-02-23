@@ -7,5 +7,5 @@ mod tasks;
 pub use environment::RuntimeEnvironment;
 pub use paths::WorkspacePaths;
 pub use process::ProcessRunner;
-pub use task_rows::TaskRow;
+pub use task_rows::{TaskRow, TaskStatus};
 pub use tasks::TaskResolver;
