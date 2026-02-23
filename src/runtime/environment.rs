@@ -33,6 +33,15 @@ impl RuntimeEnvironment {
         }
     }
 
+    pub fn try_new_if_configured() -> Result<Option<Self>, String> {
+        let config = match TaskConfig::load_if_present()? {
+            Some(config) => config,
+            None => return Ok(None),
+        };
+
+        Ok(Some(Self::from_paths(config.repos_dir, config.wt_dir)))
+    }
+
     pub fn from_paths(repos_dir: impl AsRef<Path>, wt_dir: impl AsRef<Path>) -> Self {
         let layout = WorkspacePaths::new(repos_dir, wt_dir);
         let process = ProcessRunner;

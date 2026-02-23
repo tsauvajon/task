@@ -9,9 +9,16 @@ nix develop -c cargo install --path .
 task --help
 ```
 
+On the first interactive workspace command, `task` offers to run full setup
+(config creation, workspace layout, and toolchain bootstrap). You can also run
+setup explicitly with `task bootstrap` or `task doctor --fix`.
+
 ## Core commands
 
 ```text
+task doctor         Check toolchain/workspace health
+task doctor --fix   Check and apply automatic fixes
+task bootstrap      Run full setup explicitly
 task start <name>   Create/open a task worktree
 task list           Show open and parked tasks
 task open <name>    Re-open a parked task
