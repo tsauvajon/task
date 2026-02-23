@@ -10,13 +10,14 @@ use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dialoguer::{Select, theme::ColorfulTheme};
 use owo_colors::OwoColorize;
 
-use crate::layout::Layout;
-use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
-use crate::session::session_name_for;
-use crate::worktree::{
+use crate::git::commands as git_commands;
+use crate::git::parsing::{
     TaskRow, branch_from_worktree_path, build_task_rows, parse_worktree_porcelain,
     repo_key_from_common_dir,
 };
+use crate::layout::Layout;
+use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
+use crate::session::session_name_for;
 
 pub(super) fn default_dev_root() -> PathBuf {
     if let Ok(dev_root) = env::var("DEV_ROOT") {
@@ -156,20 +157,7 @@ pub(super) fn clone_bare_repo(
     }
 
     log(&format!("Cloning bare repo: {repo_url}"));
-    if let Some(parent) = gitdir.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-
-    run_status(
-        "git",
-        &[
-            "clone",
-            "--bare",
-            repo_url,
-            gitdir.to_string_lossy().as_ref(),
-        ],
-        None,
-    )
+    git_commands::clone_bare_repo(repo_url, &gitdir)
 }
 
 pub(super) fn ensure_repo_available(
@@ -188,106 +176,6 @@ pub(super) fn ensure_repo_available(
         "Bare repo not found at {}. Use 'task clone <repo-url> {repo_key}'.",
         gitdir.display()
     ))
-}
-
-pub(super) fn detect_default_base(gitdir: &Path) -> String {
-    if let Ok(output) = run_capture(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "ls-remote",
-            "--symref",
-            "origin",
-            "HEAD",
-        ],
-        None,
-    ) {
-        for line in output.lines() {
-            if let Some(target) = line.strip_prefix("ref: ") {
-                let target = target.trim();
-                if let Some(target) = target.strip_suffix(" HEAD")
-                    && let Some(branch) = target.strip_prefix("refs/heads/")
-                {
-                    let remote_branch = format!("origin/{branch}");
-                    if rev_exists(gitdir, &remote_branch) {
-                        return remote_branch;
-                    }
-                    if rev_exists(gitdir, branch) {
-                        return branch.to_string();
-                    }
-                }
-            }
-        }
-    }
-
-    let gitdir_text = gitdir.to_string_lossy();
-    if run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir_text.as_ref(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            "refs/remotes/origin/master",
-        ],
-        None,
-    )
-    .is_ok()
-    {
-        return "origin/master".to_string();
-    }
-
-    "HEAD".to_string()
-}
-
-pub(super) fn fetch_origin_refs(gitdir: &Path) -> Result<(), String> {
-    run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "fetch",
-            "origin",
-            "--prune",
-            "+refs/heads/*:refs/remotes/origin/*",
-        ],
-        None,
-    )
-}
-
-pub(super) fn ref_exists(gitdir: &Path, reference: &str) -> bool {
-    run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            reference,
-        ],
-        None,
-    )
-    .is_ok()
-}
-
-pub(super) fn rev_exists(gitdir: &Path, revision: &str) -> bool {
-    let value = format!("{revision}^{{commit}}");
-    run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &value,
-        ],
-        None,
-    )
-    .is_ok()
 }
 
 pub(super) fn launch_workspace(repo_key: &str, branch: &str, path: &Path) -> Result<(), String> {
@@ -348,17 +236,7 @@ pub(super) fn repo_task_rows(
     gitdir: &Path,
     open_sessions: &HashSet<String>,
 ) -> Result<Vec<TaskRow>, String> {
-    let output = run_capture(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "list",
-            "--porcelain",
-        ],
-        None,
-    )?;
+    let output = git_commands::worktree_list_porcelain(gitdir)?;
 
     let entries = parse_worktree_porcelain(&output);
     let open_session_list: Vec<String> = open_sessions.iter().cloned().collect();
@@ -566,54 +444,23 @@ pub(super) fn tmux_has_session(session: &str) -> bool {
 }
 
 pub(super) fn current_task_info() -> Result<(String, String, PathBuf), String> {
-    let root = run_capture("git", &["rev-parse", "--show-toplevel"], None)?;
-    let root = PathBuf::from(root.trim());
-
-    let common_dir_raw = run_capture(
-        "git",
-        &[
-            "-C",
-            root.to_string_lossy().as_ref(),
-            "rev-parse",
-            "--git-common-dir",
-        ],
-        None,
-    )?;
-    let mut common_dir = PathBuf::from(common_dir_raw.trim());
-    if common_dir.is_relative() {
-        common_dir = root.join(common_dir);
-    }
-
-    let common_dir = fs::canonicalize(common_dir).map_err(|e| e.to_string())?;
+    let root = git_commands::current_root()?;
+    let common_dir = git_commands::git_common_dir(&root)?;
     let common_text = common_dir.to_string_lossy().to_string();
     let repo_key = repo_key_from_common_dir(&common_text).ok_or_else(|| {
         "Current repository is not managed by task. Run 'task list' to see parkable tasks."
             .to_string()
     })?;
 
-    let branch = run_capture(
-        "git",
-        &[
-            "-C",
-            root.to_string_lossy().as_ref(),
-            "symbolic-ref",
-            "--quiet",
-            "--short",
-            "HEAD",
-        ],
-        None,
-    )
-    .ok()
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
-    .or_else(|| branch_from_worktree_path(&repo_key, &root.to_string_lossy()))
-    .or_else(|| {
-        root.file_name()
-            .map(|name| name.to_string_lossy().to_string())
-    })
-    .ok_or_else(|| {
-        "Could not determine current task branch. Run 'task list' to inspect tasks.".to_string()
-    })?;
+    let branch = git_commands::current_branch(&root)
+        .or_else(|| branch_from_worktree_path(&repo_key, &root.to_string_lossy()))
+        .or_else(|| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        })
+        .ok_or_else(|| {
+            "Could not determine current task branch. Run 'task list' to inspect tasks.".to_string()
+        })?;
 
     Ok((repo_key, branch, root))
 }

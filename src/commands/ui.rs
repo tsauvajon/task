@@ -14,9 +14,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 use ratatui::{Frame, Terminal};
 
+use crate::git::parsing::TaskRow;
 use crate::layout::Layout;
 use crate::session::session_name_for;
-use crate::worktree::TaskRow;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 

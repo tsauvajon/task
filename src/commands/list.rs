@@ -1,5 +1,5 @@
+use crate::git::parsing::TaskRow;
 use crate::layout::Layout;
-use crate::worktree::TaskRow;
 
 pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
     super::ensure_layout(layout)?;

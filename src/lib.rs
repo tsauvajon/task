@@ -1,23 +1,23 @@
 pub mod app;
 pub mod cli;
 pub mod commands;
+pub mod git;
 pub mod layout;
 pub mod repo_key;
 pub mod session;
-pub mod worktree;
 
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
     use crate::cli::{Cli, Commands, CompletionShell};
-    use crate::layout::Layout;
-    use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
-    use crate::session::session_name_for;
-    use crate::worktree::{
+    use crate::git::parsing::{
         TaskRow, WorktreeEntry, branch_from_ref, branch_from_worktree_path, build_task_rows,
         parse_worktree_porcelain, repo_key_from_common_dir,
     };
+    use crate::layout::Layout;
+    use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
+    use crate::session::session_name_for;
 
     #[test]
     fn normalize_repo_key_handles_git_urls() {

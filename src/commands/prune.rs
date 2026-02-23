@@ -1,3 +1,4 @@
+use crate::git::commands as git_commands;
 use crate::layout::Layout;
 
 pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
@@ -7,15 +8,5 @@ pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
     if !gitdir.is_dir() {
         return Err(format!("Repo not found: {repo_key}"));
     }
-    super::run_status(
-        "git",
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "prune",
-            "--verbose",
-        ],
-        None,
-    )
+    git_commands::worktree_prune(&gitdir)
 }
