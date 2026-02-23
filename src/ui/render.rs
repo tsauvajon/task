@@ -4,79 +4,25 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
 
-use crate::tools::tmux;
-
 use super::state::{InputMode, UiState};
 
 pub(super) fn render(frame: &mut Frame, state: &UiState) {
     let outer = UiLayout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(19),
-        ])
+        .constraints([Constraint::Min(10)])
         .split(frame.area());
 
-    render_header(frame, outer[0], state);
-    render_body(frame, outer[1], state);
-    render_footer(frame, outer[2], state);
+    render_body(frame, outer[0], state);
 
     if state.show_help {
         render_help(frame);
     }
 }
 
-fn render_header(frame: &mut Frame, area: Rect, state: &UiState) {
+fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
     let open_count = state.rows.iter().filter(|row| row.status == "open").count();
     let total_count = state.rows.len();
-    let mode = match state.mode {
-        InputMode::Normal => "NORMAL",
-        InputMode::Filter => "FILTER",
-        InputMode::Create => "CREATE",
-    };
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(
-                " task ui ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!("  {} open / {} total", open_count, total_count)),
-            Span::raw("  •  "),
-            Span::styled(
-                mode,
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Filter: ", Style::default().fg(Color::Gray)),
-            Span::raw(if state.mode == InputMode::Create {
-                if state.create_branch.is_empty() {
-                    "(none)".to_string()
-                } else {
-                    state.create_branch.clone()
-                }
-            } else if state.filter.is_empty() {
-                "(none)".to_string()
-            } else {
-                state.filter.clone()
-            }),
-            Span::raw("   "),
-            Span::styled(&state.message, Style::default().fg(Color::Yellow)),
-        ]),
-    ];
-
-    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));
-    frame.render_widget(paragraph, area);
-}
-
-fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
     let chunks = UiLayout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
@@ -115,7 +61,18 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
         ],
     )
     .header(header)
-    .block(Block::default().title("Tasks").borders(Borders::ALL))
+    .block(
+        Block::default()
+            .title("Tasks")
+            .title(
+                Line::from(Span::styled(
+                    format!("{} open / {} total", open_count, total_count),
+                    Style::default().fg(Color::Gray),
+                ))
+                .right_aligned(),
+            )
+            .borders(Borders::ALL),
+    )
     .row_highlight_style(
         Style::default()
             .bg(Color::Rgb(25, 25, 40))
@@ -129,102 +86,69 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
     }
     frame.render_stateful_widget(table, chunks[0], &mut table_state);
 
-    let details = if let Some(row) = state.selected_row() {
-        vec![
-            Line::from(vec![
-                Span::styled("Repo: ", Style::default().fg(Color::Gray)),
-                Span::raw(row.repo.clone()),
-            ]),
-            Line::from(vec![
-                Span::styled("Branch: ", Style::default().fg(Color::Gray)),
-                Span::raw(row.branch.clone()),
-            ]),
-            Line::from(vec![
-                Span::styled("Status: ", Style::default().fg(Color::Gray)),
-                Span::raw(row.status.clone()),
-            ]),
-            Line::from(vec![
-                Span::styled("Session: ", Style::default().fg(Color::Gray)),
-                Span::raw(tmux::session_name(&row.repo, &row.branch)),
-            ]),
-            Line::from(vec![
-                Span::styled("Path: ", Style::default().fg(Color::Gray)),
-                Span::raw(row.path.to_string_lossy().to_string()),
-            ]),
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                "Actions",
-                Style::default().fg(Color::Cyan),
-            )]),
-            Line::from("Enter  open selected task"),
-            Line::from("p      park selected task"),
-            Line::from("f      finish selected task"),
-            Line::from("c      create new task"),
-            Line::from("r      refresh task list"),
-            Line::from("/      enter filter mode"),
-            Line::from("?      toggle help"),
-            Line::from("q      quit"),
-        ]
-    } else {
-        vec![
-            Line::from("No matching tasks"),
-            Line::from("Try clearing the filter or refreshing."),
-        ]
-    };
-
-    let details_panel =
-        Paragraph::new(details).block(Block::default().title("Details").borders(Borders::ALL));
-    frame.render_widget(details_panel, chunks[1]);
-}
-
-fn render_footer(frame: &mut Frame, area: Rect, state: &UiState) {
     let mode = match state.mode {
         InputMode::Normal => "NORMAL",
         InputMode::Filter => "FILTER",
         InputMode::Create => "CREATE",
     };
+    let mode_style = match state.mode {
+        InputMode::Normal => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        InputMode::Filter => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        InputMode::Create => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    };
 
-    let keys = vec![
-        Line::from(vec![
-            Span::styled("Mode: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                mode,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(""),
-        Line::from("Normal mode:"),
-        Line::from("↑/k       move up"),
-        Line::from("↓/j       move down"),
-        Line::from("Enter     open selected task"),
-        Line::from("p         park selected task"),
-        Line::from("f         finish selected task"),
-        Line::from("c         create new task"),
-        Line::from("r         refresh tasks"),
-        Line::from("/         enter filter mode"),
-        Line::from("?         toggle help"),
-        Line::from("q/Ctrl-C  quit"),
-        Line::from(""),
-        Line::from("Filter mode:"),
-        Line::from("Type      append filter text"),
-        Line::from("Backspace delete character"),
-        Line::from("Ctrl-U    clear filter"),
-        Line::from("Enter     apply and return to normal"),
-        Line::from("Esc       return to normal"),
-        Line::from(""),
-        Line::from("Create mode:"),
-        Line::from("Type      set new branch name"),
-        Line::from("Backspace delete character"),
-        Line::from("Enter     create and open new task"),
-        Line::from("Esc       return to normal"),
+    let actions = vec![
+        Line::from(match state.mode {
+            InputMode::Normal => "Enter  open selected task",
+            InputMode::Filter => "Type   append filter text",
+            InputMode::Create => "Type   set new branch name",
+        }),
+        Line::from(match state.mode {
+            InputMode::Normal => "p      park selected task",
+            InputMode::Filter | InputMode::Create => "Backsp delete character",
+        }),
+        Line::from(match state.mode {
+            InputMode::Normal => "f      finish selected task",
+            InputMode::Filter => "Ctrl-U clear filter",
+            InputMode::Create => "Enter  create and open task",
+        }),
+        Line::from(match state.mode {
+            InputMode::Normal => "c      create new task",
+            InputMode::Filter => "Enter  apply and return",
+            InputMode::Create => "Esc    return to normal",
+        }),
+        Line::from(match state.mode {
+            InputMode::Normal => "r      refresh task list",
+            InputMode::Filter => "Esc    return to normal",
+            InputMode::Create => "?      toggle help",
+        }),
+        Line::from(match state.mode {
+            InputMode::Normal => "/      enter filter mode",
+            InputMode::Filter => "?      toggle help",
+            InputMode::Create => "q      quit",
+        }),
+        Line::from(match state.mode {
+            InputMode::Normal => "?      toggle help",
+            InputMode::Filter | InputMode::Create => "",
+        }),
+        Line::from(match state.mode {
+            InputMode::Normal => "q      quit",
+            InputMode::Filter | InputMode::Create => "",
+        }),
     ];
 
-    let footer = Paragraph::new(keys)
-        .style(Style::default().fg(Color::Gray))
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(footer, area);
+    let details_panel = Paragraph::new(actions).block(
+        Block::default()
+            .title(Line::from(Span::styled(mode, mode_style)))
+            .borders(Borders::ALL),
+    );
+    frame.render_widget(details_panel, chunks[1]);
 }
 
 fn render_help(frame: &mut Frame) {
