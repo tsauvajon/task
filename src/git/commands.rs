@@ -204,16 +204,9 @@ pub fn worktree_add_from_base(
 }
 
 pub fn worktree_prune(gitdir: &Path) -> Result<(), String> {
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "prune",
-            "--verbose",
-        ],
-        None,
-    )
+    let args = worktree_prune_args(gitdir);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_git_status(&arg_refs, None)
 }
 
 pub fn worktree_remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<(), String> {
@@ -336,4 +329,40 @@ fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> 
         return Ok(());
     }
     Err(format!("command failed with status {status}"))
+}
+
+fn worktree_prune_args(gitdir: &Path) -> Vec<String> {
+    vec![
+        "--git-dir".to_string(),
+        gitdir.to_string_lossy().to_string(),
+        "worktree".to_string(),
+        "prune".to_string(),
+        "--verbose".to_string(),
+        "--expire".to_string(),
+        "now".to_string(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::worktree_prune_args;
+
+    #[test]
+    fn worktree_prune_uses_immediate_expiry() {
+        let args = worktree_prune_args(Path::new("/tmp/repos/github.com/acme/tool.git"));
+        assert_eq!(
+            args,
+            vec![
+                "--git-dir",
+                "/tmp/repos/github.com/acme/tool.git",
+                "worktree",
+                "prune",
+                "--verbose",
+                "--expire",
+                "now",
+            ]
+        );
+    }
 }
