@@ -8,12 +8,14 @@ use crate::runtime::process::ProcessRunner;
 
 use super::naming::task_user_data_dir;
 use super::process_match::{cmdline_matches_user_data_dir, parse_cmdline_bytes};
+use super::trust::seed_trusted_roots;
 
 pub fn open_task_window(
     process: ProcessRunner,
     repo_key: &str,
     branch: &str,
     worktree_path: &Path,
+    codium_trusted_roots: &[std::path::PathBuf],
 ) -> Result<(), String> {
     if !process.command_exists("codium") {
         return Ok(());
@@ -21,6 +23,12 @@ pub fn open_task_window(
 
     let user_data_dir = task_user_data_dir(repo_key, branch);
     fs::create_dir_all(&user_data_dir).map_err(|error| error.to_string())?;
+    if let Err(error) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
+        process.warn(&format!(
+            "Could not seed VSCodium trusted roots for {}: {error}",
+            user_data_dir.display()
+        ));
+    }
 
     Command::new("codium")
         .arg("--new-window")

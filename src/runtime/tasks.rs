@@ -26,11 +26,20 @@ use crate::tools::{asdf, direnv, nodejs};
 pub struct TaskResolver {
     layout: WorkspacePaths,
     process: ProcessRunner,
+    codium_trusted_roots: Vec<PathBuf>,
 }
 
 impl TaskResolver {
-    pub fn new(layout: WorkspacePaths, process: ProcessRunner) -> Self {
-        Self { layout, process }
+    pub fn new(
+        layout: WorkspacePaths,
+        process: ProcessRunner,
+        codium_trusted_roots: Vec<PathBuf>,
+    ) -> Self {
+        Self {
+            layout,
+            process,
+            codium_trusted_roots,
+        }
     }
 
     pub fn layout(&self) -> &WorkspacePaths {
@@ -125,7 +134,14 @@ impl TaskResolver {
             }
         }
 
-        if open_task_session(self.process, repo_key, branch, path)? == OpenResult::Attached {
+        if open_task_session(
+            self.process,
+            repo_key,
+            branch,
+            path,
+            &self.codium_trusted_roots,
+        )? == OpenResult::Attached
+        {
             return Ok(());
         }
 
