@@ -270,7 +270,7 @@ impl TaskResolver {
         let root = current_root()?;
         let common_dir = git_common_dir(&root)?;
         let repo_key =
-            repo_key_from_common_dir(&common_dir, self.layout.repos_dir()).ok_or_else(|| {
+            repo_key_from_common_dir(&common_dir, self.layout.repos_dir())?.ok_or_else(|| {
                 "Current repository is not managed by task. Run 'task list' to see parkable tasks."
                     .to_string()
             })?;
