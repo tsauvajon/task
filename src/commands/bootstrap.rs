@@ -1,9 +1,9 @@
 use std::env;
 use std::path::PathBuf;
 
-use crate::layout::Layout;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(layout: &Layout) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths) -> Result<(), String> {
     super::ensure_layout(layout)?;
     super::log(&format!(
         "Workspace root: {}",

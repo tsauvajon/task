@@ -12,12 +12,12 @@ use owo_colors::OwoColorize;
 
 use crate::git::commands as git_commands;
 use crate::git::parsing::{
-    TaskRow, branch_from_worktree_path, build_task_rows, parse_worktree_porcelain,
-    repo_key_from_common_dir,
+    TaskRow, branch_from_worktree_path, build_task_rows, parse_repo_input,
+    parse_worktree_porcelain, repo_key_from_common_dir,
 };
-use crate::layout::Layout;
-use crate::repo_key::{ResolveResult, normalize_repo_key, resolve_repo_key};
-use crate::session::session_name_for;
+use crate::git::repo_resolution::{ResolveResult, resolve_repo_query};
+use crate::runtime::session_name::task_session_name;
+use crate::workspace_paths::WorkspacePaths;
 
 pub(super) fn default_dev_root() -> PathBuf {
     if let Ok(dev_root) = env::var("DEV_ROOT") {
@@ -28,7 +28,7 @@ pub(super) fn default_dev_root() -> PathBuf {
     PathBuf::from(home).join("dev")
 }
 
-pub(super) fn ensure_layout(layout: &Layout) -> Result<(), String> {
+pub(super) fn ensure_layout(layout: &WorkspacePaths) -> Result<(), String> {
     let repos = layout.repo_gitdir_path("");
     let repos_dir = repos
         .parent()
@@ -43,7 +43,7 @@ pub(super) fn ensure_layout(layout: &Layout) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn available_repo_keys(layout: &Layout) -> Result<Vec<String>, String> {
+pub(super) fn available_repo_keys(layout: &WorkspacePaths) -> Result<Vec<String>, String> {
     let repos_dir = layout
         .repo_gitdir_path("")
         .parent()
@@ -96,25 +96,20 @@ pub(super) fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(gitdirs)
 }
 
-pub(super) fn is_git_url(input: &str) -> bool {
-    input.starts_with("http://")
-        || input.starts_with("https://")
-        || input.starts_with("ssh://")
-        || input.starts_with("git@")
-}
+pub(super) fn resolve_repo_key_input(
+    layout: &WorkspacePaths,
+    repo_arg: &str,
+) -> Result<String, String> {
+    let parsed = parse_repo_input(repo_arg);
+    let has_clone_url = parsed.clone_url.is_some();
+    let normalized = parsed.repo_key;
 
-pub(super) fn resolve_repo_key_input(layout: &Layout, repo_arg: &str) -> Result<String, String> {
-    if is_git_url(repo_arg) {
-        return Ok(normalize_repo_key(repo_arg));
-    }
-
-    let normalized = normalize_repo_key(repo_arg);
-    if layout.repo_gitdir_path(&normalized).is_dir() {
+    if has_clone_url || layout.repo_gitdir_path(&normalized).is_dir() {
         return Ok(normalized);
     }
 
     let keys = available_repo_keys(layout)?;
-    match resolve_repo_key(&normalized, &keys) {
+    match resolve_repo_query(&normalized, &keys) {
         ResolveResult::Resolved(value) => Ok(value),
         ResolveResult::Ambiguous(choices) => choose_repo_key_interactive(repo_arg, &choices),
     }
@@ -147,7 +142,7 @@ pub(super) fn choose_repo_key_interactive(
 }
 
 pub(super) fn clone_bare_repo(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_url: &str,
     repo_key: &str,
 ) -> Result<(), String> {
@@ -161,7 +156,7 @@ pub(super) fn clone_bare_repo(
 }
 
 pub(super) fn ensure_repo_available(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: &str,
     repo_key: &str,
 ) -> Result<(), String> {
@@ -169,8 +164,9 @@ pub(super) fn ensure_repo_available(
     if gitdir.is_dir() {
         return Ok(());
     }
-    if is_git_url(repo_arg) {
-        return clone_bare_repo(layout, repo_arg, repo_key);
+    let parsed = parse_repo_input(repo_arg);
+    if let Some(clone_url) = parsed.clone_url {
+        return clone_bare_repo(layout, &clone_url, repo_key);
     }
     Err(format!(
         "Bare repo not found at {}. Use 'task clone <repo-url> {repo_key}'.",
@@ -199,7 +195,7 @@ pub(super) fn launch_workspace(repo_key: &str, branch: &str, path: &Path) -> Res
     }
 
     if command_exists("tmux") {
-        let session = session_name_for(repo_key, branch);
+        let session = task_session_name(repo_key, branch);
         if !tmux_has_session(&session) {
             run_status(
                 "tmux",
@@ -243,7 +239,11 @@ pub(super) fn repo_task_rows(
     Ok(build_task_rows(repo_key, &entries, &open_session_list))
 }
 
-pub(super) fn resolve_worktree_path(layout: &Layout, repo_key: &str, branch: &str) -> PathBuf {
+pub(super) fn resolve_worktree_path(
+    layout: &WorkspacePaths,
+    repo_key: &str,
+    branch: &str,
+) -> PathBuf {
     let fallback = layout.worktree_path(repo_key, branch);
     let gitdir = layout.repo_gitdir_path(repo_key);
     if !gitdir.is_dir() {
@@ -261,7 +261,7 @@ pub(super) fn resolve_worktree_path(layout: &Layout, repo_key: &str, branch: &st
 }
 
 pub(super) fn resolve_task_from_args(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     args: &[String],
     usage: &str,
 ) -> Result<(String, String), String> {
@@ -280,7 +280,7 @@ pub(super) fn resolve_task_from_args(
 }
 
 pub(super) fn resolve_task_from_query(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     query: &str,
 ) -> Result<(String, String), String> {
     let tasks = all_tasks(layout)?;
@@ -337,7 +337,7 @@ pub(super) fn resolve_task_from_query(
     choose_task_interactive(query, &repo_matches)
 }
 
-fn all_tasks(layout: &Layout) -> Result<Vec<TaskRow>, String> {
+fn all_tasks(layout: &WorkspacePaths) -> Result<Vec<TaskRow>, String> {
     let mut rows = Vec::new();
     let open_sessions = tmux_sessions();
     let repo_keys = available_repo_keys(layout)?;
@@ -470,7 +470,7 @@ pub(super) fn current_repo_key() -> Option<String> {
 }
 
 pub(super) fn resolve_repo_branch_inputs(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
 ) -> Result<(String, String), String> {

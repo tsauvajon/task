@@ -1,7 +1,7 @@
-use crate::layout::Layout;
-use crate::session::session_name_for;
+use crate::runtime::session_name::task_session_name;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(layout: &Layout) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths) -> Result<(), String> {
     super::ensure_layout(layout)?;
     let (repo_key, branch, root) = super::current_task_info()?;
 
@@ -9,7 +9,7 @@ pub fn run(layout: &Layout) -> Result<(), String> {
         return Err("tmux is not available. Run 'task list' to inspect tasks.".to_string());
     }
 
-    let session = session_name_for(&repo_key, &branch);
+    let session = task_session_name(&repo_key, &branch);
     if super::tmux_has_session(&session) {
         super::run_status("tmux", &["kill-session", "-t", &session], None)?;
         super::log(&format!("Parked task: {repo_key} {branch}"));

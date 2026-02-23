@@ -1,4 +1,4 @@
-pub fn session_name_for(repo_key: &str, branch: &str) -> String {
+pub fn task_session_name(repo_key: &str, branch: &str) -> String {
     let raw = format!("{repo_key}-{branch}");
     let mut output = String::with_capacity(raw.len());
 
@@ -22,4 +22,17 @@ pub fn session_name_for(repo_key: &str, branch: &str) -> String {
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::task_session_name;
+
+    #[test]
+    fn task_session_name_is_sanitized() {
+        assert_eq!(
+            task_session_name("github.com/tsauvajon/goto", "feat/test.1"),
+            "github_com_tsauvajon_goto-feat_test_1"
+        );
+    }
 }

@@ -1,11 +1,11 @@
 use std::fs;
 
 use crate::git::commands as git_commands;
-use crate::layout::Layout;
-use crate::session::session_name_for;
+use crate::runtime::session_name::task_session_name;
+use crate::workspace_paths::WorkspacePaths;
 
 pub fn run(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
     force: bool,
@@ -20,7 +20,7 @@ pub fn run(
     }
 
     if super::command_exists("tmux") {
-        let session = session_name_for(&repo_key, &branch);
+        let session = task_session_name(&repo_key, &branch);
         if super::tmux_has_session(&session) {
             super::run_status("tmux", &["kill-session", "-t", &session], None)?;
         }

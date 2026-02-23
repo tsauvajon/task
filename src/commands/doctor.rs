@@ -1,6 +1,6 @@
-use crate::layout::Layout;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(_layout: &Layout) -> Result<(), String> {
+pub fn run(_layout: &WorkspacePaths) -> Result<(), String> {
     let mut missing = false;
 
     println!("DEV_ROOT: {}", super::default_dev_root().display());

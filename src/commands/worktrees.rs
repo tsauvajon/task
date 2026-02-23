@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use crate::git::commands as git_commands;
-use crate::layout::Layout;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(layout: &Layout, repo_arg: Option<&str>) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths, repo_arg: Option<&str>) -> Result<(), String> {
     super::ensure_layout(layout)?;
 
     let repo_arg = repo_arg

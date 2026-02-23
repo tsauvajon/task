@@ -1,10 +1,10 @@
 use std::fs;
 
 use crate::git::commands as git_commands;
-use crate::layout::Layout;
+use crate::workspace_paths::WorkspacePaths;
 
 pub fn run(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     repo_arg: &str,
     branch: &str,
     base_ref: Option<&str>,

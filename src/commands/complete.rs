@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use crate::layout::Layout;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(layout: &Layout, words: &[String]) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths, words: &[String]) -> Result<(), String> {
     let values = completion_values(layout, words)?;
     for value in values {
         println!("{value}");
@@ -10,7 +10,7 @@ pub fn run(layout: &Layout, words: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn completion_values(layout: &Layout, words: &[String]) -> Result<Vec<String>, String> {
+fn completion_values(layout: &WorkspacePaths, words: &[String]) -> Result<Vec<String>, String> {
     if words.is_empty() {
         return Ok(top_level_commands());
     }
@@ -104,7 +104,7 @@ fn top_level_commands() -> Vec<String> {
     .collect()
 }
 
-fn repo_candidates(layout: &Layout) -> Result<Vec<String>, String> {
+fn repo_candidates(layout: &WorkspacePaths) -> Result<Vec<String>, String> {
     let mut values = HashSet::new();
     for key in super::available_repo_keys(layout)? {
         if let Some(short) = key.rsplit('/').next() {
@@ -128,7 +128,10 @@ fn filter_prefix(values: Vec<String>, current: &str) -> Vec<String> {
         .collect()
 }
 
-fn task_candidates(layout: &Layout, repo_hint: Option<&str>) -> Result<Vec<String>, String> {
+fn task_candidates(
+    layout: &WorkspacePaths,
+    repo_hint: Option<&str>,
+) -> Result<Vec<String>, String> {
     let keys = match repo_hint {
         Some(repo) => {
             let resolved = super::resolve_repo_key_input(layout, repo)?;

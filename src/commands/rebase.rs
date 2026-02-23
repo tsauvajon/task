@@ -1,7 +1,7 @@
 use crate::git::commands as git_commands;
-use crate::layout::Layout;
+use crate::workspace_paths::WorkspacePaths;
 
-pub fn run(layout: &Layout, args: &[String]) -> Result<(), String> {
+pub fn run(layout: &WorkspacePaths, args: &[String]) -> Result<(), String> {
     let input = parse_rebase_input(args)?;
     let (repo_key, branch, base_ref) = resolve_rebase_target(layout, input)?;
 
@@ -59,7 +59,7 @@ fn parse_rebase_input(args: &[String]) -> Result<RebaseInput, String> {
 }
 
 fn resolve_rebase_target(
-    layout: &Layout,
+    layout: &WorkspacePaths,
     input: RebaseInput,
 ) -> Result<(String, String, Option<String>), String> {
     match input {
