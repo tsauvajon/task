@@ -64,6 +64,7 @@ fn from_key_normal(key: KeyEvent) -> UiIntent {
 
 fn from_key_filter(key: KeyEvent) -> UiIntent {
     match key.code {
+        KeyCode::Tab => UiIntent::SwitchView,
         KeyCode::Esc => UiIntent::FilterCancel,
         KeyCode::Enter => UiIntent::FilterApply,
         KeyCode::Backspace => UiIntent::FilterBackspace,
@@ -131,6 +132,10 @@ mod tests {
 
     #[test]
     fn filter_mode_maps_editing_intents() {
+        assert_eq!(
+            from_key(InputMode::Filter, key(KeyCode::Tab)),
+            UiIntent::SwitchView
+        );
         assert_eq!(
             from_key(InputMode::Filter, key(KeyCode::Esc)),
             UiIntent::FilterCancel

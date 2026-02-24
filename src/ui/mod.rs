@@ -71,11 +71,20 @@ fn apply_intent(
     match intent {
         UiIntent::Quit => Ok(Some(UiAction::Quit)),
         UiIntent::SwitchView => {
+            let was_filter_mode = state.mode == InputMode::Filter;
             state.switch_view();
-            state.message = match state.view {
-                ViewMode::Tasks => "Switched to Tasks view".to_string(),
-                ViewMode::Repos => "Switched to Repos view".to_string(),
-            };
+            if was_filter_mode {
+                state.mode = InputMode::Filter;
+                state.message = match state.view {
+                    ViewMode::Tasks => "Filter mode: type to refine tasks".to_string(),
+                    ViewMode::Repos => "Filter mode: type to refine repos".to_string(),
+                };
+            } else {
+                state.message = match state.view {
+                    ViewMode::Tasks => "Switched to Tasks view".to_string(),
+                    ViewMode::Repos => "Switched to Repos view".to_string(),
+                };
+            }
             Ok(None)
         }
         UiIntent::MoveNext => {
@@ -108,12 +117,11 @@ fn apply_intent(
             Ok(None)
         }
         UiIntent::EnterFilterMode => {
-            if state.view != ViewMode::Tasks {
-                state.message = "Filter is only available in Tasks view".to_string();
-                return Ok(None);
-            }
             state.mode = InputMode::Filter;
-            state.message = "Filter mode: type to refine tasks".to_string();
+            state.message = match state.view {
+                ViewMode::Tasks => "Filter mode: type to refine tasks".to_string(),
+                ViewMode::Repos => "Filter mode: type to refine repos".to_string(),
+            };
             Ok(None)
         }
         UiIntent::EnterCreateTaskMode => {
@@ -167,25 +175,59 @@ fn apply_intent(
         }
         UiIntent::FilterApply => {
             state.mode = InputMode::Normal;
-            state.message = format!(
-                "Filter applied: {} matches",
-                state.task_filtered_indices.len()
-            );
+            state.message = match state.view {
+                ViewMode::Tasks => {
+                    format!(
+                        "Filter applied: {} matches",
+                        state.task_filtered_indices.len()
+                    )
+                }
+                ViewMode::Repos => {
+                    format!(
+                        "Filter applied: {} matches",
+                        state.repo_filtered_indices.len()
+                    )
+                }
+            };
             Ok(None)
         }
         UiIntent::FilterBackspace => {
-            state.task_filter.pop();
-            state.apply_task_filter();
+            match state.view {
+                ViewMode::Tasks => {
+                    state.task_filter.pop();
+                    state.apply_task_filter();
+                }
+                ViewMode::Repos => {
+                    state.repo_filter.pop();
+                    state.apply_repo_filter();
+                }
+            }
             Ok(None)
         }
         UiIntent::FilterClear => {
-            state.task_filter.clear();
-            state.apply_task_filter();
+            match state.view {
+                ViewMode::Tasks => {
+                    state.task_filter.clear();
+                    state.apply_task_filter();
+                }
+                ViewMode::Repos => {
+                    state.repo_filter.clear();
+                    state.apply_repo_filter();
+                }
+            }
             Ok(None)
         }
         UiIntent::FilterAppend(ch) => {
-            state.task_filter.push(ch);
-            state.apply_task_filter();
+            match state.view {
+                ViewMode::Tasks => {
+                    state.task_filter.push(ch);
+                    state.apply_task_filter();
+                }
+                ViewMode::Repos => {
+                    state.repo_filter.push(ch);
+                    state.apply_repo_filter();
+                }
+            }
             Ok(None)
         }
         UiIntent::CreateCancel => {

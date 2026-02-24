@@ -73,6 +73,7 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
         .filter(|row| row.status == TaskStatus::Open)
         .count();
     let total_count = state.task_rows.len();
+    let task_title = view_title("Tasks", &state.task_filter);
 
     let header = Row::new(vec!["STATUS", "REPO", "BRANCH", "PATH"]).style(
         Style::default()
@@ -108,7 +109,7 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
     .header(header)
     .block(
         Block::default()
-            .title("Tasks")
+            .title(task_title)
             .title(
                 Line::from(Span::styled(
                     format!("{} open / {} total", open_count, total_count),
@@ -133,7 +134,9 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
 }
 
 fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
+    let filtered_count = state.repo_filtered_indices.len();
     let repos_count = state.repo_rows.len();
+    let repo_title = view_title("Repos", &state.repo_filter);
 
     let header = Row::new(vec!["REPO", "OPEN", "PARKED"]).style(
         Style::default()
@@ -141,8 +144,9 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
             .add_modifier(Modifier::BOLD),
     );
 
-    let rows = state.repo_rows.iter().map(|row| {
-        Row::new(vec![
+    let rows = state.repo_filtered_indices.iter().filter_map(|index| {
+        let row = state.repo_rows.get(*index)?;
+        Some(Row::new(vec![
             Cell::from(row.repo.clone()),
             Cell::from(row.open_tasks.to_string()).style(
                 Style::default()
@@ -150,7 +154,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
                     .add_modifier(Modifier::BOLD),
             ),
             Cell::from(row.parked_tasks.to_string()).style(Style::default().fg(Color::Yellow)),
-        ])
+        ]))
     });
 
     let table = Table::new(
@@ -164,10 +168,10 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
     .header(header)
     .block(
         Block::default()
-            .title("Repos")
+            .title(repo_title)
             .title(
                 Line::from(Span::styled(
-                    format!("{} total", repos_count),
+                    format!("{} shown / {} total", filtered_count, repos_count),
                     Style::default().fg(Color::Gray),
                 ))
                 .right_aligned(),
@@ -182,7 +186,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
     .highlight_symbol("▶ ");
 
     let mut table_state = TableState::default();
-    if !state.repo_rows.is_empty() {
+    if !state.repo_filtered_indices.is_empty() {
         table_state.select(Some(state.repo_selected));
     }
     frame.render_stateful_widget(table, area, &mut table_state);
@@ -206,12 +210,14 @@ fn actions_for_mode(state: &UiState) -> Vec<Line<'static>> {
                 Line::from("Tab     switch to tasks view"),
                 Line::from("Enter  open selected repo tasks"),
                 Line::from("c      clone repo interactively"),
+                Line::from("/      enter filter mode"),
                 Line::from("r      refresh repos"),
                 Line::from("?      toggle help"),
                 Line::from("q      quit"),
             ],
         },
         InputMode::Filter => vec![
+            Line::from("Tab    switch Tasks/Repos"),
             Line::from("Type   append filter text"),
             Line::from("Backsp delete character"),
             Line::from("Ctrl-U clear filter"),
@@ -263,9 +269,11 @@ fn render_help(frame: &mut Frame) {
         Line::from("Repos view:"),
         Line::from("Enter     open selected repo tasks"),
         Line::from("c         clone repo interactively"),
+        Line::from("/         enter filter mode"),
         Line::from("r         refresh repos"),
         Line::from(""),
         Line::from("Filter mode:"),
+        Line::from("Tab       switch Tasks/Repos view"),
         Line::from("Type      append filter text"),
         Line::from("Backspace delete character"),
         Line::from("Ctrl-U    clear filter"),
@@ -318,5 +326,14 @@ fn status_label(status: TaskStatus) -> &'static str {
     match status {
         TaskStatus::Open => "open",
         TaskStatus::Parked => "parked",
+    }
+}
+
+fn view_title(base: &str, filter: &str) -> String {
+    let trimmed = filter.trim();
+    if trimmed.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base} - {trimmed}")
     }
 }

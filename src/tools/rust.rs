@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::runtime::process::ProcessRunner;
 
 pub fn run_checks(process: ProcessRunner, path: &Path) -> Result<(), String> {
-    run_cargo_command(process, path, &["fmt", "--all", "--check"])?;
+    run_cargo_command(process, path, &["fmt", "--all"])?;
     run_cargo_command(
         process,
         path,
@@ -41,10 +41,7 @@ mod tests {
 
     #[test]
     fn cargo_command_uses_nix_develop_prefix() {
-        let args = cargo_command(&["fmt", "--all", "--check"]);
-        assert_eq!(
-            args,
-            vec!["develop", "-c", "cargo", "fmt", "--all", "--check"]
-        );
+        let args = cargo_command(&["fmt", "--all"]);
+        assert_eq!(args, vec!["develop", "-c", "cargo", "fmt", "--all"]);
     }
 }

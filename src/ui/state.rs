@@ -34,8 +34,10 @@ pub(super) struct UiState {
     pub(super) task_filtered_indices: Vec<usize>,
     pub(super) task_selected: usize,
     pub(super) repo_rows: Vec<RepoRow>,
+    pub(super) repo_filtered_indices: Vec<usize>,
     pub(super) repo_selected: usize,
     pub(super) task_filter: String,
+    pub(super) repo_filter: String,
     pub(super) task_repo_scope: Option<String>,
     pub(super) create_branch: String,
     pub(super) clone_input: String,
@@ -56,8 +58,10 @@ impl UiState {
             task_filtered_indices: Vec::new(),
             task_selected: 0,
             repo_rows,
+            repo_filtered_indices: Vec::new(),
             repo_selected: 0,
             task_filter: String::new(),
+            repo_filter: String::new(),
             task_repo_scope,
             create_branch: String::new(),
             clone_input: String::new(),
@@ -67,6 +71,7 @@ impl UiState {
             show_help: false,
         };
         state.apply_task_filter();
+        state.apply_repo_filter();
         state
     }
 
@@ -99,7 +104,34 @@ impl UiState {
     }
 
     pub(super) fn selected_repo_row(&self) -> Option<&RepoRow> {
-        self.repo_rows.get(self.repo_selected)
+        let index = *self.repo_filtered_indices.get(self.repo_selected)?;
+        self.repo_rows.get(index)
+    }
+
+    pub(super) fn apply_repo_filter(&mut self) {
+        let tokens: Vec<String> = self
+            .repo_filter
+            .split_whitespace()
+            .map(|token| token.to_lowercase())
+            .collect();
+        self.repo_filtered_indices = self
+            .repo_rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                if tokens.is_empty() {
+                    return true;
+                }
+
+                let repo = row.repo.to_lowercase();
+                tokens.iter().all(|token| repo.contains(token))
+            })
+            .map(|(index, _)| index)
+            .collect();
+
+        if self.repo_selected >= self.repo_filtered_indices.len() {
+            self.repo_selected = self.repo_filtered_indices.len().saturating_sub(1);
+        }
     }
 
     pub(super) fn move_next(&mut self) {
@@ -112,11 +144,11 @@ impl UiState {
                     .min(self.task_filtered_indices.len().saturating_sub(1));
             }
             ViewMode::Repos => {
-                if self.repo_rows.is_empty() {
+                if self.repo_filtered_indices.is_empty() {
                     return;
                 }
-                self.repo_selected =
-                    (self.repo_selected + 1).min(self.repo_rows.len().saturating_sub(1));
+                self.repo_selected = (self.repo_selected + 1)
+                    .min(self.repo_filtered_indices.len().saturating_sub(1));
             }
         }
     }
@@ -139,9 +171,7 @@ impl UiState {
 
     pub(super) fn set_repo_rows(&mut self, rows: Vec<RepoRow>) {
         self.repo_rows = rows;
-        if self.repo_selected >= self.repo_rows.len() {
-            self.repo_selected = self.repo_rows.len().saturating_sub(1);
-        }
+        self.apply_repo_filter();
     }
 
     pub(super) fn switch_view(&mut self) {
@@ -156,5 +186,117 @@ impl UiState {
         self.task_repo_scope = Some(repo);
         self.view = ViewMode::Tasks;
         self.mode = InputMode::Normal;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{RepoRow, UiState};
+    use crate::runtime::task_rows::{TaskRow, TaskStatus};
+
+    #[test]
+    fn repo_filter_matches_repo_name_only() {
+        let mut state = UiState::new(
+            vec![sample_task_row()],
+            vec![
+                repo_row("github.com/acme/app", 1, 2),
+                repo_row("github.com/acme/ops", 9, 9),
+            ],
+            None,
+        );
+
+        state.repo_filter = "app".to_string();
+        state.apply_repo_filter();
+
+        assert_eq!(state.repo_filtered_indices, vec![0]);
+        assert_eq!(
+            state.selected_repo_row().map(|row| row.repo.as_str()),
+            Some("github.com/acme/app")
+        );
+    }
+
+    #[test]
+    fn repo_selection_clamps_when_filter_reduces_results() {
+        let mut state = UiState::new(
+            vec![sample_task_row()],
+            vec![
+                repo_row("github.com/acme/app", 1, 0),
+                repo_row("github.com/acme/ops", 2, 0),
+                repo_row("github.com/acme/docs", 3, 0),
+            ],
+            None,
+        );
+
+        state.repo_selected = 2;
+        state.repo_filter = "ops".to_string();
+        state.apply_repo_filter();
+
+        assert_eq!(state.repo_filtered_indices, vec![1]);
+        assert_eq!(state.repo_selected, 0);
+        assert_eq!(
+            state.selected_repo_row().map(|row| row.repo.as_str()),
+            Some("github.com/acme/ops")
+        );
+    }
+
+    #[test]
+    fn repo_filter_matches_all_space_separated_tokens() {
+        let mut state = UiState::new(
+            vec![sample_task_row()],
+            vec![
+                repo_row("github.com/tsauvajon/goto", 1, 0),
+                repo_row("github.com/other/repo", 1, 0),
+            ],
+            None,
+        );
+
+        state.repo_filter = "gith tsa go".to_string();
+        state.apply_repo_filter();
+
+        assert_eq!(state.repo_filtered_indices, vec![0]);
+        assert_eq!(
+            state.selected_repo_row().map(|row| row.repo.as_str()),
+            Some("github.com/tsauvajon/goto")
+        );
+    }
+
+    #[test]
+    fn repo_filter_matches_host_fragment() {
+        let mut state = UiState::new(
+            vec![sample_task_row()],
+            vec![
+                repo_row("github.com/acme/app", 1, 0),
+                repo_row("gitlab.com/acme/app", 1, 0),
+            ],
+            None,
+        );
+
+        state.repo_filter = "gitlab".to_string();
+        state.apply_repo_filter();
+
+        assert_eq!(state.repo_filtered_indices, vec![1]);
+        assert_eq!(
+            state.selected_repo_row().map(|row| row.repo.as_str()),
+            Some("gitlab.com/acme/app")
+        );
+    }
+
+    fn repo_row(repo: &str, open_tasks: usize, parked_tasks: usize) -> RepoRow {
+        RepoRow {
+            repo: repo.to_string(),
+            open_tasks,
+            parked_tasks,
+        }
+    }
+
+    fn sample_task_row() -> TaskRow {
+        TaskRow {
+            status: TaskStatus::Open,
+            repo: "github.com/acme/app".to_string(),
+            branch: "main".to_string(),
+            path: PathBuf::from("/tmp/dev/wt/github.com/acme/app/main"),
+        }
     }
 }
