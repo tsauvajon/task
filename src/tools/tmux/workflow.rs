@@ -6,8 +6,10 @@ use super::{
 };
 use crate::{
     runtime::process::ProcessRunner,
-    tools::opencode,
-    tools::vscodium::workflow::{close_task_windows, open_task_window},
+    tools::{
+        opencode,
+        vscodium::workflow::{close_task_windows, open_task_window},
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,10 +126,18 @@ pub fn park_task(
     process: ProcessRunner,
     repo_key: &str,
     branch: &str,
+    path: &Path,
 ) -> Result<ParkResult, String> {
     let session = session_name(repo_key, branch);
     let has_tmux_session = has_session(process, &session);
     let mut result = ParkResult::AlreadyParked;
+    let title = format!("{repo_key} {branch}");
+
+    if let Err(error) = opencode::rename_latest_session_title(path, &title) {
+        process.warn(&format!(
+            "Failed to update opencode session title for {repo_key} {branch}: {error}"
+        ));
+    }
 
     for action in park_teardown_actions(has_tmux_session) {
         match action {
@@ -169,7 +179,7 @@ pub fn finish_task_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_teardown_actions, park_teardown_actions, TeardownAction};
+    use super::{TeardownAction, finish_teardown_actions, park_teardown_actions};
 
     #[test]
     fn park_teardown_closes_codium_before_tmux_when_session_exists() {

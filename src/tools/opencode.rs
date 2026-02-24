@@ -22,6 +22,14 @@ pub fn launch_args(directory: &Path) -> Vec<String> {
     }
 }
 
+pub fn rename_latest_session_title(directory: &Path, title: &str) -> Result<bool, String> {
+    let Some(db_path) = opencode_db_path() else {
+        return Ok(false);
+    };
+
+    rename_latest_session_title_at_db(&db_path, directory, title)
+}
+
 /// Looks up the most recently updated opencode session for a given worktree
 /// directory path. Returns `None` if no session is found or if the opencode
 /// database is not accessible.
@@ -55,6 +63,28 @@ fn opencode_db_path() -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
+fn rename_latest_session_title_at_db(
+    db_path: &Path,
+    directory: &Path,
+    title: &str,
+) -> Result<bool, String> {
+    let connection = Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let directory_str = directory.to_string_lossy();
+    let updated = connection
+        .execute(
+            "UPDATE session SET title = ?1 WHERE id = (SELECT id FROM session WHERE directory = ?2 ORDER BY time_updated DESC LIMIT 1)",
+            rusqlite::params![title, directory_str.as_ref()],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(updated > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -70,6 +100,7 @@ mod tests {
             "CREATE TABLE session (
                 id TEXT PRIMARY KEY,
                 directory TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
                 time_updated INTEGER NOT NULL DEFAULT 0
             )",
         )
@@ -92,6 +123,16 @@ mod tests {
             |row| row.get(0),
         )
         .ok()
+    }
+
+    fn query_title(db_path: &std::path::Path, id: &str) -> String {
+        let conn = Connection::open(db_path).expect("open");
+        conn.query_row(
+            "SELECT title FROM session WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .expect("title")
     }
 
     #[test]
@@ -130,5 +171,53 @@ mod tests {
         // Point at a non-existent path — opencode_db_path() returns None.
         let args = launch_args(Path::new("/nonexistent/worktree"));
         assert_eq!(args, vec!["opencode".to_string()]);
+    }
+
+    #[test]
+    fn rename_latest_session_title_updates_most_recent_matching_directory() {
+        let dir = std::env::temp_dir().join("task-test-opencode-rename-latest");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = create_test_db(
+            &dir,
+            &[
+                ("ses_old", "/wt/repo/branch", 100),
+                ("ses_new", "/wt/repo/branch", 200),
+                ("ses_other", "/wt/repo/other", 300),
+            ],
+        );
+
+        let updated = rename_latest_session_title_at_db(
+            &db_path,
+            Path::new("/wt/repo/branch"),
+            "github.com/acme/repo feat/branch",
+        )
+        .expect("rename title");
+        assert!(updated);
+        assert_eq!(query_title(&db_path, "ses_old"), "");
+        assert_eq!(
+            query_title(&db_path, "ses_new"),
+            "github.com/acme/repo feat/branch"
+        );
+        assert_eq!(query_title(&db_path, "ses_other"), "");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rename_latest_session_title_returns_false_when_no_matching_directory() {
+        let dir = std::env::temp_dir().join("task-test-opencode-rename-missing");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = create_test_db(&dir, &[("ses_abc", "/wt/repo/branch", 100)]);
+
+        let updated = rename_latest_session_title_at_db(
+            &db_path,
+            Path::new("/wt/repo/other"),
+            "github.com/acme/repo feat/other",
+        )
+        .expect("rename title");
+        assert!(!updated);
+        assert_eq!(query_title(&db_path, "ses_abc"), "");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
