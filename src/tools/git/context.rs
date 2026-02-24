@@ -1,6 +1,8 @@
-use std::fs;
-use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 use super::runner::run_git_capture;
 
@@ -58,12 +60,13 @@ pub fn repo_key_from_common_dir(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
+    use std::{
+        fs,
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use super::repo_key_from_common_dir;
 

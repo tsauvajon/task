@@ -1,6 +1,10 @@
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::runtime::setup::{self, SetupApproval};
-use crate::tools::opencode;
+use crate::{
+    runtime::{
+        environment::RuntimeEnvironment,
+        setup::{self, SetupApproval},
+    },
+    tools::opencode,
+};
 
 struct DoctorReport {
     missing_required: bool,

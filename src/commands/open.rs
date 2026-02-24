@@ -1,10 +1,11 @@
-use std::collections::HashSet;
-use std::io::{self, IsTerminal};
+use std::{
+    collections::HashSet,
+    io::{self, IsTerminal},
+};
 
 use dialoguer::{Select, theme::ColorfulTheme};
 
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::runtime::task_rows::TaskRow;
+use crate::runtime::{environment::RuntimeEnvironment, task_rows::TaskRow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MatchKind {

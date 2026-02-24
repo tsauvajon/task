@@ -1,7 +1,6 @@
 use std::path::Path;
 
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::tools::git::worktrees::worktree_list;
+use crate::{runtime::environment::RuntimeEnvironment, tools::git::worktrees::worktree_list};
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
     context.ensure_layout()?;

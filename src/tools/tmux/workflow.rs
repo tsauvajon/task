@@ -1,10 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use crate::runtime::process::ProcessRunner;
-use crate::tools::vscodium::workflow::{close_task_windows, open_task_window};
-
-use super::naming::session_name;
-use super::sessions::{has_session, is_available};
+use super::{
+    naming::session_name,
+    sessions::{has_session, is_available},
+};
+use crate::{
+    runtime::process::ProcessRunner,
+    tools::vscodium::workflow::{close_task_windows, open_task_window},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParkResult {
@@ -171,8 +174,7 @@ pub fn finish_task_session(
 
 #[cfg(test)]
 mod tests {
-    use super::TeardownAction;
-    use super::{finish_teardown_actions, park_teardown_actions};
+    use super::{TeardownAction, finish_teardown_actions, park_teardown_actions};
 
     #[test]
     fn park_teardown_closes_codium_before_tmux_when_session_exists() {

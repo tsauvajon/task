@@ -1,26 +1,37 @@
-use std::collections::HashSet;
-use std::ffi::OsStr;
-use std::fs;
-use std::io::{self, IsTerminal};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    ffi::OsStr,
+    fs,
+    io::{self, IsTerminal},
+    path::{Path, PathBuf},
+};
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dialoguer::{Select, theme::ColorfulTheme};
 
-use crate::runtime::paths::WorkspacePaths;
-use crate::runtime::process::ProcessRunner;
-use crate::runtime::task_rows::{TaskRow, TaskStatus, build_task_rows};
-use crate::tools::git::context::{current_root, git_common_dir, repo_key_from_common_dir};
-use crate::tools::git::refs::current_branch;
-use crate::tools::git::repo::{
-    ResolveResult, clone_bare_repo, parse_repo_input, resolve_repo_query,
+use crate::{
+    runtime::{
+        paths::WorkspacePaths,
+        process::ProcessRunner,
+        task_rows::{TaskRow, TaskStatus, build_task_rows},
+    },
+    tools::{
+        asdf, direnv,
+        git::{
+            context::{current_root, git_common_dir, repo_key_from_common_dir},
+            refs::current_branch,
+            repo::{ResolveResult, clone_bare_repo, parse_repo_input, resolve_repo_query},
+            worktrees::{
+                branch_from_worktree_path, parse_worktree_porcelain, worktree_list_porcelain,
+            },
+        },
+        nodejs,
+        tmux::{
+            sessions::list_sessions,
+            workflow::{OpenResult, open_task_session},
+        },
+    },
 };
-use crate::tools::git::worktrees::{
-    branch_from_worktree_path, parse_worktree_porcelain, worktree_list_porcelain,
-};
-use crate::tools::tmux::sessions::list_sessions;
-use crate::tools::tmux::workflow::{OpenResult, open_task_session};
-use crate::tools::{asdf, direnv, nodejs};
 
 #[derive(Debug, Clone)]
 pub struct TaskResolver {
@@ -453,9 +464,9 @@ fn choose_task_interactive(query: &str, choices: &[&TaskRow]) -> Result<(String,
 
 #[cfg(test)]
 mod tests {
+    use std::{env, fs};
+
     use super::collect_gitdirs;
-    use std::env;
-    use std::fs;
 
     #[test]
     fn collect_gitdirs_finds_nested_bare_repos() {

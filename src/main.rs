@@ -1,5 +1,4 @@
 use clap::Parser;
-
 use task::commands::{self, Cli};
 
 fn main() {

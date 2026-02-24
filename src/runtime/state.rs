@@ -1,5 +1,7 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -56,8 +58,7 @@ fn state_file_path() -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::fs;
+    use std::{env, fs};
 
     use super::{mark_onboarding_complete_at, onboarding_complete_at};
 

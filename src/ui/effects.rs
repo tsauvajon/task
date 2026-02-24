@@ -1,10 +1,11 @@
-use crate::runtime::environment::RuntimeEnvironment;
-
-use super::state::{UiAction, UiState};
-use super::tasks::{
-    clone_from_input, finish_selected, load_repo_rows, load_task_rows, park_selected,
-    resolve_create_repo,
+use super::{
+    state::{UiAction, UiState},
+    tasks::{
+        clone_from_input, finish_selected, load_repo_rows, load_task_rows, park_selected,
+        resolve_create_repo,
+    },
 };
+use crate::runtime::environment::RuntimeEnvironment;
 
 pub(super) fn refresh_task_rows(
     context: &RuntimeEnvironment,

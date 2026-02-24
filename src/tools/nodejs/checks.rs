@@ -1,8 +1,7 @@
 use std::path::Path;
 
-use crate::runtime::process::ProcessRunner;
-
 use super::runtime::{Runner, corepack_available, enable_corepack, resolve_runner};
+use crate::runtime::process::ProcessRunner;
 
 pub fn run_project_checks(process: ProcessRunner, path: &Path) -> Result<bool, String> {
     if corepack_available(process) {

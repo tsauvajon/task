@@ -1,6 +1,7 @@
-use crate::commands::RepoCommand;
-use crate::commands::clone;
-use crate::runtime::environment::RuntimeEnvironment;
+use crate::{
+    commands::{RepoCommand, clone},
+    runtime::environment::RuntimeEnvironment,
+};
 
 pub fn run(context: &RuntimeEnvironment, command: RepoCommand) -> Result<(), String> {
     match command {

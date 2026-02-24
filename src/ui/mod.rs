@@ -1,16 +1,17 @@
 use crossterm::event::{self, Event};
 
-use crate::runtime::environment::RuntimeEnvironment;
-
-use self::effects::{
-    clone_and_refresh, create_action, finish_and_refresh, park_and_refresh, refresh_repo_rows,
-    refresh_task_rows,
+use self::{
+    effects::{
+        clone_and_refresh, create_action, finish_and_refresh, park_and_refresh, refresh_repo_rows,
+        refresh_task_rows,
+    },
+    intent::{UiIntent, from_key},
+    render::render,
+    state::{InputMode, UiAction, UiState, ViewMode},
+    tasks::{initial_repo_scope, load_repo_rows, load_task_rows},
+    terminal::TerminalGuard,
 };
-use self::intent::{UiIntent, from_key};
-use self::render::render;
-use self::state::{InputMode, UiAction, UiState, ViewMode};
-use self::tasks::{initial_repo_scope, load_repo_rows, load_task_rows};
-use self::terminal::TerminalGuard;
+use crate::runtime::environment::RuntimeEnvironment;
 
 mod effects;
 mod intent;

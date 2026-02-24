@@ -1,5 +1,7 @@
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::runtime::setup::{self, SetupApproval};
+use crate::runtime::{
+    environment::RuntimeEnvironment,
+    setup::{self, SetupApproval},
+};
 
 pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     let guidance = "'task bootstrap' needs an interactive terminal because it applies local setup changes. Re-run it in an interactive terminal, or use 'task doctor' for read-only diagnostics.";

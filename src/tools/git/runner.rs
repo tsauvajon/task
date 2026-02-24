@@ -1,6 +1,4 @@
-use std::ffi::OsStr;
-use std::path::Path;
-use std::process::Command;
+use std::{ffi::OsStr, path::Path, process::Command};
 
 pub(super) fn run_git_capture(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     run_capture("git", args, cwd)

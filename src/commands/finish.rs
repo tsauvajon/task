@@ -1,9 +1,13 @@
 use std::fs;
 
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::tools::git::worktrees::{status_porcelain, worktree_prune, worktree_remove};
-use crate::tools::tmux::workflow::finish_task_session;
-use crate::tools::vscodium::workflow::cleanup_task_state;
+use crate::{
+    runtime::environment::RuntimeEnvironment,
+    tools::{
+        git::worktrees::{status_porcelain, worktree_prune, worktree_remove},
+        tmux::workflow::finish_task_session,
+        vscodium::workflow::cleanup_task_state,
+    },
+};
 
 pub fn run(
     context: &RuntimeEnvironment,

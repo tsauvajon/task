@@ -1,5 +1,4 @@
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::runtime::task_rows::TaskRow;
+use crate::runtime::{environment::RuntimeEnvironment, task_rows::TaskRow};
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
     context.ensure_layout()?;
