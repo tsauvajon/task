@@ -1,5 +1,7 @@
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::tools::git::repo::{default_clone_url, parse_repo_input};
+use crate::{
+    runtime::environment::RuntimeEnvironment,
+    tools::git::repo::{default_clone_url, parse_repo_input},
+};
 
 pub fn run(
     context: &RuntimeEnvironment,

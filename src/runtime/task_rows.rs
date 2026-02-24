@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use crate::tools::git::worktrees::{WorktreeEntry, branch_from_ref, branch_from_worktree_path};
-use crate::tools::tmux::naming::session_name;
+use crate::tools::{
+    git::worktrees::{WorktreeEntry, branch_from_ref, branch_from_worktree_path},
+    tmux::naming::session_name,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRow {
@@ -62,9 +64,8 @@ pub fn build_task_rows(
 mod tests {
     use std::path::Path;
 
-    use crate::tools::git::worktrees::WorktreeEntry;
-
     use super::{TaskRow, TaskStatus, build_task_rows};
+    use crate::tools::git::worktrees::WorktreeEntry;
 
     #[test]
     fn build_task_rows_marks_open_and_parked_states() {

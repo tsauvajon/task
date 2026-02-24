@@ -1,6 +1,10 @@
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::tools::tmux::sessions::is_available;
-use crate::tools::tmux::workflow::{ParkResult, park_task};
+use crate::{
+    runtime::environment::RuntimeEnvironment,
+    tools::tmux::{
+        sessions::is_available,
+        workflow::{ParkResult, park_task},
+    },
+};
 
 pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
     context.ensure_layout()?;

@@ -1,11 +1,10 @@
 use std::io;
 
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+use crossterm::{
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 pub(super) type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 

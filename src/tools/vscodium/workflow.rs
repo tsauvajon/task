@@ -1,14 +1,17 @@
-use std::fs;
-use std::path::Path;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Stdio},
+    thread,
+    time::Duration,
+};
 
+use super::{
+    naming::task_user_data_dir,
+    process_match::{cmdline_matches_user_data_dir, parse_cmdline_bytes},
+    trust::seed_trusted_roots,
+};
 use crate::runtime::process::ProcessRunner;
-
-use super::naming::task_user_data_dir;
-use super::process_match::{cmdline_matches_user_data_dir, parse_cmdline_bytes};
-use super::trust::seed_trusted_roots;
 
 pub fn open_task_window(
     process: ProcessRunner,
@@ -126,8 +129,9 @@ fn cleanup_user_data_dir(user_data_dir: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::cleanup_user_data_dir;
     use std::fs;
+
+    use super::cleanup_user_data_dir;
 
     #[test]
     fn cleanup_task_state_removes_existing_directory() {

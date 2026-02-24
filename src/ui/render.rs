@@ -1,12 +1,13 @@
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout as UiLayout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
-
-use crate::runtime::task_rows::TaskStatus;
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout as UiLayout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
+};
 
 use super::state::{InputMode, UiState, ViewMode};
+use crate::runtime::task_rows::TaskStatus;
 
 pub(super) fn render(frame: &mut Frame, state: &UiState) {
     let outer = UiLayout::default()

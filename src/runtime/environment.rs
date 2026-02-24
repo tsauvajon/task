@@ -1,12 +1,13 @@
-use std::collections::HashSet;
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
-use crate::runtime::config::TaskConfig;
-use crate::runtime::paths::WorkspacePaths;
-use crate::runtime::process::ProcessRunner;
-use crate::runtime::task_rows::TaskRow;
-use crate::runtime::tasks::TaskResolver;
+use crate::runtime::{
+    config::TaskConfig, paths::WorkspacePaths, process::ProcessRunner, task_rows::TaskRow,
+    tasks::TaskResolver,
+};
 
 #[derive(Debug, Clone)]
 pub struct RuntimeEnvironment {

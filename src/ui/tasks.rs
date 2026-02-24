@@ -1,10 +1,17 @@
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::runtime::task_rows::{TaskRow, TaskStatus};
-use crate::tools::git::repo::{default_clone_url, parse_repo_input};
-use crate::tools::tmux::sessions::is_available;
-use crate::tools::tmux::workflow::{ParkResult, park_task};
-
 use super::state::{RepoRow, UiState};
+use crate::{
+    runtime::{
+        environment::RuntimeEnvironment,
+        task_rows::{TaskRow, TaskStatus},
+    },
+    tools::{
+        git::repo::{default_clone_url, parse_repo_input},
+        tmux::{
+            sessions::is_available,
+            workflow::{ParkResult, park_task},
+        },
+    },
+};
 
 pub(super) fn initial_repo_scope(
     context: &RuntimeEnvironment,

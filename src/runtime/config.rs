@@ -1,6 +1,8 @@
-use std::fs;
-use std::io::{self, IsTerminal};
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    io::{self, IsTerminal},
+    path::{Path, PathBuf},
+};
 
 use dialoguer::{Input, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
@@ -190,9 +192,9 @@ pub fn is_interactive_terminal() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{TaskConfigFile, to_runtime_config};
-    use super::{VscodiumConfigFile, expand_path};
     use std::path::Path;
+
+    use super::{TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
 
     #[test]
     fn expand_path_supports_tilde_prefix() {

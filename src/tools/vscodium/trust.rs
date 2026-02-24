@@ -1,6 +1,8 @@
-use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -127,10 +129,11 @@ fn normalize_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::seed_trusted_roots;
+    use std::{env, fs};
+
     use rusqlite::Connection;
-    use std::env;
-    use std::fs;
+
+    use super::seed_trusted_roots;
 
     fn read_trust_model(path: &std::path::Path) -> String {
         let db_path = path.join("User").join("globalStorage").join("state.vscdb");

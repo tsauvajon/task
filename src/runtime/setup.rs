@@ -1,10 +1,12 @@
 use dialoguer::{Confirm, theme::ColorfulTheme};
 
-use crate::runtime::config::is_interactive_terminal;
-use crate::runtime::environment::RuntimeEnvironment;
-use crate::runtime::state;
-use crate::tools::asdf;
-use crate::tools::nodejs::runtime::{corepack_available, enable_corepack, node_available};
+use crate::{
+    runtime::{config::is_interactive_terminal, environment::RuntimeEnvironment, state},
+    tools::{
+        asdf,
+        nodejs::runtime::{corepack_available, enable_corepack, node_available},
+    },
+};
 
 pub enum SetupApproval<'a> {
     Prompt(&'a str),
