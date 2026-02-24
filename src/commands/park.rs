@@ -14,7 +14,7 @@ pub fn run(context: &RuntimeEnvironment) -> Result<(), String> {
         return Err("tmux is not available. Run 'task list' to inspect tasks.".to_string());
     }
 
-    match park_task(context.process(), &repo_key, &branch)? {
+    match park_task(context.process(), &repo_key, &branch, &root)? {
         ParkResult::Parked => context.log(&format!("Parked task: {repo_key} {branch}")),
         ParkResult::AlreadyParked => {
             context.log(&format!("Task already parked: {repo_key} {branch}"))

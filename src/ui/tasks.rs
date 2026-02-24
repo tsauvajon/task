@@ -94,7 +94,7 @@ pub(super) fn park_selected(
         return Err("tmux is not available. Run 'task list' to inspect tasks.".to_string());
     }
 
-    match park_task(context.process(), &row.repo, &row.branch)? {
+    match park_task(context.process(), &row.repo, &row.branch, &row.path)? {
         ParkResult::Parked => state.message = format!("Parked task: {} {}", row.repo, row.branch),
         ParkResult::AlreadyParked => {
             state.message = format!("Task already parked: {} {}", row.repo, row.branch)

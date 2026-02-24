@@ -6,7 +6,10 @@ use super::{
 };
 use crate::{
     runtime::process::ProcessRunner,
-    tools::vscodium::workflow::{close_task_windows, open_task_window},
+    tools::{
+        opencode,
+        vscodium::workflow::{close_task_windows, open_task_window},
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,19 +67,13 @@ pub fn open_task_session(
         }
 
         if process.command_exists("opencode") {
-            process.run_status(
-                "tmux",
-                &[
-                    "new-session",
-                    "-d",
-                    "-s",
-                    &session,
-                    "-c",
-                    path.to_string_lossy().as_ref(),
-                    "opencode",
-                ],
-                None,
-            )?;
+            let opencode_args = opencode::launch_args(path);
+            let path_str = path.to_string_lossy();
+            let mut tmux_args = vec!["new-session", "-d", "-s", &session, "-c", &path_str];
+            for arg in &opencode_args {
+                tmux_args.push(arg.as_str());
+            }
+            process.run_status("tmux", &tmux_args, None)?;
         } else {
             process.warn("'opencode' is not available; opening tmux with shell panes only.");
             process.run_status(
@@ -129,10 +126,18 @@ pub fn park_task(
     process: ProcessRunner,
     repo_key: &str,
     branch: &str,
+    path: &Path,
 ) -> Result<ParkResult, String> {
     let session = session_name(repo_key, branch);
     let has_tmux_session = has_session(process, &session);
     let mut result = ParkResult::AlreadyParked;
+    let title = format!("{repo_key} {branch}");
+
+    if let Err(error) = opencode::rename_latest_session_title(path, &title) {
+        process.warn(&format!(
+            "Failed to update opencode session title for {repo_key} {branch}: {error}"
+        ));
+    }
 
     for action in park_teardown_actions(has_tmux_session) {
         match action {
