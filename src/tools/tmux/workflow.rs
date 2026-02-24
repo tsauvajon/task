@@ -6,6 +6,7 @@ use super::{
 };
 use crate::{
     runtime::process::ProcessRunner,
+    tools::opencode,
     tools::vscodium::workflow::{close_task_windows, open_task_window},
 };
 
@@ -64,19 +65,13 @@ pub fn open_task_session(
         }
 
         if process.command_exists("opencode") {
-            process.run_status(
-                "tmux",
-                &[
-                    "new-session",
-                    "-d",
-                    "-s",
-                    &session,
-                    "-c",
-                    path.to_string_lossy().as_ref(),
-                    "opencode",
-                ],
-                None,
-            )?;
+            let opencode_args = opencode::launch_args(path);
+            let path_str = path.to_string_lossy();
+            let mut tmux_args = vec!["new-session", "-d", "-s", &session, "-c", &path_str];
+            for arg in &opencode_args {
+                tmux_args.push(arg.as_str());
+            }
+            process.run_status("tmux", &tmux_args, None)?;
         } else {
             process.warn("'opencode' is not available; opening tmux with shell panes only.");
             process.run_status(
@@ -174,7 +169,7 @@ pub fn finish_task_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{TeardownAction, finish_teardown_actions, park_teardown_actions};
+    use super::{finish_teardown_actions, park_teardown_actions, TeardownAction};
 
     #[test]
     fn park_teardown_closes_codium_before_tmux_when_session_exists() {
