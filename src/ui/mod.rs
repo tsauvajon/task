@@ -192,42 +192,15 @@ fn apply_intent(
             Ok(None)
         }
         UiIntent::FilterBackspace => {
-            match state.view {
-                ViewMode::Tasks => {
-                    state.task_filter.pop();
-                    state.apply_task_filter();
-                }
-                ViewMode::Repos => {
-                    state.repo_filter.pop();
-                    state.apply_repo_filter();
-                }
-            }
+            state.filter_backspace();
             Ok(None)
         }
         UiIntent::FilterClear => {
-            match state.view {
-                ViewMode::Tasks => {
-                    state.task_filter.clear();
-                    state.apply_task_filter();
-                }
-                ViewMode::Repos => {
-                    state.repo_filter.clear();
-                    state.apply_repo_filter();
-                }
-            }
+            state.filter_clear();
             Ok(None)
         }
         UiIntent::FilterAppend(ch) => {
-            match state.view {
-                ViewMode::Tasks => {
-                    state.task_filter.push(ch);
-                    state.apply_task_filter();
-                }
-                ViewMode::Repos => {
-                    state.repo_filter.push(ch);
-                    state.apply_repo_filter();
-                }
-            }
+            state.filter_append(ch);
             Ok(None)
         }
         UiIntent::CreateCancel => {

@@ -73,7 +73,7 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
         .filter(|row| row.status == TaskStatus::Open)
         .count();
     let total_count = state.task_rows.len();
-    let task_title = view_title("Tasks", &state.task_filter);
+    let task_title = view_title("Tasks", &state.filter_text);
 
     let header = Row::new(vec!["STATUS", "REPO", "BRANCH", "PATH"]).style(
         Style::default()
@@ -136,7 +136,7 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
 fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
     let filtered_count = state.repo_filtered_indices.len();
     let repos_count = state.repo_rows.len();
-    let repo_title = view_title("Repos", &state.repo_filter);
+    let repo_title = view_title("Repos", &state.filter_text);
 
     let header = Row::new(vec!["REPO", "OPEN", "PARKED"]).style(
         Style::default()
