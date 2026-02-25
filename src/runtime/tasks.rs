@@ -12,6 +12,7 @@ use dialoguer::{Select, theme::ColorfulTheme};
 use crate::{
     error::{Error, Result},
     runtime::{
+        BranchName, RepoKey,
         paths::WorkspacePaths,
         process,
         task_rows::{TaskRow, TaskStatus, build_task_rows},
@@ -35,7 +36,6 @@ use crate::{
             workflow::{OpenResult, open_task_session},
         },
     },
-    types::{BranchName, RepoKey},
 };
 
 #[derive(Debug, Clone)]
@@ -46,7 +46,10 @@ pub struct TaskResolver {
 
 impl TaskResolver {
     pub fn new(layout: WorkspacePaths, codium_trusted_roots: Vec<PathBuf>) -> Self {
-        Self { layout, codium_trusted_roots }
+        Self {
+            layout,
+            codium_trusted_roots,
+        }
     }
 
     pub fn layout(&self) -> &WorkspacePaths {
@@ -126,7 +129,12 @@ impl TaskResolver {
         )))
     }
 
-    pub fn launch_workspace(&self, repo_key: &RepoKey, branch: &BranchName, path: &Path) -> Result<()> {
+    pub fn launch_workspace(
+        &self,
+        repo_key: &RepoKey,
+        branch: &BranchName,
+        path: &Path,
+    ) -> Result<()> {
         if path.join(".envrc").exists() && direnv::is_available() {
             let _ = direnv::allow(path);
         }
@@ -322,9 +330,7 @@ impl TaskResolver {
         }
 
         self.current_repo_key().ok_or_else(|| {
-            Error::failed(
-                "Repository not specified and current directory is not a task worktree.",
-            )
+            Error::failed("Repository not specified and current directory is not a task worktree.")
         })
     }
 
@@ -339,7 +345,6 @@ impl TaskResolver {
         }
         Ok(rows)
     }
-
 }
 
 fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>> {
@@ -379,7 +384,9 @@ fn choose_repo_key_interactive(query: &str, choices: &[String]) -> Result<String
     }
 
     let index = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt(format!("Multiple repositories match '{query}'. Choose one:"))
+        .with_prompt(format!(
+            "Multiple repositories match '{query}'. Choose one:"
+        ))
         .items(choices)
         .default(0)
         .interact_opt()?;

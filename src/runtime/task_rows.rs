@@ -4,11 +4,11 @@ use std::{
 };
 
 use crate::{
+    runtime::{branch_name::BranchName, repo_key::RepoKey},
     tools::{
-        git::worktrees::{branch_from_ref, branch_from_worktree_path, WorktreeEntry},
+        git::worktrees::{WorktreeEntry, branch_from_ref, branch_from_worktree_path},
         tmux::naming::session_name,
     },
-    types::{BranchName, RepoKey},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,10 +75,10 @@ pub fn build_task_rows(
 mod tests {
     use std::path::Path;
 
-    use super::{build_task_rows, TaskRow, TaskStatus};
+    use super::{TaskRow, TaskStatus, build_task_rows};
     use crate::{
+        runtime::{BranchName, RepoKey},
         tools::git::worktrees::WorktreeEntry,
-        types::{BranchName, RepoKey},
     };
 
     #[test]

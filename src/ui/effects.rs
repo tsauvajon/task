@@ -7,44 +7,29 @@ use super::{
 };
 use crate::{error::Result, runtime::environment::RuntimeEnvironment};
 
-pub(super) fn refresh_task_rows(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<()> {
+pub(super) fn refresh_task_rows(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let rows = load_task_rows(context, state.task_repo_scope.as_deref())?;
     state.set_task_rows(rows);
     Ok(())
 }
 
-pub(super) fn refresh_repo_rows(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<()> {
+pub(super) fn refresh_repo_rows(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let rows = load_repo_rows(context)?;
     state.set_repo_rows(rows);
     Ok(())
 }
 
-pub(super) fn finish_and_refresh(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<()> {
+pub(super) fn finish_and_refresh(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     finish_selected(context, state)?;
     refresh_task_rows(context, state)
 }
 
-pub(super) fn park_and_refresh(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<()> {
+pub(super) fn park_and_refresh(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     park_selected(context, state)?;
     refresh_task_rows(context, state)
 }
 
-pub(super) fn create_action(
-    context: &RuntimeEnvironment,
-    state: &UiState,
-) -> Result<UiAction> {
+pub(super) fn create_action(context: &RuntimeEnvironment, state: &UiState) -> Result<UiAction> {
     let branch = state.create_branch.trim();
     if branch.is_empty() {
         return Err(crate::error::Error::failed("Branch name cannot be empty"));

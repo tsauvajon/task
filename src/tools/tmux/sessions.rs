@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::runner::{run_tmux_capture, run_tmux_status};
+use super::run::{run_tmux_capture, run_tmux_status};
 
 pub fn is_available() -> bool {
     crate::runtime::process::command_exists("tmux")

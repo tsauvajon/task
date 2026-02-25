@@ -1,8 +1,7 @@
 use crate::{
     error::Result,
-    runtime::{environment::RuntimeEnvironment, process},
+    runtime::{RepoKey, environment::RuntimeEnvironment, process},
     tools::git::repo::{default_clone_url, parse_repo_input},
-    types::RepoKey,
 };
 
 pub fn run(env: &RuntimeEnvironment, repo_url: &str, repo_key: Option<String>) -> Result<()> {

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     naming::session_name,
-    runner::run_tmux_status,
+    run::run_tmux_status,
     sessions::{has_session, is_available},
 };
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
     runtime::process::{self, CommandPlan},
     tools::{
         opencode,
-        vscodium::workflow::{close_task_windows, codium_state, open_task_window, CodiumState},
+        vscodium::workflow::{CodiumState, close_task_windows, codium_state, open_task_window},
     },
 };
 
@@ -196,8 +196,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        finish_teardown_actions, new_session_args, park_teardown_actions, SessionStartup,
-        TeardownAction,
+        SessionStartup, TeardownAction, finish_teardown_actions, new_session_args,
+        park_teardown_actions,
     };
     use crate::runtime::process::{CommandPlan, ManagedTool};
 

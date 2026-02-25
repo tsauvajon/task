@@ -103,11 +103,7 @@ fn parse_nix_store_path<'a>(stdout: &'a str, package: &str) -> Result<&'a str> {
         .lines()
         .find_map(|line| {
             let line = line.trim();
-            if line.is_empty() {
-                None
-            } else {
-                Some(line)
-            }
+            if line.is_empty() { None } else { Some(line) }
         })
         .ok_or_else(|| {
             Error::failed(format!(

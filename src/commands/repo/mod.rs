@@ -1,5 +1,5 @@
 use crate::{
-    commands::{clone, RepoCommand},
+    commands::{RepoCommand, clone},
     error::Result,
     runtime::{environment::RuntimeEnvironment, process},
 };

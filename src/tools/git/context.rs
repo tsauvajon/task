@@ -4,10 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::runner::run_git_capture;
+use super::run::run_git_capture;
 use crate::{
     error::{Error, Result},
-    types::RepoKey,
+    runtime::RepoKey,
 };
 
 pub fn current_root() -> Result<PathBuf> {
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn repo_key_from_common_dir_extracts_key() {
-        use crate::types::RepoKey;
+        use crate::runtime::RepoKey;
         let key = repo_key_from_common_dir(
             Path::new("/tmp/custom/repos/github.com/tsauvajon/task.git"),
             Path::new("/tmp/custom/repos"),
@@ -101,7 +101,7 @@ mod tests {
         .expect("create symlink parent dir");
         symlink(&real_repos_dir, &symlinked_repos_dir).expect("create repos symlink");
 
-        use crate::types::RepoKey;
+        use crate::runtime::RepoKey;
         let key = repo_key_from_common_dir(&repo_common_dir, &symlinked_repos_dir)
             .expect("resolve repo key with symlink");
         assert_eq!(key, Some(RepoKey::new("github.com/tsauvajon/task")));

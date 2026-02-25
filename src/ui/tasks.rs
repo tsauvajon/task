@@ -9,7 +9,7 @@ use crate::{
         git::repo::{default_clone_url, parse_repo_input},
         tmux::{
             sessions::is_available,
-            workflow::{park_task, ParkResult},
+            workflow::{ParkResult, park_task},
         },
     },
 };
@@ -150,7 +150,7 @@ pub(super) fn resolve_create_repo(
 }
 
 pub(super) fn clone_from_input(context: &RuntimeEnvironment, input: &str) -> Result<String> {
-    use crate::types::RepoKey;
+    use crate::runtime::RepoKey;
     let (repo_url, explicit_repo_key) = parse_clone_input_args(input)?;
     let parsed = parse_repo_input(repo_url);
     let clone_url = parsed

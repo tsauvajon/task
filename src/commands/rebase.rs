@@ -1,11 +1,10 @@
 use crate::{
     error::{Error, Result},
-    runtime::{environment::RuntimeEnvironment, process},
+    runtime::{BranchName, RepoKey, environment::RuntimeEnvironment, process},
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs, rev_exists},
         worktrees::rebase,
     },
-    types::{BranchName, RepoKey},
 };
 
 pub fn run(context: &RuntimeEnvironment, args: &[String]) -> Result<()> {
@@ -106,7 +105,7 @@ fn resolve_rebase_target(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_rebase_input, RebaseInput};
+    use super::{RebaseInput, parse_rebase_input};
 
     #[test]
     fn parse_rebase_input_handles_current_task() {

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{gitdir::GitDir, runner::run_git_status};
+use super::{gitdir::GitDir, run::run_git_status};
 use crate::error::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,8 +75,8 @@ pub fn worktree_remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<()
 
 pub fn status_porcelain(worktree: &Path) -> Result<String> {
     let worktree_str = worktree.to_string_lossy();
-    // This uses `-C` rather than `--git-dir`, so call runner directly.
-    super::runner::run_git_capture(
+    // This uses `-C` rather than `--git-dir`, so call run directly.
+    super::run::run_git_capture(
         &["-C", worktree_str.as_ref(), "status", "--porcelain"],
         None,
     )
@@ -160,7 +160,7 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        branch_from_ref, branch_from_worktree_path, parse_worktree_porcelain, WorktreeEntry,
+        WorktreeEntry, branch_from_ref, branch_from_worktree_path, parse_worktree_porcelain,
     };
 
     #[test]

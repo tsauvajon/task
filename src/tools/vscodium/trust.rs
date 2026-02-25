@@ -4,8 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusqlite::{params, Connection, OptionalExtension};
-use serde_json::{json, Value};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::{Value, json};
 
 use crate::error::{Error, Result};
 

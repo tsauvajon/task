@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::types::{BranchName, RepoKey};
+use crate::runtime::{BranchName, RepoKey};
 
 #[derive(Debug, Clone)]
 pub struct WorkspacePaths {
@@ -35,7 +35,7 @@ impl WorkspacePaths {
 #[cfg(test)]
 mod tests {
     use super::WorkspacePaths;
-    use crate::types::{BranchName, RepoKey};
+    use crate::runtime::{branch_name::BranchName, repo_key::RepoKey};
 
     #[test]
     fn workspace_paths_build_expected_paths() {

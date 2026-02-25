@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use super::{
-    runner::{run_corepack_status, run_pnpm_status},
-    runtime::{corepack_available, enable_corepack, resolve_runner, Runner},
+use super::runtime::{
+    Runner, corepack_available, enable_corepack, resolve_runner, run_corepack_status,
+    run_pnpm_status,
 };
 use crate::error::Result;
 

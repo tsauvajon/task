@@ -1,9 +1,6 @@
 use std::path::Path;
 
-use super::{
-    gitdir::GitDir,
-    runner::run_git_capture,
-};
+use super::{gitdir::GitDir, run::run_git_capture};
 use crate::error::Result;
 
 pub fn detect_default_base(gitdir: &Path) -> String {
@@ -28,7 +25,12 @@ pub fn detect_default_base(gitdir: &Path) -> String {
     }
 
     if gd
-        .status(&["show-ref", "--verify", "--quiet", "refs/remotes/origin/master"])
+        .status(&[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/remotes/origin/master",
+        ])
         .is_ok()
     {
         return "origin/master".to_string();
@@ -62,7 +64,14 @@ pub fn rev_exists(gitdir: &Path, revision: &str) -> bool {
 pub fn current_branch(root: &Path) -> Option<String> {
     let root_str = root.to_string_lossy();
     run_git_capture(
-        &["-C", root_str.as_ref(), "symbolic-ref", "--quiet", "--short", "HEAD"],
+        &[
+            "-C",
+            root_str.as_ref(),
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "HEAD",
+        ],
         None,
     )
     .ok()

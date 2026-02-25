@@ -1,4 +1,4 @@
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 
 use crate::{
     error::{Error, Result},

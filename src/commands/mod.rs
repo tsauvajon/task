@@ -168,7 +168,7 @@ fn should_auto_onboard(command: Option<&Command>) -> bool {
 mod tests {
     use clap::Parser;
 
-    use super::{should_auto_onboard, Cli, Command, CompletionShell, RepoCommand};
+    use super::{Cli, Command, CompletionShell, RepoCommand, should_auto_onboard};
 
     #[test]
     fn cli_parses_start_command() {

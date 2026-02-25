@@ -1,4 +1,4 @@
-use crate::{runtime::task_rows::TaskRow, types::RepoKey};
+use crate::runtime::{RepoKey, task_rows::TaskRow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputMode {
@@ -301,7 +301,7 @@ mod tests {
     }
 
     fn repo_row(repo: &str, open_tasks: usize, parked_tasks: usize) -> RepoRow {
-        use crate::types::RepoKey;
+        use crate::runtime::RepoKey;
         RepoRow {
             repo: RepoKey::new(repo),
             open_tasks,
@@ -310,7 +310,7 @@ mod tests {
     }
 
     fn sample_task_row() -> TaskRow {
-        use crate::types::{BranchName, RepoKey};
+        use crate::runtime::{BranchName, RepoKey};
         TaskRow {
             status: TaskStatus::Open,
             repo: RepoKey::new("github.com/acme/app"),
@@ -341,7 +341,7 @@ mod tests {
     }
 
     fn task_row_for_repo(repo: &str) -> TaskRow {
-        use crate::types::{BranchName, RepoKey};
+        use crate::runtime::{BranchName, RepoKey};
         TaskRow {
             status: TaskStatus::Open,
             repo: RepoKey::new(repo),

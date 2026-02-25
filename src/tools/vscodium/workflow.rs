@@ -142,7 +142,7 @@ fn cleanup_user_data_dir(user_data_dir: &Path) -> Result<()> {
 mod tests {
     use std::{fs, path::Path};
 
-    use super::{cleanup_user_data_dir, codium_args, codium_state, CodiumState};
+    use super::{CodiumState, cleanup_user_data_dir, codium_args, codium_state};
 
     #[test]
     fn codium_args_use_expected_flags() {

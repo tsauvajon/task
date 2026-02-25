@@ -3,7 +3,7 @@ use std::{
     io::{self, IsTerminal},
 };
 
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::{Select, theme::ColorfulTheme};
 
 use crate::{
     error::{Error, Result},
@@ -177,10 +177,10 @@ fn match_repo_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{match_repo_name, match_task_name, resolve_match, MatchKind};
-    use crate::{
-        runtime::task_rows::{TaskRow, TaskStatus},
-        types::{BranchName, RepoKey},
+    use super::{MatchKind, match_repo_name, match_task_name, resolve_match};
+    use crate::runtime::{
+        BranchName, RepoKey,
+        task_rows::{TaskRow, TaskStatus},
     };
 
     #[test]

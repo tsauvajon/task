@@ -5,7 +5,7 @@ use self::{
         clone_and_refresh, create_action, finish_and_refresh, park_and_refresh, refresh_repo_rows,
         refresh_task_rows,
     },
-    intent::{from_key, UiIntent},
+    intent::{UiIntent, from_key},
     render::render,
     state::{InputMode, UiAction, UiState, ViewMode},
     tasks::{initial_repo_scope, load_repo_rows, load_task_rows},

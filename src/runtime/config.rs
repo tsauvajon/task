@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dialoguer::{theme::ColorfulTheme, Input};
+use dialoguer::{Input, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -191,7 +191,7 @@ pub fn is_interactive_terminal() -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{expand_path, to_runtime_config, TaskConfigFile, VscodiumConfigFile};
+    use super::{TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
 
     #[test]
     fn expand_path_supports_tilde_prefix() {

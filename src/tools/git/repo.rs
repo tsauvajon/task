@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use super::{gitdir::GitDir, runner::run_git_capture};
+use super::{gitdir::GitDir, run::run_git_capture};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +23,10 @@ pub fn parse_repo_input(input: &str) -> RepoInput {
     } else {
         None
     };
-    RepoInput { repo_key, clone_url }
+    RepoInput {
+        repo_key,
+        clone_url,
+    }
 }
 
 pub fn default_clone_url(input: &str) -> String {
@@ -129,7 +132,12 @@ pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<()> {
     }
 
     run_git_capture(
-        &["clone", "--bare", repo_url, gitdir.to_string_lossy().as_ref()],
+        &[
+            "clone",
+            "--bare",
+            repo_url,
+            gitdir.to_string_lossy().as_ref(),
+        ],
         None,
     )
     .map(|_| ())

@@ -3,9 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::run::{run_git_capture, run_git_status};
 use crate::error::Result;
-
-use super::runner::{run_git_capture, run_git_status};
 
 /// A bare git repository directory (`.git` or a bare repo path).
 ///

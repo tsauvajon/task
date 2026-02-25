@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::{
     error::{Error, Result},
-    runtime::{environment::RuntimeEnvironment, process},
+    runtime::{BranchName, environment::RuntimeEnvironment, process},
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs, ref_exists, rev_exists},
         worktrees::{
@@ -10,7 +10,6 @@ use crate::{
             worktree_add_tracking_remote_branch,
         },
     },
-    types::BranchName,
 };
 
 pub fn run(
