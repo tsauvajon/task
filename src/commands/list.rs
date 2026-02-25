@@ -26,9 +26,13 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), S
     }
 
     let repo_keys = context.available_repo_keys()?;
+    let mut skipped_repos = Vec::new();
     for repo_key in repo_keys {
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
-        rows.extend(context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+        match context.repo_task_rows(&repo_key, &gitdir, &open_sessions) {
+            Ok(repo_rows) => rows.extend(repo_rows),
+            Err(error) => skipped_repos.push((repo_key, error)),
+        }
     }
 
     if rows.is_empty() {
@@ -38,6 +42,10 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), S
         ));
     } else {
         context.print_task_rows_table(&rows);
+    }
+
+    for (repo_key, error) in skipped_repos {
+        context.warn(&format!("Skipping {repo_key}: {error}"));
     }
 
     Ok(())

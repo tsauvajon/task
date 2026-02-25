@@ -106,9 +106,35 @@ pub fn resolve_repo_query(query: &str, available_keys: &[String]) -> ResolveResu
     ResolveResult::Ambiguous(matches)
 }
 
+pub fn is_valid_bare_repo(gitdir: &Path) -> bool {
+    if !gitdir.is_dir() {
+        return false;
+    }
+
+    let gitdir_str = gitdir.to_string_lossy();
+    run_git_capture(
+        &[
+            "--git-dir",
+            &gitdir_str,
+            "rev-parse",
+            "--is-bare-repository",
+        ],
+        None,
+    )
+    .is_ok_and(|output| output.trim() == "true")
+}
+
 pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<(), String> {
     if gitdir.is_dir() {
-        return Ok(());
+        if is_valid_bare_repo(gitdir) {
+            return Ok(());
+        }
+        fs::remove_dir_all(gitdir).map_err(|e| {
+            format!(
+                "Failed to remove invalid bare repo at {}: {e}",
+                gitdir.display()
+            )
+        })?;
     }
 
     if let Some(parent) = gitdir.parent() {
@@ -143,8 +169,11 @@ fn looks_like_host_path(input: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{env, fs};
+
     use super::{
-        ResolveResult, default_clone_url, normalize_repo_key, parse_repo_input, resolve_repo_query,
+        ResolveResult, default_clone_url, is_valid_bare_repo, normalize_repo_key, parse_repo_input,
+        resolve_repo_query,
     };
 
     #[test]
@@ -245,5 +274,40 @@ mod tests {
                 "github.com/tsauvajon/goto".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn is_valid_bare_repo_rejects_nonexistent_path() {
+        let path = env::temp_dir().join("task-rs-nonexistent-bare-repo");
+        let _ = fs::remove_dir_all(&path);
+        assert!(!is_valid_bare_repo(&path));
+    }
+
+    #[test]
+    fn is_valid_bare_repo_rejects_empty_directory() {
+        let path = env::temp_dir().join("task-rs-empty-bare-repo");
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create empty dir");
+
+        assert!(!is_valid_bare_repo(&path));
+
+        let _ = fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn is_valid_bare_repo_accepts_real_bare_repo() {
+        let path = env::temp_dir().join("task-rs-valid-bare-repo.git");
+        let _ = fs::remove_dir_all(&path);
+
+        // Create a real bare repo using git init --bare
+        let output = std::process::Command::new("git")
+            .args(["init", "--bare", &path.to_string_lossy()])
+            .output()
+            .expect("git init --bare");
+        assert!(output.status.success(), "git init --bare failed");
+
+        assert!(is_valid_bare_repo(&path));
+
+        let _ = fs::remove_dir_all(&path);
     }
 }

@@ -20,7 +20,10 @@ use crate::{
         git::{
             context::{current_root, git_common_dir, repo_key_from_common_dir},
             refs::current_branch,
-            repo::{ResolveResult, clone_bare_repo, parse_repo_input, resolve_repo_query},
+            repo::{
+                ResolveResult, clone_bare_repo, is_valid_bare_repo, parse_repo_input,
+                resolve_repo_query,
+            },
             worktrees::{
                 branch_from_worktree_path, parse_worktree_porcelain, worktree_list_porcelain,
             },
@@ -105,8 +108,15 @@ impl TaskResolver {
 
     pub fn clone_bare_repo(&self, repo_url: &str, repo_key: &str) -> Result<(), String> {
         let gitdir = self.layout.repo_gitdir_path(repo_key);
-        if gitdir.is_dir() {
+        if gitdir.is_dir() && is_valid_bare_repo(&gitdir) {
             return Ok(());
+        }
+
+        if gitdir.is_dir() {
+            self.process.warn(&format!(
+                "Removing invalid bare repo at {}; will re-clone",
+                gitdir.display()
+            ));
         }
 
         self.process.log(&format!("Cloning bare repo: {repo_url}"));
