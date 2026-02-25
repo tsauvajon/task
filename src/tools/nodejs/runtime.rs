@@ -1,3 +1,6 @@
+use super::runner::{
+    corepack_binary_available, node_binary_available, pnpm_binary_available, run_corepack_status,
+};
 use crate::runtime::process::ProcessRunner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7,22 +10,26 @@ pub enum Runner {
 }
 
 pub fn node_available(process: ProcessRunner) -> bool {
-    process.command_exists("node")
+    let _ = process;
+    node_binary_available()
 }
 
 pub fn corepack_available(process: ProcessRunner) -> bool {
-    process.command_exists("corepack")
+    let _ = process;
+    corepack_binary_available()
 }
 
 pub fn enable_corepack(process: ProcessRunner) -> Result<(), String> {
-    process.run_status("corepack", &["enable"], None)
+    let _ = process;
+    run_corepack_status(&["enable"], None)
 }
 
 pub fn resolve_runner(process: ProcessRunner) -> Option<Runner> {
-    if process.command_exists("pnpm") {
+    let _ = process;
+    if pnpm_binary_available() {
         return Some(Runner::Pnpm);
     }
-    if corepack_available(process) {
+    if corepack_binary_available() {
         return Some(Runner::Corepack);
     }
     None

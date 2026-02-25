@@ -2,13 +2,14 @@ use std::path::{Path, PathBuf};
 
 use super::{
     naming::session_name,
+    runner::run_tmux_status,
     sessions::{has_session, is_available},
 };
 use crate::{
     runtime::process::{CommandPlan, ProcessRunner},
     tools::{
         opencode,
-        vscodium::workflow::{CodiumState, close_task_windows, codium_state, open_task_window},
+        vscodium::workflow::{close_task_windows, codium_state, open_task_window, CodiumState},
     },
 };
 
@@ -128,16 +129,15 @@ pub fn open_task_session(
                 SessionStartup::WithOpencode(opencode_command),
             );
             let tmux_args_ref: Vec<&str> = tmux_args.iter().map(String::as_str).collect();
-            process.run_status("tmux", &tmux_args_ref, None)?;
+            run_tmux_status(&tmux_args_ref, None)?;
         } else {
             process.warn("'opencode' is not available; opening tmux with shell panes only.");
             let tmux_args = new_session_args(&session, path, SessionStartup::ShellOnly);
             let tmux_args_ref: Vec<&str> = tmux_args.iter().map(String::as_str).collect();
-            process.run_status("tmux", &tmux_args_ref, None)?;
+            run_tmux_status(&tmux_args_ref, None)?;
         }
 
-        process.run_status(
-            "tmux",
+        run_tmux_status(
             &[
                 "split-window",
                 "-v",
@@ -148,11 +148,7 @@ pub fn open_task_session(
             ],
             None,
         )?;
-        process.run_status(
-            "tmux",
-            &["select-pane", "-t", &format!("{session}:0.0")],
-            None,
-        )?;
+        run_tmux_status(&["select-pane", "-t", &format!("{session}:0.0")], None)?;
     }
 
     if std::env::var("TMUX")
@@ -160,9 +156,9 @@ pub fn open_task_session(
         .filter(|value| !value.is_empty())
         .is_some()
     {
-        process.run_status("tmux", &["switch-client", "-t", &session], None)?;
+        run_tmux_status(&["switch-client", "-t", &session], None)?;
     } else {
-        process.run_status("tmux", &["attach-session", "-t", &session], None)?;
+        run_tmux_status(&["attach-session", "-t", &session], None)?;
     }
 
     Ok(OpenResult::Attached)
@@ -191,7 +187,7 @@ pub fn park_task(
                 let _ = close_task_windows(process, repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
-                process.run_status("tmux", &["kill-session", "-t", &session], None)?;
+                run_tmux_status(&["kill-session", "-t", &session], None)?;
                 result = ParkResult::Parked;
             }
         }
@@ -215,7 +211,7 @@ pub fn finish_task_session(
                 let _ = close_task_windows(process, repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
-                process.run_status("tmux", &["kill-session", "-t", &session], None)?;
+                run_tmux_status(&["kill-session", "-t", &session], None)?;
             }
         }
     }
@@ -228,8 +224,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        SessionStartup, TeardownAction, finish_teardown_actions, new_session_args,
-        park_teardown_actions,
+        finish_teardown_actions, new_session_args, park_teardown_actions, SessionStartup,
+        TeardownAction,
     };
     use crate::runtime::process::{CommandPlan, ManagedTool};
 

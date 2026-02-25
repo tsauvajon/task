@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use super::runtime::{Runner, corepack_available, enable_corepack, resolve_runner};
+use super::{
+    runner::{run_corepack_status, run_pnpm_status},
+    runtime::{corepack_available, enable_corepack, resolve_runner, Runner},
+};
 use crate::runtime::process::ProcessRunner;
 
 pub fn run_project_checks(process: ProcessRunner, path: &Path) -> Result<bool, String> {
@@ -12,59 +15,48 @@ pub fn run_project_checks(process: ProcessRunner, path: &Path) -> Result<bool, S
         return Ok(false);
     };
 
-    install_dependencies(process, runner, path)?;
-    run_quality_commands(process, runner, path)?;
+    install_dependencies(runner, path)?;
+    run_quality_commands(runner, path)?;
     Ok(true)
 }
 
-fn install_dependencies(process: ProcessRunner, runner: Runner, path: &Path) -> Result<(), String> {
-    let (program, frozen_args, fallback_args) = match runner {
-        Runner::Pnpm => (
-            "pnpm",
-            &["install", "--frozen-lockfile"][..],
-            &["install"][..],
-        ),
-        Runner::Corepack => (
-            "corepack",
-            &["pnpm", "install", "--frozen-lockfile"][..],
-            &["pnpm", "install"][..],
-        ),
-    };
-
-    if process
-        .run_status(program, frozen_args, Some(path))
-        .is_err()
-    {
-        process.run_status(program, fallback_args, Some(path))?;
+fn install_dependencies(runner: Runner, path: &Path) -> Result<(), String> {
+    match runner {
+        Runner::Pnpm => {
+            if run_pnpm_status(&["install", "--frozen-lockfile"], Some(path)).is_err() {
+                run_pnpm_status(&["install"], Some(path))?;
+            }
+        }
+        Runner::Corepack => {
+            if run_corepack_status(&["pnpm", "install", "--frozen-lockfile"], Some(path)).is_err() {
+                run_corepack_status(&["pnpm", "install"], Some(path))?;
+            }
+        }
     }
-
     Ok(())
 }
 
-fn run_quality_commands(process: ProcessRunner, runner: Runner, path: &Path) -> Result<(), String> {
-    let (program, commands): (&str, &[&[&str]]) = match runner {
-        Runner::Pnpm => (
-            "pnpm",
-            &[
-                &["run", "lint", "--if-present"],
-                &["run", "check", "--if-present"],
-                &["run", "test", "--if-present"],
-                &["run", "build", "--if-present"],
-            ],
-        ),
-        Runner::Corepack => (
-            "corepack",
-            &[
-                &["pnpm", "run", "lint", "--if-present"],
-                &["pnpm", "run", "check", "--if-present"],
-                &["pnpm", "run", "test", "--if-present"],
-                &["pnpm", "run", "build", "--if-present"],
-            ],
-        ),
+fn run_quality_commands(runner: Runner, path: &Path) -> Result<(), String> {
+    let commands: &[&[&str]] = match runner {
+        Runner::Pnpm => &[
+            &["run", "lint", "--if-present"],
+            &["run", "check", "--if-present"],
+            &["run", "test", "--if-present"],
+            &["run", "build", "--if-present"],
+        ],
+        Runner::Corepack => &[
+            &["pnpm", "run", "lint", "--if-present"],
+            &["pnpm", "run", "check", "--if-present"],
+            &["pnpm", "run", "test", "--if-present"],
+            &["pnpm", "run", "build", "--if-present"],
+        ],
     };
 
     for args in commands {
-        process.run_status(program, args, Some(path))?;
+        match runner {
+            Runner::Pnpm => run_pnpm_status(args, Some(path))?,
+            Runner::Corepack => run_corepack_status(args, Some(path))?,
+        }
     }
 
     Ok(())

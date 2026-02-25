@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use super::runner::{run_tmux_capture, run_tmux_status};
 use crate::runtime::process::ProcessRunner;
 
 pub fn is_available(process: ProcessRunner) -> bool {
@@ -11,7 +12,7 @@ pub fn list_sessions(process: ProcessRunner) -> HashSet<String> {
         return HashSet::new();
     }
 
-    let output = match process.run_capture("tmux", &["ls"], None) {
+    let output = match run_tmux_capture(&["ls"], None) {
         Ok(output) => output,
         Err(_) => return HashSet::new(),
     };
@@ -19,10 +20,8 @@ pub fn list_sessions(process: ProcessRunner) -> HashSet<String> {
     parse_sessions(&output)
 }
 
-pub fn has_session(process: ProcessRunner, session: &str) -> bool {
-    process
-        .run_status("tmux", &["has-session", "-t", session], None)
-        .is_ok()
+pub fn has_session(_process: ProcessRunner, session: &str) -> bool {
+    run_tmux_status(&["has-session", "-t", session], None).is_ok()
 }
 
 fn parse_sessions(output: &str) -> HashSet<String> {

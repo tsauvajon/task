@@ -5,28 +5,28 @@ use std::{
 
 use crate::runtime::process::ProcessRunner;
 
+use super::asdf_runner::{run_asdf_capture, run_asdf_status};
+
 const NODEJS_PLUGIN_REPO: &str = "https://github.com/asdf-vm/asdf-nodejs.git";
 
 pub fn is_available(process: ProcessRunner) -> bool {
     process.command_exists("asdf")
 }
 
-pub fn has_nodejs_plugin(process: ProcessRunner) -> bool {
-    list_plugins(process)
+pub fn has_nodejs_plugin(_process: ProcessRunner) -> bool {
+    list_plugins()
         .ok()
         .map(|plugins| plugins.lines().any(|line| line.trim() == "nodejs"))
         .unwrap_or(false)
 }
 
 pub fn install_nodejs_plugin(process: ProcessRunner) -> Result<(), String> {
-    process.run_status(
-        "asdf",
-        &["plugin", "add", "nodejs", NODEJS_PLUGIN_REPO],
-        None,
-    )
+    let _ = process; // availability already checked by caller
+    run_asdf_status(&["plugin", "add", "nodejs", NODEJS_PLUGIN_REPO], None)
 }
 
 pub fn import_nodejs_release_keyring(process: ProcessRunner) -> Result<(), String> {
+    let _ = process;
     let Some(script_path) = nodejs_release_keyring_script_path() else {
         return Ok(());
     };
@@ -35,7 +35,8 @@ pub fn import_nodejs_release_keyring(process: ProcessRunner) -> Result<(), Strin
         return Ok(());
     }
 
-    process.run_status(script_path.as_os_str(), &[], None)
+    // This runs a shell script, not asdf itself — keep using ProcessRunner.
+    ProcessRunner.run_status(script_path.as_os_str(), &[], None)
 }
 
 pub fn install_from_user_tool_versions(process: ProcessRunner) -> Result<bool, String> {
@@ -46,7 +47,8 @@ pub fn install_from_user_tool_versions(process: ProcessRunner) -> Result<bool, S
         return Ok(false);
     }
 
-    install(process, None)?;
+    install(None)?;
+    let _ = process;
     Ok(true)
 }
 
@@ -58,16 +60,17 @@ pub fn install_from_workspace_tool_versions(
         return Ok(false);
     }
 
-    install(process, Some(path))?;
+    install(Some(path))?;
+    let _ = process;
     Ok(true)
 }
 
-fn list_plugins(process: ProcessRunner) -> Result<String, String> {
-    process.run_capture("asdf", &["plugin", "list"], None)
+fn list_plugins() -> Result<String, String> {
+    run_asdf_capture(&["plugin", "list"], None)
 }
 
-fn install(process: ProcessRunner, cwd: Option<&Path>) -> Result<(), String> {
-    process.run_status("asdf", &["install"], cwd)
+fn install(cwd: Option<&Path>) -> Result<(), String> {
+    run_asdf_status(&["install"], cwd)
 }
 
 fn nodejs_release_keyring_script_path() -> Option<PathBuf> {

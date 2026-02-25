@@ -1,5 +1,7 @@
 pub mod asdf;
+mod asdf_runner;
 pub mod direnv;
+mod direnv_runner;
 pub mod git;
 pub mod nodejs;
 pub mod opencode;
