@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::{gitdir::GitDir, run::run_git_capture};
+use super::{gitdir::GitDir, run::capture};
 use crate::error::Result;
 
 pub fn detect_default_base(gitdir: &Path) -> String {
@@ -63,7 +63,7 @@ pub fn rev_exists(gitdir: &Path, revision: &str) -> bool {
 
 pub fn current_branch(root: &Path) -> Option<String> {
     let root_str = root.to_string_lossy();
-    run_git_capture(
+    capture(
         &[
             "-C",
             root_str.as_ref(),

@@ -10,11 +10,11 @@ use crate::{
 
 static ASDF: NixRunner = NixRunner::new(ManagedTool::Asdf);
 
-fn run_asdf_capture(args: &[&str], cwd: Option<&Path>) -> Result<String> {
+fn capture(args: &[&str], cwd: Option<&Path>) -> Result<String> {
     ASDF.capture(args, cwd)
 }
 
-fn run_asdf_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
+fn status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
     ASDF.status(args, cwd)
 }
 
@@ -32,7 +32,7 @@ pub fn has_nodejs_plugin() -> bool {
 }
 
 pub fn install_nodejs_plugin() -> Result<()> {
-    run_asdf_status(&["plugin", "add", "nodejs", NODEJS_PLUGIN_REPO], None)
+    status(&["plugin", "add", "nodejs", NODEJS_PLUGIN_REPO], None)
 }
 
 pub fn import_nodejs_release_keyring() -> Result<()> {
@@ -68,11 +68,11 @@ pub fn install_from_workspace_tool_versions(path: &Path) -> Result<bool> {
 }
 
 fn list_plugins() -> Result<String> {
-    run_asdf_capture(&["plugin", "list"], None)
+    capture(&["plugin", "list"], None)
 }
 
 fn install(cwd: Option<&Path>) -> Result<()> {
-    run_asdf_status(&["install"], cwd)
+    status(&["install"], cwd)
 }
 
 fn nodejs_release_keyring_script_path() -> Option<PathBuf> {

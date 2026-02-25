@@ -5,10 +5,7 @@ use crate::{
     runtime::{BranchName, environment::RuntimeEnvironment, process},
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs, ref_exists, rev_exists},
-        worktrees::{
-            worktree_add_existing_branch, worktree_add_from_base,
-            worktree_add_tracking_remote_branch,
-        },
+        worktrees::{add_existing_branch, add_from_base, add_tracking_remote_branch},
     },
 };
 
@@ -53,14 +50,14 @@ pub fn run(
     }
 
     if ref_exists(&gitdir, &format!("refs/heads/{branch}")) {
-        worktree_add_existing_branch(&gitdir, &worktree, branch)?;
+        add_existing_branch(&gitdir, &worktree, branch)?;
     } else if ref_exists(&gitdir, &format!("refs/remotes/origin/{branch}")) {
-        worktree_add_tracking_remote_branch(&gitdir, &worktree, branch)?;
+        add_tracking_remote_branch(&gitdir, &worktree, branch)?;
     } else {
         if !rev_exists(&gitdir, &base_ref) {
             return Err(Error::not_found(format!("Base ref not found: {base_ref}")));
         }
-        worktree_add_from_base(&gitdir, &worktree, branch, &base_ref)?;
+        add_from_base(&gitdir, &worktree, branch, &base_ref)?;
     }
 
     context

@@ -4,9 +4,9 @@ use crate::{
     error::{Error, Result},
     runtime::{environment::RuntimeEnvironment, process},
     tools::{
-        git::worktrees::{status_porcelain, worktree_prune, worktree_remove},
-        tmux::workflow::finish_task_session,
-        vscodium::workflow::cleanup_task_state,
+        git::worktrees::{prune, remove, status_porcelain},
+        tmux::workflow::finish_session,
+        vscodium::workflow::cleanup,
     },
 };
 
@@ -32,7 +32,7 @@ pub fn run(
             "Worktree metadata is stale for {}. Pruning stale entries.",
             worktree.display()
         ));
-        worktree_prune(&gitdir)?;
+        prune(&gitdir)?;
 
         if worktree.exists() {
             let is_empty = fs::read_dir(&worktree)?.next().is_none();
@@ -46,8 +46,8 @@ pub fn run(
             }
         }
 
-        finish_task_session(&repo_key, &branch)?;
-        if let Err(err) = cleanup_task_state(&repo_key, &branch) {
+        finish_session(&repo_key, &branch)?;
+        if let Err(err) = cleanup(&repo_key, &branch) {
             process::warn(&format!(
                 "Failed to remove task editor state for {repo_key} {branch}: {err}"
             ));
@@ -64,14 +64,14 @@ pub fn run(
         }
     }
 
-    worktree_remove(&gitdir, &worktree, force)?;
+    remove(&gitdir, &worktree, force)?;
 
     if let Some(parent) = worktree.parent() {
         let _ = fs::remove_dir(parent);
     }
 
-    finish_task_session(&repo_key, &branch)?;
-    if let Err(err) = cleanup_task_state(&repo_key, &branch) {
+    finish_session(&repo_key, &branch)?;
+    if let Err(err) = cleanup(&repo_key, &branch) {
         process::warn(&format!(
             "Failed to remove task editor state for {repo_key} {branch}: {err}"
         ));

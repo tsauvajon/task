@@ -1,7 +1,7 @@
 use crate::{
     error::{Error, Result},
     runtime::{environment::RuntimeEnvironment, process},
-    tools::git::worktrees::worktree_list,
+    tools::git::worktrees::list,
 };
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
@@ -17,7 +17,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
         if !gitdir.is_dir() {
             return Err(Error::not_found(format!("Repo not found: {repo_key}")));
         }
-        let output = worktree_list(&gitdir)?;
+        let output = list(&gitdir)?;
         print!("{output}");
         return Ok(());
     }
@@ -35,7 +35,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
         println!();
         println!("[{repo_key}]");
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
-        let output = worktree_list(&gitdir)?;
+        let output = list(&gitdir)?;
         print!("{output}");
     }
 

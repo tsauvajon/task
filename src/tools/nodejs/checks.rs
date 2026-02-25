@@ -1,8 +1,7 @@
 use std::path::Path;
 
 use super::runtime::{
-    Runner, corepack_available, enable_corepack, resolve_runner, run_corepack_status,
-    run_pnpm_status,
+    Runner, corepack_available, corepack_status, enable_corepack, pnpm_status, resolve_runner,
 };
 use crate::error::Result;
 
@@ -25,13 +24,13 @@ pub fn run_project_checks(path: &Path) -> Result<bool> {
 fn install_dependencies(runner: Runner, path: &Path) -> Result<()> {
     match runner {
         Runner::Pnpm => {
-            if run_pnpm_status(&["install", "--frozen-lockfile"], Some(path)).is_err() {
-                run_pnpm_status(&["install"], Some(path))?;
+            if pnpm_status(&["install", "--frozen-lockfile"], Some(path)).is_err() {
+                pnpm_status(&["install"], Some(path))?;
             }
         }
         Runner::Corepack => {
-            if run_corepack_status(&["pnpm", "install", "--frozen-lockfile"], Some(path)).is_err() {
-                run_corepack_status(&["pnpm", "install"], Some(path))?;
+            if corepack_status(&["pnpm", "install", "--frozen-lockfile"], Some(path)).is_err() {
+                corepack_status(&["pnpm", "install"], Some(path))?;
             }
         }
     }
@@ -41,7 +40,7 @@ fn install_dependencies(runner: Runner, path: &Path) -> Result<()> {
 fn run_quality_commands(runner: Runner, path: &Path) -> Result<()> {
     let (run_cmd, commands): (RunFn, &[&[&str]]) = match runner {
         Runner::Pnpm => (
-            run_pnpm_status,
+            pnpm_status,
             &[
                 &["run", "lint", "--if-present"],
                 &["run", "check", "--if-present"],
@@ -50,7 +49,7 @@ fn run_quality_commands(runner: Runner, path: &Path) -> Result<()> {
             ],
         ),
         Runner::Corepack => (
-            run_corepack_status,
+            corepack_status,
             &[
                 &["pnpm", "run", "lint", "--if-present"],
                 &["pnpm", "run", "check", "--if-present"],

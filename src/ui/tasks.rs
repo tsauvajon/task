@@ -9,7 +9,7 @@ use crate::{
         git::repo::{default_clone_url, parse_repo_input},
         tmux::{
             sessions::is_available,
-            workflow::{ParkResult, park_task},
+            workflow::{ParkResult, park},
         },
     },
 };
@@ -104,7 +104,7 @@ pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) 
         ));
     }
 
-    match park_task(&row.repo, &row.branch, &row.path)? {
+    match park(&row.repo, &row.branch, &row.path)? {
         ParkResult::Parked => state.message = format!("Parked task: {} {}", row.repo, row.branch),
         ParkResult::AlreadyParked => {
             state.message = format!("Task already parked: {} {}", row.repo, row.branch)

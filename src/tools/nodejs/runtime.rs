@@ -11,11 +11,11 @@ static PNPM: NixRunner = NixRunner::new(ManagedTool::Pnpm);
 static COREPACK: NixRunner = NixRunner::new(ManagedTool::Corepack);
 static NODE: NixRunner = NixRunner::new(ManagedTool::Node);
 
-pub fn run_pnpm_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
+pub fn pnpm_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
     PNPM.status(args, cwd)
 }
 
-pub fn run_corepack_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
+pub fn corepack_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
     COREPACK.status(args, cwd)
 }
 
@@ -49,7 +49,7 @@ pub fn corepack_available() -> bool {
 }
 
 pub fn enable_corepack() -> Result<()> {
-    run_corepack_status(&["enable"], None)
+    corepack_status(&["enable"], None)
 }
 
 pub fn resolve_runner() -> Option<Runner> {

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::tools::tmux::naming::session_name;
 
-pub fn task_key(repo_key: &str, branch: &str) -> String {
+pub fn key(repo_key: &str, branch: &str) -> String {
     session_name(repo_key, branch)
 }
 
@@ -21,25 +21,25 @@ pub fn codium_state_root() -> PathBuf {
         .join("codium")
 }
 
-pub fn task_user_data_dir(repo_key: &str, branch: &str) -> PathBuf {
-    codium_state_root().join(task_key(repo_key, branch))
+pub fn user_data_dir(repo_key: &str, branch: &str) -> PathBuf {
+    codium_state_root().join(key(repo_key, branch))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{task_key, task_user_data_dir};
+    use super::{key, user_data_dir};
 
     #[test]
-    fn task_key_matches_tmux_session_name() {
+    fn key_matches_tmux_session_name() {
         assert_eq!(
-            task_key("github.com/acme/tool", "feat/test.1"),
+            key("github.com/acme/tool", "feat/test.1"),
             "github_com_acme_tool-feat_test_1"
         );
     }
 
     #[test]
-    fn task_user_data_dir_contains_sanitized_task_key() {
-        let dir = task_user_data_dir("github.com/acme/tool", "feat/test.1");
+    fn user_data_dir_contains_sanitized_key() {
+        let dir = user_data_dir("github.com/acme/tool", "feat/test.1");
         assert!(dir.ends_with("codium/github_com_acme_tool-feat_test_1"));
     }
 }

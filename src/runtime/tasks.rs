@@ -26,14 +26,12 @@ use crate::{
                 ResolveResult, clone_bare_repo, is_valid_bare_repo, parse_repo_input,
                 resolve_repo_query,
             },
-            worktrees::{
-                branch_from_worktree_path, parse_worktree_porcelain, worktree_list_porcelain,
-            },
+            worktrees::{branch_from_worktree_path, list_porcelain, parse_worktree_porcelain},
         },
         nodejs,
         tmux::{
             sessions::list_sessions,
-            workflow::{OpenResult, open_task_session},
+            workflow::{OpenResult, open_session},
         },
     },
 };
@@ -146,8 +144,7 @@ impl TaskResolver {
             }
         }
 
-        if open_task_session(repo_key, branch, path, &self.codium_trusted_roots)?
-            == OpenResult::Attached
+        if open_session(repo_key, branch, path, &self.codium_trusted_roots)? == OpenResult::Attached
         {
             return Ok(());
         }
@@ -162,7 +159,7 @@ impl TaskResolver {
         gitdir: &Path,
         open_sessions: &HashSet<String>,
     ) -> Result<Vec<TaskRow>> {
-        let output = worktree_list_porcelain(gitdir)?;
+        let output = list_porcelain(gitdir)?;
         let entries = parse_worktree_porcelain(&output);
         let open_session_list: Vec<String> = open_sessions.iter().cloned().collect();
         Ok(build_task_rows(

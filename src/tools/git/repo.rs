@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use super::{gitdir::GitDir, run::run_git_capture};
+use super::{gitdir::GitDir, run::capture};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +131,7 @@ pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    run_git_capture(
+    capture(
         &[
             "clone",
             "--bare",

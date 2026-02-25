@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     naming::session_name,
-    run::run_tmux_status,
+    run::status,
     sessions::{has_session, is_available},
 };
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
     runtime::process::{self, CommandPlan},
     tools::{
         opencode,
-        vscodium::workflow::{CodiumState, close_task_windows, codium_state, open_task_window},
+        vscodium::workflow::{CodiumState, close_windows, codium_state, open_window},
     },
 };
 
@@ -83,7 +83,7 @@ fn ensure_codium_running(
     match codium_state(repo_key, branch) {
         Ok(CodiumState::Running) => {}
         Ok(CodiumState::NotRunning) | Err(_) => {
-            if let Err(err) = open_task_window(repo_key, branch, path, codium_trusted_roots) {
+            if let Err(err) = open_window(repo_key, branch, path, codium_trusted_roots) {
                 process::warn(&format!(
                     "Failed to open VSCodium for {repo_key} {branch}: {err}"
                 ));
@@ -92,7 +92,7 @@ fn ensure_codium_running(
     }
 }
 
-pub fn open_task_session(
+pub fn open_session(
     repo_key: &str,
     branch: &str,
     path: &Path,
@@ -115,10 +115,10 @@ pub fn open_task_session(
 
         let args = new_session_args(&session, path, startup);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        run_tmux_status(&arg_refs, None)?;
+        status(&arg_refs, None)?;
 
         let path_str = path.to_string_lossy();
-        run_tmux_status(
+        status(
             &[
                 "split-window",
                 "-v",
@@ -129,7 +129,7 @@ pub fn open_task_session(
             ],
             None,
         )?;
-        run_tmux_status(&["select-pane", "-t", &format!("{session}:0.0")], None)?;
+        status(&["select-pane", "-t", &format!("{session}:0.0")], None)?;
     }
 
     if std::env::var("TMUX")
@@ -137,15 +137,15 @@ pub fn open_task_session(
         .filter(|v| !v.is_empty())
         .is_some()
     {
-        run_tmux_status(&["switch-client", "-t", &session], None)?;
+        status(&["switch-client", "-t", &session], None)?;
     } else {
-        run_tmux_status(&["attach-session", "-t", &session], None)?;
+        status(&["attach-session", "-t", &session], None)?;
     }
 
     Ok(OpenResult::Attached)
 }
 
-pub fn park_task(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
+pub fn park(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
     let session = session_name(repo_key, branch);
     let has_tmux_session = has_session(&session);
     let mut result = ParkResult::AlreadyParked;
@@ -160,10 +160,10 @@ pub fn park_task(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult
     for action in park_teardown_actions(has_tmux_session) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = close_task_windows(repo_key, branch);
+                let _ = close_windows(repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
-                run_tmux_status(&["kill-session", "-t", &session], None)?;
+                status(&["kill-session", "-t", &session], None)?;
                 result = ParkResult::Parked;
             }
         }
@@ -172,7 +172,7 @@ pub fn park_task(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult
     Ok(result)
 }
 
-pub fn finish_task_session(repo_key: &str, branch: &str) -> Result<()> {
+pub fn finish_session(repo_key: &str, branch: &str) -> Result<()> {
     let tmux_available = is_available();
     let session = session_name(repo_key, branch);
     let has_tmux_session = tmux_available && has_session(&session);
@@ -180,10 +180,10 @@ pub fn finish_task_session(repo_key: &str, branch: &str) -> Result<()> {
     for action in finish_teardown_actions(tmux_available, has_tmux_session) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = close_task_windows(repo_key, branch);
+                let _ = close_windows(repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
-                run_tmux_status(&["kill-session", "-t", &session], None)?;
+                status(&["kill-session", "-t", &session], None)?;
             }
         }
     }

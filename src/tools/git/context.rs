@@ -4,20 +4,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::run::run_git_capture;
+use super::run::capture;
 use crate::{
     error::{Error, Result},
     runtime::RepoKey,
 };
 
 pub fn current_root() -> Result<PathBuf> {
-    let root = run_git_capture(&["rev-parse", "--show-toplevel"], None)?;
+    let root = capture(&["rev-parse", "--show-toplevel"], None)?;
     Ok(PathBuf::from(root.trim()))
 }
 
 pub fn git_common_dir(root: &Path) -> Result<PathBuf> {
     let root_str = root.to_string_lossy();
-    let common_dir_raw = run_git_capture(
+    let common_dir_raw = capture(
         &["-C", root_str.as_ref(), "rev-parse", "--git-common-dir"],
         None,
     )?;

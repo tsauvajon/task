@@ -3,7 +3,7 @@ use crate::{
     runtime::{environment::RuntimeEnvironment, process},
     tools::tmux::{
         sessions::is_available,
-        workflow::{ParkResult, park_task},
+        workflow::{ParkResult, park},
     },
 };
 
@@ -17,7 +17,7 @@ pub fn run(context: &RuntimeEnvironment) -> Result<()> {
         ));
     }
 
-    match park_task(&repo_key, &branch, &root)? {
+    match park(&repo_key, &branch, &root)? {
         ParkResult::Parked => process::log(&format!("Parked task: {repo_key} {branch}")),
         ParkResult::AlreadyParked => {
             process::log(&format!("Task already parked: {repo_key} {branch}"))

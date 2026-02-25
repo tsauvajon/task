@@ -1,7 +1,7 @@
 use crate::{
     error::{Error, Result},
     runtime::environment::RuntimeEnvironment,
-    tools::git::worktrees::worktree_prune,
+    tools::git::worktrees::prune,
 };
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
@@ -11,5 +11,5 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     if !gitdir.is_dir() {
         return Err(Error::not_found(format!("Repo not found: {repo_key}")));
     }
-    worktree_prune(&gitdir)
+    prune(&gitdir)
 }

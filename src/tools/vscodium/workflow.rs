@@ -1,13 +1,13 @@
 use std::{fs, path::Path, thread, time::Duration};
 
 use super::{
-    naming::task_user_data_dir,
+    naming::user_data_dir,
     process_match::{cmdline_matches_user_data_dir, parse_cmdline_bytes},
     trust::seed_trusted_roots,
 };
 use crate::{error::Result, runtime::process};
 
-pub fn open_task_window(
+pub fn open_window(
     repo_key: &str,
     branch: &str,
     worktree_path: &Path,
@@ -17,7 +17,7 @@ pub fn open_task_window(
         return Ok(());
     }
 
-    let user_data_dir = task_user_data_dir(repo_key, branch);
+    let user_data_dir = user_data_dir(repo_key, branch);
     fs::create_dir_all(&user_data_dir)?;
     if let Err(err) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
         process::warn(&format!(
@@ -47,7 +47,7 @@ pub enum CodiumState {
 }
 
 pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState> {
-    let user_data_dir = task_user_data_dir(repo_key, branch);
+    let user_data_dir = user_data_dir(repo_key, branch);
     let pids = codium_pids_for_user_data_dir(&user_data_dir)?;
     if pids.is_empty() {
         Ok(CodiumState::NotRunning)
@@ -56,16 +56,16 @@ pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState> {
     }
 }
 
-pub fn close_task_windows(repo_key: &str, branch: &str) -> Result<()> {
-    let user_data_dir = task_user_data_dir(repo_key, branch);
+pub fn close_windows(repo_key: &str, branch: &str) -> Result<()> {
+    let user_data_dir = user_data_dir(repo_key, branch);
     for pid in codium_pids_for_user_data_dir(&user_data_dir)? {
         terminate_pid(pid)?;
     }
     Ok(())
 }
 
-pub fn cleanup_task_state(repo_key: &str, branch: &str) -> Result<()> {
-    let user_data_dir = task_user_data_dir(repo_key, branch);
+pub fn cleanup(repo_key: &str, branch: &str) -> Result<()> {
+    let user_data_dir = user_data_dir(repo_key, branch);
     cleanup_user_data_dir(&user_data_dir)
 }
 

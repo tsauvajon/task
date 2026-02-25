@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::run::{run_git_capture, run_git_status};
+use super::run::{capture, status};
 use crate::error::Result;
 
 /// A bare git repository directory (`.git` or a bare repo path).
@@ -30,7 +30,7 @@ impl<'a> GitDir<'a> {
         let path_str = self.path_str();
         let mut full_args = vec!["--git-dir", path_str.as_ref()];
         full_args.extend_from_slice(args);
-        run_git_capture(&full_args, None)
+        capture(&full_args, None)
     }
 
     /// Run a git command with `--git-dir <self>` prepended, checking exit status.
@@ -38,7 +38,7 @@ impl<'a> GitDir<'a> {
         let path_str = self.path_str();
         let mut full_args = vec!["--git-dir", path_str.as_ref()];
         full_args.extend_from_slice(args);
-        run_git_status(&full_args, None)
+        status(&full_args, None)
     }
 
     /// Run a git command with `--git-dir <self>` prepended, checking exit status,
@@ -47,7 +47,7 @@ impl<'a> GitDir<'a> {
         let path_str = self.path_str();
         let mut full_args = vec!["--git-dir", path_str.as_ref()];
         full_args.extend_from_slice(args);
-        run_git_status(&full_args, Some(cwd))
+        status(&full_args, Some(cwd))
     }
 
     fn path_str(&self) -> Cow<'_, str> {

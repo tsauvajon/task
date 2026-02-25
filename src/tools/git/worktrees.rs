@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use super::{gitdir::GitDir, run::run_git_status};
+use super::{
+    gitdir::GitDir,
+    run::{capture, status},
+};
 use crate::error::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,24 +13,20 @@ pub struct WorktreeEntry {
     pub is_bare: bool,
 }
 
-pub fn worktree_list(gitdir: &Path) -> Result<String> {
+pub fn list(gitdir: &Path) -> Result<String> {
     GitDir::new(gitdir).capture(&["worktree", "list"])
 }
 
-pub fn worktree_list_porcelain(gitdir: &Path) -> Result<String> {
+pub fn list_porcelain(gitdir: &Path) -> Result<String> {
     GitDir::new(gitdir).capture(&["worktree", "list", "--porcelain"])
 }
 
-pub fn worktree_add_existing_branch(gitdir: &Path, worktree: &Path, branch: &str) -> Result<()> {
+pub fn add_existing_branch(gitdir: &Path, worktree: &Path, branch: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
     GitDir::new(gitdir).status(&["worktree", "add", worktree_str.as_ref(), branch])
 }
 
-pub fn worktree_add_tracking_remote_branch(
-    gitdir: &Path,
-    worktree: &Path,
-    branch: &str,
-) -> Result<()> {
+pub fn add_tracking_remote_branch(gitdir: &Path, worktree: &Path, branch: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
     let remote = format!("origin/{branch}");
     GitDir::new(gitdir).status(&[
@@ -41,12 +40,7 @@ pub fn worktree_add_tracking_remote_branch(
     ])
 }
 
-pub fn worktree_add_from_base(
-    gitdir: &Path,
-    worktree: &Path,
-    branch: &str,
-    base_ref: &str,
-) -> Result<()> {
+pub fn add_from_base(gitdir: &Path, worktree: &Path, branch: &str, base_ref: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
     GitDir::new(gitdir).status(&[
         "worktree",
@@ -58,11 +52,11 @@ pub fn worktree_add_from_base(
     ])
 }
 
-pub fn worktree_prune(gitdir: &Path) -> Result<()> {
+pub fn prune(gitdir: &Path) -> Result<()> {
     GitDir::new(gitdir).status(&["worktree", "prune", "--verbose", "--expire", "now"])
 }
 
-pub fn worktree_remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<()> {
+pub fn remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
     let mut args = vec!["worktree", "remove"];
     if force {
@@ -76,7 +70,7 @@ pub fn worktree_remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<()
 pub fn status_porcelain(worktree: &Path) -> Result<String> {
     let worktree_str = worktree.to_string_lossy();
     // This uses `-C` rather than `--git-dir`, so call run directly.
-    super::run::run_git_capture(
+    capture(
         &["-C", worktree_str.as_ref(), "status", "--porcelain"],
         None,
     )
@@ -84,7 +78,7 @@ pub fn status_porcelain(worktree: &Path) -> Result<String> {
 
 pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
-    run_git_status(&["-C", worktree_str.as_ref(), "rebase", base_ref], None)
+    status(&["-C", worktree_str.as_ref(), "rebase", base_ref], None)
 }
 
 pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
@@ -204,14 +198,14 @@ branch refs/heads/rewrite-in-rust\n\n";
     }
 
     #[test]
-    fn worktree_prune_uses_immediate_expiry() {
+    fn prune_uses_immediate_expiry() {
         // Validate args via the public API (can't test private arg-building directly now)
         // Integration tested at a higher level.
     }
 
     #[test]
-    fn worktree_remove_uses_repo_parent_as_cwd() {
-        // The cwd is now derived inline from gitdir.parent() in worktree_remove.
+    fn remove_uses_repo_parent_as_cwd() {
+        // The cwd is now derived inline from gitdir.parent() in remove.
         // This is implicitly tested by the higher-level integration tests.
     }
 }
