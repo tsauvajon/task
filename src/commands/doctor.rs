@@ -40,13 +40,13 @@ fn check(context: &RuntimeEnvironment) -> DoctorReport {
 
     println!("repos_dir: {}", context.repos_dir().display());
     println!("wt_dir: {}", context.wt_dir().display());
-    for cmd in ["git", "tmux", "vim", "opencode", "nix", "direnv", "asdf"] {
-        if context.command_exists(cmd) {
-            println!("[ok]      {cmd}");
-        } else {
-            println!("[missing] {cmd}");
-            missing_required = true;
-        }
+    if context.command_exists("nix") {
+        println!("[ok]      nix");
+        println!("[ok]      managed tools launch via nix run");
+    } else {
+        println!("[missing] nix");
+        println!("[missing] managed tools launch via nix run");
+        missing_required = true;
     }
 
     if context.repos_dir().is_dir() && context.wt_dir().is_dir() {

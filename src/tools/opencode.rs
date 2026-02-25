@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use crate::runtime::process::ProcessRunner;
+use crate::runtime::process::{CommandPlan, ManagedTool, ProcessRunner};
 
 pub fn auth_storage_reachable(process: ProcessRunner) -> bool {
     process
@@ -10,15 +10,28 @@ pub fn auth_storage_reachable(process: ProcessRunner) -> bool {
         .is_ok()
 }
 
-/// Returns the opencode launch arguments for a given worktree directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OpencodeLaunch {
+    Fresh,
+    Resume { session_id: String },
+}
+
+/// Returns the full command plan for launching opencode for a worktree.
 ///
-/// If a previous opencode session exists for that exact directory, returns
-/// `["opencode", "--session", "<id>"]` so the TUI resumes it. Otherwise
-/// returns `["opencode"]` to start a fresh session.
-pub fn launch_args(directory: &Path) -> Vec<String> {
-    match last_session_id(directory) {
-        Some(id) => vec!["opencode".to_string(), "--session".to_string(), id],
-        None => vec!["opencode".to_string()],
+/// If a previous opencode session exists for that exact directory, the command
+/// includes `--session <id>` so the TUI resumes it.
+pub fn launch_command(directory: &Path) -> CommandPlan {
+    let launch = match last_session_id(directory) {
+        Some(id) => OpencodeLaunch::Resume { session_id: id },
+        None => OpencodeLaunch::Fresh,
+    };
+
+    match launch {
+        OpencodeLaunch::Fresh => CommandPlan::for_managed_tool(ManagedTool::Opencode, Vec::new()),
+        OpencodeLaunch::Resume { session_id } => CommandPlan::for_managed_tool(
+            ManagedTool::Opencode,
+            vec!["--session".to_string(), session_id],
+        ),
     }
 }
 
@@ -167,10 +180,14 @@ mod tests {
     }
 
     #[test]
-    fn launch_args_returns_plain_opencode_when_no_db() {
+    fn launch_command_uses_nix_wrapped_opencode_when_no_db() {
         // Point at a non-existent path — opencode_db_path() returns None.
-        let args = launch_args(Path::new("/nonexistent/worktree"));
-        assert_eq!(args, vec!["opencode".to_string()]);
+        let plan = launch_command(Path::new("/nonexistent/worktree"));
+        assert_eq!(plan.program(), "nix");
+        assert_eq!(
+            plan.args(),
+            vec!["run", "nixpkgs#opencode", "--", "opencode"]
+        );
     }
 
     #[test]

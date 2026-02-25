@@ -5,7 +5,7 @@ use super::{
     sessions::{has_session, is_available},
 };
 use crate::{
-    runtime::process::ProcessRunner,
+    runtime::process::{CommandPlan, ProcessRunner},
     tools::{
         opencode,
         vscodium::workflow::{close_task_windows, open_task_window},
@@ -30,6 +30,12 @@ enum TeardownAction {
     KillTmuxSession,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SessionStartup {
+    ShellOnly,
+    WithOpencode(CommandPlan),
+}
+
 fn park_teardown_actions(has_tmux_session: bool) -> Vec<TeardownAction> {
     let mut actions = vec![TeardownAction::CloseCodium];
     if has_tmux_session {
@@ -44,6 +50,24 @@ fn finish_teardown_actions(tmux_available: bool, has_tmux_session: bool) -> Vec<
         actions.push(TeardownAction::KillTmuxSession);
     }
     actions
+}
+
+fn new_session_args(session: &str, path: &Path, startup: SessionStartup) -> Vec<String> {
+    let mut tmux_args = vec![
+        "new-session".to_string(),
+        "-d".to_string(),
+        "-s".to_string(),
+        session.to_string(),
+        "-c".to_string(),
+        path.to_string_lossy().to_string(),
+    ];
+
+    if let SessionStartup::WithOpencode(command) = startup {
+        tmux_args.push(command.program().to_string());
+        tmux_args.extend(command.args().iter().cloned());
+    }
+
+    tmux_args
 }
 
 pub fn open_task_session(
@@ -67,27 +91,19 @@ pub fn open_task_session(
         }
 
         if process.command_exists("opencode") {
-            let opencode_args = opencode::launch_args(path);
-            let path_str = path.to_string_lossy();
-            let mut tmux_args = vec!["new-session", "-d", "-s", &session, "-c", &path_str];
-            for arg in &opencode_args {
-                tmux_args.push(arg.as_str());
-            }
-            process.run_status("tmux", &tmux_args, None)?;
+            let opencode_command = opencode::launch_command(path);
+            let tmux_args = new_session_args(
+                &session,
+                path,
+                SessionStartup::WithOpencode(opencode_command),
+            );
+            let tmux_args_ref: Vec<&str> = tmux_args.iter().map(String::as_str).collect();
+            process.run_status("tmux", &tmux_args_ref, None)?;
         } else {
             process.warn("'opencode' is not available; opening tmux with shell panes only.");
-            process.run_status(
-                "tmux",
-                &[
-                    "new-session",
-                    "-d",
-                    "-s",
-                    &session,
-                    "-c",
-                    path.to_string_lossy().as_ref(),
-                ],
-                None,
-            )?;
+            let tmux_args = new_session_args(&session, path, SessionStartup::ShellOnly);
+            let tmux_args_ref: Vec<&str> = tmux_args.iter().map(String::as_str).collect();
+            process.run_status("tmux", &tmux_args_ref, None)?;
         }
 
         process.run_status(
@@ -179,7 +195,13 @@ pub fn finish_task_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{TeardownAction, finish_teardown_actions, park_teardown_actions};
+    use std::path::Path;
+
+    use super::{
+        SessionStartup, TeardownAction, finish_teardown_actions, new_session_args,
+        park_teardown_actions,
+    };
+    use crate::runtime::process::{CommandPlan, ManagedTool};
 
     #[test]
     fn park_teardown_closes_codium_before_tmux_when_session_exists() {
@@ -215,5 +237,58 @@ mod tests {
     fn finish_teardown_only_closes_codium_when_session_missing() {
         let actions = finish_teardown_actions(true, false);
         assert_eq!(actions, vec![TeardownAction::CloseCodium]);
+    }
+
+    #[test]
+    fn new_session_args_shell_only_does_not_include_opencode_command() {
+        let args = new_session_args(
+            "repo-branch",
+            Path::new("/tmp/wt/repo"),
+            SessionStartup::ShellOnly,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "new-session",
+                "-d",
+                "-s",
+                "repo-branch",
+                "-c",
+                "/tmp/wt/repo"
+            ]
+        );
+    }
+
+    #[test]
+    fn new_session_args_with_opencode_uses_nix_wrapped_command() {
+        let opencode_command = CommandPlan::for_managed_tool(
+            ManagedTool::Opencode,
+            vec!["--session".to_string(), "ses_123".to_string()],
+        );
+
+        let args = new_session_args(
+            "repo-branch",
+            Path::new("/tmp/wt/repo"),
+            SessionStartup::WithOpencode(opencode_command),
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "new-session",
+                "-d",
+                "-s",
+                "repo-branch",
+                "-c",
+                "/tmp/wt/repo",
+                "nix",
+                "run",
+                "nixpkgs#opencode",
+                "--",
+                "opencode",
+                "--session",
+                "ses_123",
+            ]
+        );
     }
 }

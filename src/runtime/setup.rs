@@ -66,10 +66,14 @@ pub fn run_full_setup(context: &RuntimeEnvironment) -> Result<(), String> {
     context.log(&format!("Repos dir: {}", context.repos_dir().display()));
     context.log(&format!("Worktrees dir: {}", context.wt_dir().display()));
 
-    if !asdf::is_available(context.process()) {
-        context.warn(
-            "asdf not found. Install toolchain first (nix profile install path:~/flakes#toolchain).",
+    if !context.command_exists("nix") {
+        return Err(
+            "nix is required for setup. Install nix and retry 'task bootstrap'.".to_string(),
         );
+    }
+
+    if !asdf::is_available(context.process()) {
+        context.warn("asdf could not be launched via nix. Skipping asdf-managed runtime setup.");
     } else {
         if !asdf::has_nodejs_plugin(context.process()) {
             context.log("Installing asdf nodejs plugin");
