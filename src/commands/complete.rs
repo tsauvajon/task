@@ -165,7 +165,7 @@ fn task_candidates(
                 .repo_task_rows(&repo_key, &gitdir, &open_sessions)
                 .unwrap_or_default()
                 .into_iter()
-                .map(|row| row.branch)
+                .map(|row| row.branch.to_string())
         })
         .collect::<HashSet<_>>()
         .into_iter()

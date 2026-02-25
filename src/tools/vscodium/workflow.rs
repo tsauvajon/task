@@ -5,23 +5,22 @@ use super::{
     process_match::{cmdline_matches_user_data_dir, parse_cmdline_bytes},
     trust::seed_trusted_roots,
 };
-use crate::{error::Result, runtime::process::ProcessRunner};
+use crate::{error::Result, runtime::process};
 
 pub fn open_task_window(
-    process: ProcessRunner,
     repo_key: &str,
     branch: &str,
     worktree_path: &Path,
     codium_trusted_roots: &[std::path::PathBuf],
 ) -> Result<()> {
-    if !process.command_exists("codium") {
+    if !process::command_exists("codium") {
         return Ok(());
     }
 
     let user_data_dir = task_user_data_dir(repo_key, branch);
     fs::create_dir_all(&user_data_dir)?;
     if let Err(err) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
-        process.warn(&format!(
+        process::warn(&format!(
             "Could not seed VSCodium trusted roots for {}: {err}",
             user_data_dir.display()
         ));
@@ -29,7 +28,7 @@ pub fn open_task_window(
 
     let args = codium_args(&user_data_dir, worktree_path);
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    process.spawn_detached("codium", &arg_refs, None)
+    process::spawn_detached("codium", &arg_refs, None)
 }
 
 fn codium_args(user_data_dir: &Path, worktree_path: &Path) -> Vec<String> {
@@ -57,10 +56,10 @@ pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState> {
     }
 }
 
-pub fn close_task_windows(process: ProcessRunner, repo_key: &str, branch: &str) -> Result<()> {
+pub fn close_task_windows(repo_key: &str, branch: &str) -> Result<()> {
     let user_data_dir = task_user_data_dir(repo_key, branch);
     for pid in codium_pids_for_user_data_dir(&user_data_dir)? {
-        terminate_pid(process, pid)?;
+        terminate_pid(pid)?;
     }
     Ok(())
 }
@@ -103,9 +102,9 @@ fn codium_pids_for_user_data_dir(user_data_dir: &Path) -> Result<Vec<u32>> {
     Ok(matches)
 }
 
-fn terminate_pid(process: ProcessRunner, pid: u32) -> Result<()> {
+fn terminate_pid(pid: u32) -> Result<()> {
     let pid_str = pid.to_string();
-    let _ = process.run_status("kill", &["-TERM", &pid_str], None);
+    let _ = process::run_status("kill", &["-TERM", &pid_str], None);
 
     for _ in 0..10 {
         if !pid_exists(pid) {
@@ -114,7 +113,7 @@ fn terminate_pid(process: ProcessRunner, pid: u32) -> Result<()> {
         thread::sleep(Duration::from_millis(50));
     }
 
-    let _ = process.run_status("kill", &["-KILL", &pid_str], None);
+    let _ = process::run_status("kill", &["-KILL", &pid_str], None);
 
     for _ in 0..10 {
         if !pid_exists(pid) {

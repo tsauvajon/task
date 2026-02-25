@@ -1,22 +1,9 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::OnceLock,
-};
+use std::path::Path;
 
-use crate::{
-    error::Result,
-    runtime::{
-        nix_store::{cached_nix_binary, run_nix_binary_status},
-        process::ManagedTool,
-    },
-};
+use crate::runtime::{nix_store::NixRunner, process::ManagedTool};
 
-static NIX_DIRENV_BINARY: OnceLock<Result<PathBuf>> = OnceLock::new();
+static DIRENV: NixRunner = NixRunner::new(ManagedTool::Direnv);
 
-fn direnv_binary() -> Result<&'static PathBuf> {
-    cached_nix_binary(&NIX_DIRENV_BINARY, ManagedTool::Direnv)
-}
-
-pub fn run_direnv_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
-    run_nix_binary_status(direnv_binary()?, args, cwd)
+pub fn run_direnv_status(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<()> {
+    DIRENV.status(args, cwd)
 }

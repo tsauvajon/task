@@ -2,11 +2,11 @@ use std::{env, path::PathBuf};
 
 use crate::{
     error::{Error, Result},
-    runtime::environment::RuntimeEnvironment,
+    runtime::{environment::RuntimeEnvironment, process},
     tools::{nodejs, rust},
 };
 
-pub fn run(env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()> {
+pub fn run(_env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()> {
     let path = resolve_check_path(worktree_path);
     if !path.is_dir() {
         return Err(Error::not_found(format!(
@@ -15,26 +15,25 @@ pub fn run(env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()> 
         )));
     }
 
-    let process = env.process();
     let mut checked = false;
 
     if path.join("Cargo.toml").exists() {
         checked = true;
-        process.log("Running Rust checks");
-        ensure_nix_available(process.nix_available())?;
-        rust::run_checks(process, &path)?;
+        process::log("Running Rust checks");
+        ensure_nix_available(process::nix_available())?;
+        rust::run_checks(&path)?;
     }
 
     if path.join("package.json").exists() {
         checked = true;
-        process.log("Running JS checks");
-        if !nodejs::checks::run_project_checks(process, &path)? {
-            process.warn("pnpm/corepack not found. Skipping JS checks.");
+        process::log("Running JS checks");
+        if !nodejs::checks::run_project_checks(&path)? {
+            process::warn("pnpm/corepack not found. Skipping JS checks.");
         }
     }
 
     if !checked {
-        process.warn("No Cargo.toml or package.json found. Nothing to run.");
+        process::warn("No Cargo.toml or package.json found. Nothing to run.");
     }
 
     Ok(())

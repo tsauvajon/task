@@ -1,6 +1,6 @@
 use crate::{
     error::{Error, Result},
-    runtime::{environment::RuntimeEnvironment, task_rows::TaskRow},
+    runtime::{environment::RuntimeEnvironment, process, task_rows::TaskRow},
 };
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
@@ -10,7 +10,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     let mut rows: Vec<TaskRow> = Vec::new();
     let repo_arg = repo_arg
         .map(str::to_string)
-        .or_else(|| context.tasks().current_repo_key());
+        .or_else(|| context.tasks().current_repo_key().map(String::from));
 
     if let Some(repo_arg) = repo_arg.as_deref() {
         let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
@@ -25,9 +25,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
                 .repo_task_rows(&repo_key, &gitdir, &open_sessions)?,
         );
         if rows.is_empty() {
-            context
-                .process()
-                .log(&format!("No tasks found for {repo_key}"));
+            process::log(&format!("No tasks found for {repo_key}"));
         } else {
             context.tasks().print_task_rows_table(&rows);
         }
@@ -48,7 +46,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     }
 
     if rows.is_empty() {
-        context.process().log(&format!(
+        process::log(&format!(
             "No tasks found under {}",
             context.layout().wt_dir().display()
         ));
@@ -57,9 +55,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     }
 
     for (repo_key, err) in skipped_repos {
-        context
-            .process()
-            .warn(&format!("Skipping {repo_key}: {err}"));
+        process::warn(&format!("Skipping {repo_key}: {err}"));
     }
 
     Ok(())

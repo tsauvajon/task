@@ -1,26 +1,13 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::OnceLock,
-};
+use std::path::Path;
 
-use crate::{
-    error::Result,
-    runtime::{
-        nix_store::{cached_nix_binary, run_nix_binary_capture, run_nix_binary_status},
-        process::ManagedTool,
-    },
-};
+use crate::runtime::{nix_store::NixRunner, process::ManagedTool};
 
-static NIX_TMUX_BINARY: OnceLock<Result<PathBuf>> = OnceLock::new();
+static TMUX: NixRunner = NixRunner::new(ManagedTool::Tmux);
 
-fn tmux_binary() -> Result<&'static PathBuf> {
-    cached_nix_binary(&NIX_TMUX_BINARY, ManagedTool::Tmux)
+pub(super) fn run_tmux_capture(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<String> {
+    TMUX.capture(args, cwd)
 }
 
-pub(super) fn run_tmux_capture(args: &[&str], cwd: Option<&Path>) -> Result<String> {
-    run_nix_binary_capture(tmux_binary()?, args, cwd)
-}
-
-pub(super) fn run_tmux_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
-    run_nix_binary_status(tmux_binary()?, args, cwd)
+pub(super) fn run_tmux_status(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<()> {
+    TMUX.status(args, cwd)
 }

@@ -3,6 +3,7 @@ use crate::{
     runtime::{
         config::is_interactive_terminal,
         environment::RuntimeEnvironment,
+        process,
         setup::{self, SetupApproval},
     },
     tools::opencode,
@@ -38,14 +39,13 @@ pub fn run(env: &RuntimeEnvironment, fix: bool) -> Result<()> {
 }
 
 fn check(env: &RuntimeEnvironment) -> DoctorReport {
-    let process = env.process();
     let layout = env.layout();
     let mut missing_required = false;
 
     println!("repos_dir: {}", layout.repos_dir().display());
     println!("wt_dir: {}", layout.wt_dir().display());
 
-    if process.command_exists("nix") {
+    if process::nix_available() {
         println!("[ok]      nix");
         println!("[ok]      managed tools launch via nix run");
     } else {
@@ -61,9 +61,9 @@ fn check(env: &RuntimeEnvironment) -> DoctorReport {
         missing_required = true;
     }
 
-    if process.command_exists("opencode") && opencode::auth_storage_reachable(process) {
+    if process::command_exists("opencode") && opencode::auth_storage_reachable() {
         println!("[ok]      opencode auth storage reachable");
-    } else if process.command_exists("opencode") {
+    } else if process::command_exists("opencode") {
         println!("[warn]    opencode auth storage not initialized yet");
     }
 

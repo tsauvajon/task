@@ -4,13 +4,11 @@ use rusqlite::Connection;
 
 use crate::{
     error::Result,
-    runtime::process::{CommandPlan, ManagedTool, ProcessRunner},
+    runtime::process::{CommandPlan, ManagedTool},
 };
 
-pub fn auth_storage_reachable(process: ProcessRunner) -> bool {
-    process
-        .run_status("opencode", &["auth", "list"], None)
-        .is_ok()
+pub fn auth_storage_reachable() -> bool {
+    crate::runtime::process::run_status("opencode", &["auth", "list"], None).is_ok()
 }
 
 /// Returns the full command plan for launching opencode for a worktree.

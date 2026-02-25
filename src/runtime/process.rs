@@ -116,136 +116,109 @@ impl CommandPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ProcessRunner;
-
-impl ProcessRunner {
-    /// Returns true if the named tool is available.
-    ///
-    /// For tools with a nix package mapping, availability is determined by
-    /// whether `nix` itself is on PATH (the tool will be fetched via `nix run`
-    /// on demand). For unmapped tools and absolute paths, the binary is looked
-    /// up directly on PATH / filesystem.
-    pub fn command_exists(&self, name: &str) -> bool {
-        if name.contains('/') {
-            return Path::new(name).exists();
-        }
-
-        if ManagedTool::from_binary(name).is_some() {
-            return self.nix_available();
-        }
-
-        let path_var = std::env::var_os("PATH").unwrap_or_default();
-        std::env::split_paths(&path_var).any(|dir| dir.join(name).exists())
+/// Returns true if the named command is available.
+///
+/// For tools with a nix package mapping, availability is determined by
+/// whether `nix` itself is on PATH (the tool will be fetched via `nix run`
+/// on demand). For unmapped tools and absolute paths, the binary is looked
+/// up directly on PATH / filesystem.
+pub fn command_exists(name: &str) -> bool {
+    if name.contains('/') {
+        return Path::new(name).exists();
     }
 
-    /// Returns true if `nix` is available on PATH.
-    pub fn nix_available(&self) -> bool {
-        let path_var = std::env::var_os("PATH").unwrap_or_default();
-        std::env::split_paths(&path_var).any(|dir| dir.join("nix").exists())
+    if ManagedTool::from_binary(name).is_some() {
+        return nix_available();
     }
 
-    pub fn run_capture(
-        &self,
-        program: impl AsRef<OsStr>,
-        args: &[&str],
-        cwd: Option<&Path>,
-    ) -> Result<String> {
-        let program_str = program.as_ref().to_string_lossy();
-        let plan = CommandPlan::from_program(&program_str, args);
-        let plan_args = plan.args_refs();
-        self.run_capture_raw(plan.program(), &plan_args, cwd)
-    }
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path_var).any(|dir| dir.join(name).exists())
+}
 
-    pub fn run_status(
-        &self,
-        program: impl AsRef<OsStr>,
-        args: &[&str],
-        cwd: Option<&Path>,
-    ) -> Result<()> {
-        let program_str = program.as_ref().to_string_lossy();
-        let plan = CommandPlan::from_program(&program_str, args);
-        let plan_args = plan.args_refs();
-        self.run_status_raw(plan.program(), &plan_args, cwd)
-    }
+/// Returns true if `nix` is available on PATH.
+pub fn nix_available() -> bool {
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path_var).any(|dir| dir.join("nix").exists())
+}
 
-    pub fn spawn_detached(
-        &self,
-        program: impl AsRef<OsStr>,
-        args: &[&str],
-        cwd: Option<&Path>,
-    ) -> Result<()> {
-        let program_str = program.as_ref().to_string_lossy();
-        let plan = CommandPlan::from_program(&program_str, args);
-        let plan_args = plan.args_refs();
-        self.spawn_detached_raw(plan.program(), &plan_args, cwd)
-    }
+pub fn run_capture(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<String> {
+    let program_str = program.as_ref().to_string_lossy();
+    let plan = CommandPlan::from_program(&program_str, args);
+    let plan_args = plan.args_refs();
+    run_capture_raw(plan.program(), &plan_args, cwd)
+}
 
-    fn run_capture_raw(
-        &self,
-        program: impl AsRef<OsStr>,
-        args: &[&str],
-        cwd: Option<&Path>,
-    ) -> Result<String> {
-        let mut cmd = Command::new(program);
-        cmd.args(args);
-        if let Some(cwd) = cwd {
-            cmd.current_dir(cwd);
-        }
-        let output = cmd.output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let msg = if stderr.is_empty() {
-                format!("command failed with status {}", output.status)
-            } else {
-                stderr
-            };
-            return Err(Error::failed(msg));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    }
+pub fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    let program_str = program.as_ref().to_string_lossy();
+    let plan = CommandPlan::from_program(&program_str, args);
+    let plan_args = plan.args_refs();
+    run_status_raw(plan.program(), &plan_args, cwd)
+}
 
-    fn run_status_raw(
-        &self,
-        program: impl AsRef<OsStr>,
-        args: &[&str],
-        cwd: Option<&Path>,
-    ) -> Result<()> {
-        let mut cmd = Command::new(program);
-        cmd.args(args);
-        if let Some(cwd) = cwd {
-            cmd.current_dir(cwd);
-        }
-        let status = cmd.status()?;
-        if status.success() {
-            return Ok(());
-        }
-        Err(Error::failed(format!(
-            "command failed with status {status}"
-        )))
-    }
+pub fn spawn_detached(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    let program_str = program.as_ref().to_string_lossy();
+    let plan = CommandPlan::from_program(&program_str, args);
+    let plan_args = plan.args_refs();
+    spawn_detached_raw(plan.program(), &plan_args, cwd)
+}
 
-    fn spawn_detached_raw(
-        &self,
-        program: impl AsRef<OsStr>,
-        args: &[&str],
-        cwd: Option<&Path>,
-    ) -> Result<()> {
-        let mut cmd = Command::new(program);
-        cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
-        if let Some(cwd) = cwd {
-            cmd.current_dir(cwd);
-        }
-        cmd.spawn().map(|_| ()).map_err(Error::from)
+fn run_capture_raw(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
     }
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            format!("command failed with status {}", output.status)
+        } else {
+            stderr
+        };
+        return Err(Error::failed(msg));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
 
-    pub fn log(&self, message: &str) {
-        println!("{} {}", "==>".bright_blue().bold(), message);
+fn run_status_raw(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
     }
+    let status = cmd.status()?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(Error::failed(format!(
+        "command failed with status {status}"
+    )))
+}
 
-    pub fn warn(&self, message: &str) {
-        eprintln!("{} {}", "warning:".yellow().bold(), message);
+fn spawn_detached_raw(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    let mut cmd = Command::new(program);
+    cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
     }
+    cmd.spawn().map(|_| ()).map_err(Error::from)
+}
+
+pub fn log(message: &str) {
+    println!("{} {}", "==>".bright_blue().bold(), message);
+}
+
+pub fn warn(message: &str) {
+    eprintln!("{} {}", "warning:".yellow().bold(), message);
 }
 
 #[cfg(test)]

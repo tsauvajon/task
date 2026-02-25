@@ -20,7 +20,7 @@ pub(super) fn initial_repo_scope(
 ) -> Option<String> {
     repo_arg
         .map(str::to_string)
-        .or_else(|| context.tasks().current_repo_key())
+        .or_else(|| context.tasks().current_repo_key().map(String::from))
 }
 
 pub(super) fn load_task_rows(
@@ -92,19 +92,19 @@ pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow
     Ok(rows)
 }
 
-pub(super) fn park_selected(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
+pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let Some(row) = state.selected_task_row().cloned() else {
         state.message = "No selected task".to_string();
         return Ok(());
     };
 
-    if !is_available(context.process()) {
+    if !is_available() {
         return Err(Error::failed(
             "tmux is not available. Run 'task list' to inspect tasks.",
         ));
     }
 
-    match park_task(context.process(), &row.repo, &row.branch, &row.path)? {
+    match park_task(&row.repo, &row.branch, &row.path)? {
         ParkResult::Parked => state.message = format!("Parked task: {} {}", row.repo, row.branch),
         ParkResult::AlreadyParked => {
             state.message = format!("Task already parked: {} {}", row.repo, row.branch)
@@ -120,7 +120,12 @@ pub(super) fn finish_selected(context: &RuntimeEnvironment, state: &mut UiState)
         return Ok(());
     };
 
-    crate::commands::finish::run(context, Some(&row.repo), Some(&row.branch), false)?;
+    crate::commands::finish::run(
+        context,
+        Some(row.repo.as_str()),
+        Some(row.branch.as_str()),
+        false,
+    )?;
     state.message = format!("Finished task: {} {}", row.repo, row.branch);
     Ok(())
 }
@@ -131,27 +136,31 @@ pub(super) fn resolve_create_repo(
     repo_scope: Option<&str>,
 ) -> Result<String> {
     if let Some(row) = state.selected_task_row() {
-        return Ok(row.repo.clone());
+        return Ok(row.repo.to_string());
     }
 
     if let Some(repo_arg) = repo_scope {
-        return context.tasks().resolve_repo_input(Some(repo_arg));
+        return context
+            .tasks()
+            .resolve_repo_input(Some(repo_arg))
+            .map(String::from);
     }
 
-    context.tasks().resolve_repo_input(None)
+    context.tasks().resolve_repo_input(None).map(String::from)
 }
 
 pub(super) fn clone_from_input(context: &RuntimeEnvironment, input: &str) -> Result<String> {
+    use crate::types::RepoKey;
     let (repo_url, explicit_repo_key) = parse_clone_input_args(input)?;
     let parsed = parse_repo_input(repo_url);
     let clone_url = parsed
         .clone_url
         .unwrap_or_else(|| default_clone_url(repo_url));
-    let repo_key = explicit_repo_key.unwrap_or(parsed.repo_key);
+    let repo_key = RepoKey::new(explicit_repo_key.unwrap_or(parsed.repo_key));
 
     context.tasks().ensure_layout()?;
     context.tasks().clone_bare_repo(&clone_url, &repo_key)?;
-    Ok(repo_key)
+    Ok(repo_key.to_string())
 }
 
 fn parse_clone_input_args(input: &str) -> Result<(&str, Option<String>)> {

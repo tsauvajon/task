@@ -158,20 +158,9 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
 }
 
 fn should_auto_onboard(command: Option<&Command>) -> bool {
-    matches!(
+    !matches!(
         command,
-        None | Some(Command::Repo { .. })
-            | Some(Command::Start { .. })
-            | Some(Command::Open { .. })
-            | Some(Command::Park)
-            | Some(Command::Path { .. })
-            | Some(Command::List { .. })
-            | Some(Command::Ui { .. })
-            | Some(Command::Worktrees { .. })
-            | Some(Command::Finish { .. })
-            | Some(Command::Prune { .. })
-            | Some(Command::Check { .. })
-            | Some(Command::Rebase { .. })
+        Some(Command::Bootstrap) | Some(Command::Doctor { .. })
     )
 }
 

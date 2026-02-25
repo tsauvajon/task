@@ -1,21 +1,14 @@
 use std::path::Path;
 
-use super::runner::{run_git_capture, run_git_status};
+use super::{
+    gitdir::GitDir,
+    runner::run_git_capture,
+};
 use crate::error::Result;
 
 pub fn detect_default_base(gitdir: &Path) -> String {
-    let gitdir_str = gitdir.to_string_lossy();
-    if let Ok(output) = run_git_capture(
-        &[
-            "--git-dir",
-            gitdir_str.as_ref(),
-            "ls-remote",
-            "--symref",
-            "origin",
-            "HEAD",
-        ],
-        None,
-    ) {
+    let gd = GitDir::new(gitdir);
+    if let Ok(output) = gd.capture(&["ls-remote", "--symref", "origin", "HEAD"]) {
         for line in output.lines() {
             if let Some(target) = line.strip_prefix("ref: ") {
                 let target = target.trim();
@@ -34,19 +27,9 @@ pub fn detect_default_base(gitdir: &Path) -> String {
         }
     }
 
-    let gitdir_str = gitdir.to_string_lossy();
-    if run_git_status(
-        &[
-            "--git-dir",
-            gitdir_str.as_ref(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            "refs/remotes/origin/master",
-        ],
-        None,
-    )
-    .is_ok()
+    if gd
+        .status(&["show-ref", "--verify", "--quiet", "refs/remotes/origin/master"])
+        .is_ok()
     {
         return "origin/master".to_string();
     }
@@ -55,51 +38,25 @@ pub fn detect_default_base(gitdir: &Path) -> String {
 }
 
 pub fn fetch_origin_refs(gitdir: &Path) -> Result<()> {
-    let gitdir_str = gitdir.to_string_lossy();
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir_str.as_ref(),
-            "fetch",
-            "origin",
-            "--prune",
-            "+refs/heads/*:refs/remotes/origin/*",
-        ],
-        None,
-    )
+    GitDir::new(gitdir).status(&[
+        "fetch",
+        "origin",
+        "--prune",
+        "+refs/heads/*:refs/remotes/origin/*",
+    ])
 }
 
 pub fn ref_exists(gitdir: &Path, reference: &str) -> bool {
-    let gitdir_str = gitdir.to_string_lossy();
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir_str.as_ref(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            reference,
-        ],
-        None,
-    )
-    .is_ok()
+    GitDir::new(gitdir)
+        .status(&["show-ref", "--verify", "--quiet", reference])
+        .is_ok()
 }
 
 pub fn rev_exists(gitdir: &Path, revision: &str) -> bool {
-    let gitdir_str = gitdir.to_string_lossy();
     let value = format!("{revision}^{{commit}}");
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir_str.as_ref(),
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &value,
-        ],
-        None,
-    )
-    .is_ok()
+    GitDir::new(gitdir)
+        .status(&["rev-parse", "--verify", "--quiet", &value])
+        .is_ok()
 }
 
 pub fn current_branch(root: &Path) -> Option<String> {

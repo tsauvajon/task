@@ -3,16 +3,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::tools::{
-    git::worktrees::{branch_from_ref, branch_from_worktree_path, WorktreeEntry},
-    tmux::naming::session_name,
+use crate::{
+    tools::{
+        git::worktrees::{branch_from_ref, branch_from_worktree_path, WorktreeEntry},
+        tmux::naming::session_name,
+    },
+    types::{BranchName, RepoKey},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRow {
     pub status: TaskStatus,
-    pub repo: String,
-    pub branch: String,
+    pub repo: RepoKey,
+    pub branch: BranchName,
     pub path: PathBuf,
 }
 
@@ -32,7 +35,7 @@ impl fmt::Display for TaskStatus {
 }
 
 pub fn build_task_rows(
-    repo_key: &str,
+    repo_key: &RepoKey,
     wt_dir: &Path,
     entries: &[WorktreeEntry],
     open_sessions: &[String],
@@ -60,8 +63,8 @@ pub fn build_task_rows(
 
             TaskRow {
                 status,
-                repo: repo_key.to_string(),
-                branch,
+                repo: repo_key.clone(),
+                branch: BranchName::new(branch),
                 path: entry.path.clone(),
             }
         })
@@ -73,11 +76,15 @@ mod tests {
     use std::path::Path;
 
     use super::{build_task_rows, TaskRow, TaskStatus};
-    use crate::tools::git::worktrees::WorktreeEntry;
+    use crate::{
+        tools::git::worktrees::WorktreeEntry,
+        types::{BranchName, RepoKey},
+    };
 
     #[test]
     fn build_task_rows_marks_open_and_parked_states() {
         let wt_dir = Path::new("/tmp/dev/wt");
+        let repo_key = RepoKey::new("github.com/tsauvajon/task");
         let entries = vec![
             WorktreeEntry {
                 path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
@@ -92,26 +99,21 @@ mod tests {
         ];
 
         let open_sessions = vec!["github_com_tsauvajon_task-rewrite-in-rust".to_string()];
-        let rows = build_task_rows(
-            "github.com/tsauvajon/task",
-            wt_dir,
-            &entries,
-            &open_sessions,
-        );
+        let rows = build_task_rows(&repo_key, wt_dir, &entries, &open_sessions);
 
         assert_eq!(
             rows,
             vec![
                 TaskRow {
                     status: TaskStatus::Open,
-                    repo: "github.com/tsauvajon/task".to_string(),
-                    branch: "rewrite-in-rust".to_string(),
+                    repo: RepoKey::new("github.com/tsauvajon/task"),
+                    branch: BranchName::new("rewrite-in-rust"),
                     path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
                 },
                 TaskRow {
                     status: TaskStatus::Parked,
-                    repo: "github.com/tsauvajon/task".to_string(),
-                    branch: "bump-deps".to_string(),
+                    repo: RepoKey::new("github.com/tsauvajon/task"),
+                    branch: BranchName::new("bump-deps"),
                     path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
                 },
             ]

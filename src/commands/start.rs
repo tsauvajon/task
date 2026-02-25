@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::{
     error::{Error, Result},
-    runtime::environment::RuntimeEnvironment,
+    runtime::{environment::RuntimeEnvironment, process},
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs, ref_exists, rev_exists},
         worktrees::{
@@ -10,6 +10,7 @@ use crate::{
             worktree_add_tracking_remote_branch,
         },
     },
+    types::BranchName,
 };
 
 pub fn run(
@@ -29,7 +30,8 @@ pub fn run(
         .map(str::to_string)
         .unwrap_or_else(|| detect_default_base(&gitdir));
 
-    let worktree = context.layout().worktree_path(&repo_key, branch);
+    let branch_name = BranchName::new(branch);
+    let worktree = context.layout().worktree_path(&repo_key, &branch_name);
     if worktree.exists() && !worktree.join(".git").exists() {
         return Err(Error::failed(format!(
             "Path exists but is not a git worktree: {}",
@@ -38,13 +40,13 @@ pub fn run(
     }
 
     if worktree.join(".git").exists() {
-        context.process().log(&format!(
+        process::log(&format!(
             "Reusing existing worktree: {}",
             worktree.display()
         ));
         return context
             .tasks()
-            .launch_workspace(&repo_key, branch, &worktree);
+            .launch_workspace(&repo_key, &branch_name, &worktree);
     }
 
     if let Some(parent) = worktree.parent() {
@@ -64,5 +66,5 @@ pub fn run(
 
     context
         .tasks()
-        .launch_workspace(&repo_key, branch, &worktree)
+        .launch_workspace(&repo_key, &branch_name, &worktree)
 }

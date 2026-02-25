@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     error::Result,
-    runtime::process::{CommandPlan, ProcessRunner},
+    runtime::process::{self, CommandPlan},
     tools::{
         opencode,
         vscodium::workflow::{close_task_windows, codium_state, open_task_window, CodiumState},
@@ -75,7 +75,6 @@ fn new_session_args(session: &str, path: &Path, startup: SessionStartup) -> Vec<
 /// Reopens VSCodium for the given task if it is not already running.
 /// On failure to detect state, warns and attempts to reopen (best effort).
 fn ensure_codium_running(
-    process: ProcessRunner,
     repo_key: &str,
     branch: &str,
     path: &Path,
@@ -84,10 +83,8 @@ fn ensure_codium_running(
     match codium_state(repo_key, branch) {
         Ok(CodiumState::Running) => {}
         Ok(CodiumState::NotRunning) | Err(_) => {
-            if let Err(err) =
-                open_task_window(process, repo_key, branch, path, codium_trusted_roots)
-            {
-                process.warn(&format!(
+            if let Err(err) = open_task_window(repo_key, branch, path, codium_trusted_roots) {
+                process::warn(&format!(
                     "Failed to open VSCodium for {repo_key} {branch}: {err}"
                 ));
             }
@@ -96,24 +93,23 @@ fn ensure_codium_running(
 }
 
 pub fn open_task_session(
-    process: ProcessRunner,
     repo_key: &str,
     branch: &str,
     path: &Path,
     codium_trusted_roots: &[PathBuf],
 ) -> Result<OpenResult> {
-    if !is_available(process) {
+    if !is_available() {
         return Ok(OpenResult::Unavailable);
     }
 
-    ensure_codium_running(process, repo_key, branch, path, codium_trusted_roots);
+    ensure_codium_running(repo_key, branch, path, codium_trusted_roots);
 
     let session = session_name(repo_key, branch);
-    if !has_session(process, &session) {
-        let startup = if process.command_exists("opencode") {
+    if !has_session(&session) {
+        let startup = if process::command_exists("opencode") {
             SessionStartup::WithOpencode(opencode::launch_command(path))
         } else {
-            process.warn("'opencode' is not available; opening tmux with shell panes only.");
+            process::warn("'opencode' is not available; opening tmux with shell panes only.");
             SessionStartup::ShellOnly
         };
 
@@ -149,19 +145,14 @@ pub fn open_task_session(
     Ok(OpenResult::Attached)
 }
 
-pub fn park_task(
-    process: ProcessRunner,
-    repo_key: &str,
-    branch: &str,
-    path: &Path,
-) -> Result<ParkResult> {
+pub fn park_task(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
     let session = session_name(repo_key, branch);
-    let has_tmux_session = has_session(process, &session);
+    let has_tmux_session = has_session(&session);
     let mut result = ParkResult::AlreadyParked;
     let title = format!("{repo_key} {branch}");
 
     if let Err(err) = opencode::rename_latest_session_title(path, &title) {
-        process.warn(&format!(
+        process::warn(&format!(
             "Failed to update opencode session title for {repo_key} {branch}: {err}"
         ));
     }
@@ -169,7 +160,7 @@ pub fn park_task(
     for action in park_teardown_actions(has_tmux_session) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = close_task_windows(process, repo_key, branch);
+                let _ = close_task_windows(repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
                 run_tmux_status(&["kill-session", "-t", &session], None)?;
@@ -181,15 +172,15 @@ pub fn park_task(
     Ok(result)
 }
 
-pub fn finish_task_session(process: ProcessRunner, repo_key: &str, branch: &str) -> Result<()> {
-    let tmux_available = is_available(process);
+pub fn finish_task_session(repo_key: &str, branch: &str) -> Result<()> {
+    let tmux_available = is_available();
     let session = session_name(repo_key, branch);
-    let has_tmux_session = tmux_available && has_session(process, &session);
+    let has_tmux_session = tmux_available && has_session(&session);
 
     for action in finish_teardown_actions(tmux_available, has_tmux_session) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = close_task_windows(process, repo_key, branch);
+                let _ = close_task_windows(repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
                 run_tmux_status(&["kill-session", "-t", &session], None)?;

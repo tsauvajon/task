@@ -1,14 +1,13 @@
 use std::collections::HashSet;
 
 use super::runner::{run_tmux_capture, run_tmux_status};
-use crate::runtime::process::ProcessRunner;
 
-pub fn is_available(process: ProcessRunner) -> bool {
-    process.command_exists("tmux")
+pub fn is_available() -> bool {
+    crate::runtime::process::command_exists("tmux")
 }
 
-pub fn list_sessions(process: ProcessRunner) -> HashSet<String> {
-    if !is_available(process) {
+pub fn list_sessions() -> HashSet<String> {
+    if !is_available() {
         return HashSet::new();
     }
 
@@ -18,7 +17,7 @@ pub fn list_sessions(process: ProcessRunner) -> HashSet<String> {
     }
 }
 
-pub fn has_session(_process: ProcessRunner, session: &str) -> bool {
+pub fn has_session(session: &str) -> bool {
     run_tmux_status(&["has-session", "-t", session], None).is_ok()
 }
 

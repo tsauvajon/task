@@ -1,4 +1,4 @@
-use crate::runtime::task_rows::TaskRow;
+use crate::{runtime::task_rows::TaskRow, types::RepoKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputMode {
@@ -16,7 +16,7 @@ pub(super) enum ViewMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RepoRow {
-    pub(super) repo: String,
+    pub(super) repo: RepoKey,
     pub(super) open_tasks: usize,
     pub(super) parked_tasks: usize,
 }
@@ -301,18 +301,20 @@ mod tests {
     }
 
     fn repo_row(repo: &str, open_tasks: usize, parked_tasks: usize) -> RepoRow {
+        use crate::types::RepoKey;
         RepoRow {
-            repo: repo.to_string(),
+            repo: RepoKey::new(repo),
             open_tasks,
             parked_tasks,
         }
     }
 
     fn sample_task_row() -> TaskRow {
+        use crate::types::{BranchName, RepoKey};
         TaskRow {
             status: TaskStatus::Open,
-            repo: "github.com/acme/app".to_string(),
-            branch: "main".to_string(),
+            repo: RepoKey::new("github.com/acme/app"),
+            branch: BranchName::new("main"),
             path: PathBuf::from("/tmp/dev/wt/github.com/acme/app/main"),
         }
     }
@@ -339,10 +341,11 @@ mod tests {
     }
 
     fn task_row_for_repo(repo: &str) -> TaskRow {
+        use crate::types::{BranchName, RepoKey};
         TaskRow {
             status: TaskStatus::Open,
-            repo: repo.to_string(),
-            branch: "main".to_string(),
+            repo: RepoKey::new(repo),
+            branch: BranchName::new("main"),
             path: PathBuf::from(format!("/tmp/dev/wt/{repo}/main")),
         }
     }

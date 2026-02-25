@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::{
     error::{Error, Result},
-    runtime::environment::RuntimeEnvironment,
+    runtime::{environment::RuntimeEnvironment, process},
     tools::{
         git::worktrees::{status_porcelain, worktree_prune, worktree_remove},
         tmux::workflow::finish_task_session,
@@ -16,10 +16,10 @@ pub fn run(
     branch_arg: Option<&str>,
     force: bool,
 ) -> Result<()> {
-    let (repo_arg, branch) = context
+    let (repo_key_raw, branch) = context
         .tasks()
         .resolve_repo_branch_inputs(repo_arg, branch_arg)?;
-    let repo_key = context.tasks().resolve_repo_key_input(&repo_arg)?;
+    let repo_key = context.tasks().resolve_repo_key_input(&repo_key_raw)?;
     let gitdir = context.layout().repo_gitdir_path(&repo_key);
     let worktree = context.tasks().resolve_worktree_path(&repo_key, &branch);
 
@@ -28,7 +28,7 @@ pub fn run(
     }
 
     if !worktree.join(".git").exists() {
-        context.process().warn(&format!(
+        process::warn(&format!(
             "Worktree metadata is stale for {}. Pruning stale entries.",
             worktree.display()
         ));
@@ -39,16 +39,16 @@ pub fn run(
             if is_empty {
                 let _ = fs::remove_dir(&worktree);
             } else {
-                context.process().warn(&format!(
+                process::warn(&format!(
                     "Left non-worktree directory in place: {}",
                     worktree.display()
                 ));
             }
         }
 
-        finish_task_session(context.process(), &repo_key, &branch)?;
+        finish_task_session(&repo_key, &branch)?;
         if let Err(err) = cleanup_task_state(&repo_key, &branch) {
-            context.process().warn(&format!(
+            process::warn(&format!(
                 "Failed to remove task editor state for {repo_key} {branch}: {err}"
             ));
         }
@@ -70,9 +70,9 @@ pub fn run(
         let _ = fs::remove_dir(parent);
     }
 
-    finish_task_session(context.process(), &repo_key, &branch)?;
+    finish_task_session(&repo_key, &branch)?;
     if let Err(err) = cleanup_task_state(&repo_key, &branch) {
-        context.process().warn(&format!(
+        process::warn(&format!(
             "Failed to remove task editor state for {repo_key} {branch}: {err}"
         ));
     }

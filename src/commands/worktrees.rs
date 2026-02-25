@@ -1,8 +1,6 @@
-use std::path::Path;
-
 use crate::{
     error::{Error, Result},
-    runtime::environment::RuntimeEnvironment,
+    runtime::{environment::RuntimeEnvironment, process},
     tools::git::worktrees::worktree_list,
 };
 
@@ -11,7 +9,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
 
     let repo_arg = repo_arg
         .map(str::to_string)
-        .or_else(|| context.tasks().current_repo_key());
+        .or_else(|| context.tasks().current_repo_key().map(String::from));
 
     if let Some(repo_arg) = repo_arg.as_deref() {
         let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
@@ -26,14 +24,9 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
 
     let repo_keys = context.tasks().available_repo_keys()?;
     if repo_keys.is_empty() {
-        context.process().log(&format!(
+        process::log(&format!(
             "No repositories found in {}",
-            context
-                .layout()
-                .repo_gitdir_path("")
-                .parent()
-                .unwrap_or(Path::new("/"))
-                .display()
+            context.layout().repos_dir().display()
         ));
         return Ok(());
     }

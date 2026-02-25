@@ -4,16 +4,16 @@ use super::{
     runner::{run_corepack_status, run_pnpm_status},
     runtime::{corepack_available, enable_corepack, resolve_runner, Runner},
 };
-use crate::{error::Result, runtime::process::ProcessRunner};
+use crate::error::Result;
 
 type RunFn = fn(&[&str], Option<&Path>) -> Result<()>;
 
-pub fn run_project_checks(process: ProcessRunner, path: &Path) -> Result<bool> {
-    if corepack_available(process) {
-        let _ = enable_corepack(process);
+pub fn run_project_checks(path: &Path) -> Result<bool> {
+    if corepack_available() {
+        let _ = enable_corepack();
     }
 
-    let Some(runner) = resolve_runner(process) else {
+    let Some(runner) = resolve_runner() else {
         return Ok(false);
     };
 

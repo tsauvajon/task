@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::runner::{run_git_capture, run_git_status};
+use super::{gitdir::GitDir, runner::run_git_status};
 use crate::error::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,29 +11,16 @@ pub struct WorktreeEntry {
 }
 
 pub fn worktree_list(gitdir: &Path) -> Result<String> {
-    let gitdir_str = gitdir.to_string_lossy();
-    run_git_capture(&["--git-dir", gitdir_str.as_ref(), "worktree", "list"], None)
+    GitDir::new(gitdir).capture(&["worktree", "list"])
 }
 
 pub fn worktree_list_porcelain(gitdir: &Path) -> Result<String> {
-    let gitdir_str = gitdir.to_string_lossy();
-    run_git_capture(
-        &["--git-dir", gitdir_str.as_ref(), "worktree", "list", "--porcelain"],
-        None,
-    )
+    GitDir::new(gitdir).capture(&["worktree", "list", "--porcelain"])
 }
 
-pub fn worktree_add_existing_branch(
-    gitdir: &Path,
-    worktree: &Path,
-    branch: &str,
-) -> Result<()> {
-    let gitdir_str = gitdir.to_string_lossy();
+pub fn worktree_add_existing_branch(gitdir: &Path, worktree: &Path, branch: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
-    run_git_status(
-        &["--git-dir", gitdir_str.as_ref(), "worktree", "add", worktree_str.as_ref(), branch],
-        None,
-    )
+    GitDir::new(gitdir).status(&["worktree", "add", worktree_str.as_ref(), branch])
 }
 
 pub fn worktree_add_tracking_remote_branch(
@@ -41,23 +28,17 @@ pub fn worktree_add_tracking_remote_branch(
     worktree: &Path,
     branch: &str,
 ) -> Result<()> {
-    let gitdir_str = gitdir.to_string_lossy();
     let worktree_str = worktree.to_string_lossy();
     let remote = format!("origin/{branch}");
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir_str.as_ref(),
-            "worktree",
-            "add",
-            "--track",
-            "-b",
-            branch,
-            worktree_str.as_ref(),
-            &remote,
-        ],
-        None,
-    )
+    GitDir::new(gitdir).status(&[
+        "worktree",
+        "add",
+        "--track",
+        "-b",
+        branch,
+        worktree_str.as_ref(),
+        &remote,
+    ])
 }
 
 pub fn worktree_add_from_base(
@@ -66,59 +47,39 @@ pub fn worktree_add_from_base(
     branch: &str,
     base_ref: &str,
 ) -> Result<()> {
-    let gitdir_str = gitdir.to_string_lossy();
     let worktree_str = worktree.to_string_lossy();
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir_str.as_ref(),
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            worktree_str.as_ref(),
-            base_ref,
-        ],
-        None,
-    )
+    GitDir::new(gitdir).status(&[
+        "worktree",
+        "add",
+        "-b",
+        branch,
+        worktree_str.as_ref(),
+        base_ref,
+    ])
 }
 
 pub fn worktree_prune(gitdir: &Path) -> Result<()> {
-    let gitdir_str = gitdir.to_string_lossy();
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir_str.as_ref(),
-            "worktree",
-            "prune",
-            "--verbose",
-            "--expire",
-            "now",
-        ],
-        None,
-    )
+    GitDir::new(gitdir).status(&["worktree", "prune", "--verbose", "--expire", "now"])
 }
 
 pub fn worktree_remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<()> {
-    let gitdir_str = gitdir.to_string_lossy();
     let worktree_str = worktree.to_string_lossy();
-    let mut args = vec![
-        "--git-dir",
-        gitdir_str.as_ref(),
-        "worktree",
-        "remove",
-    ];
+    let mut args = vec!["worktree", "remove"];
     if force {
         args.push("--force");
     }
     args.push(worktree_str.as_ref());
-    let cwd = gitdir.parent();
-    run_git_status(&args, cwd)
+    let cwd = gitdir.parent().unwrap_or(gitdir);
+    GitDir::new(gitdir).status_in(&args, cwd)
 }
 
 pub fn status_porcelain(worktree: &Path) -> Result<String> {
     let worktree_str = worktree.to_string_lossy();
-    run_git_capture(&["-C", worktree_str.as_ref(), "status", "--porcelain"], None)
+    // This uses `-C` rather than `--git-dir`, so call runner directly.
+    super::runner::run_git_capture(
+        &["-C", worktree_str.as_ref(), "status", "--porcelain"],
+        None,
+    )
 }
 
 pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {
@@ -127,62 +88,47 @@ pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {
 }
 
 pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
-    let mut entries = Vec::new();
-    let mut current_path: Option<PathBuf> = None;
-    let mut current_branch: Option<String> = None;
-    let mut current_is_bare = false;
+    #[derive(Default)]
+    struct Builder {
+        path: Option<PathBuf>,
+        branch_ref: Option<String>,
+        is_bare: bool,
+    }
 
-    let flush = |entries: &mut Vec<WorktreeEntry>,
-                 path: Option<PathBuf>,
-                 branch: Option<String>,
-                 is_bare: bool| {
-        if let Some(path) = path {
-            entries.push(WorktreeEntry { path, branch_ref: branch, is_bare });
-        }
-    };
-
-    for line in text.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            flush(
-                &mut entries,
-                current_path.take(),
-                current_branch.take(),
-                current_is_bare,
-            );
-            current_path = Some(PathBuf::from(path));
-            current_branch = None;
-            current_is_bare = false;
-            continue;
-        }
-
-        if let Some(branch_ref) = line.strip_prefix("branch ") {
-            current_branch = Some(branch_ref.to_string());
-            continue;
-        }
-
-        if line == "bare" {
-            current_is_bare = true;
-            continue;
-        }
-
-        if line.is_empty()
-            && let Some(path) = current_path.take()
-        {
-            entries.push(WorktreeEntry {
+    impl Builder {
+        fn flush(&mut self) -> Option<WorktreeEntry> {
+            let path = self.path.take()?;
+            Some(WorktreeEntry {
                 path,
-                branch_ref: current_branch.take(),
-                is_bare: current_is_bare,
-            });
-            current_is_bare = false;
+                branch_ref: self.branch_ref.take(),
+                is_bare: std::mem::replace(&mut self.is_bare, false),
+            })
         }
     }
 
-    flush(
-        &mut entries,
-        current_path,
-        current_branch,
-        current_is_bare,
-    );
+    let mut entries = Vec::new();
+    let mut builder = Builder::default();
+
+    for line in text.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(entry) = builder.flush() {
+                entries.push(entry);
+            }
+            builder.path = Some(PathBuf::from(path));
+        } else if let Some(branch_ref) = line.strip_prefix("branch ") {
+            builder.branch_ref = Some(branch_ref.to_string());
+        } else if line == "bare" {
+            builder.is_bare = true;
+        } else if line.is_empty()
+            && let Some(entry) = builder.flush()
+        {
+            entries.push(entry);
+        }
+    }
+
+    if let Some(entry) = builder.flush() {
+        entries.push(entry);
+    }
 
     entries
 }
@@ -213,7 +159,9 @@ pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
 mod tests {
     use std::path::Path;
 
-    use super::{WorktreeEntry, branch_from_ref, branch_from_worktree_path, parse_worktree_porcelain};
+    use super::{
+        branch_from_ref, branch_from_worktree_path, parse_worktree_porcelain, WorktreeEntry,
+    };
 
     #[test]
     fn parse_worktree_porcelain_collects_entries() {

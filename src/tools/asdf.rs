@@ -3,28 +3,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{error::Result, runtime::process::ProcessRunner};
+use crate::error::Result;
 
 use super::asdf_runner::{run_asdf_capture, run_asdf_status};
 
 const NODEJS_PLUGIN_REPO: &str = "https://github.com/asdf-vm/asdf-nodejs.git";
 
-pub fn is_available(process: ProcessRunner) -> bool {
-    process.command_exists("asdf")
+pub fn is_available() -> bool {
+    crate::runtime::process::command_exists("asdf")
 }
 
-pub fn has_nodejs_plugin(process: ProcessRunner) -> bool {
-    if !is_available(process) {
+pub fn has_nodejs_plugin() -> bool {
+    if !is_available() {
         return false;
     }
     list_plugins().is_ok_and(|plugins| plugins.lines().any(|line| line.trim() == "nodejs"))
 }
 
-pub fn install_nodejs_plugin(_process: ProcessRunner) -> Result<()> {
+pub fn install_nodejs_plugin() -> Result<()> {
     run_asdf_status(&["plugin", "add", "nodejs", NODEJS_PLUGIN_REPO], None)
 }
 
-pub fn import_nodejs_release_keyring(process: ProcessRunner) -> Result<()> {
+pub fn import_nodejs_release_keyring() -> Result<()> {
     let Some(script_path) = nodejs_release_keyring_script_path() else {
         return Ok(());
     };
@@ -33,11 +33,11 @@ pub fn import_nodejs_release_keyring(process: ProcessRunner) -> Result<()> {
         return Ok(());
     }
 
-    // This runs a shell script, not asdf itself — keep using ProcessRunner.
-    process.run_status(script_path.as_os_str(), &[], None)
+    // This runs a shell script, not asdf itself — keep using process::run_status.
+    crate::runtime::process::run_status(script_path.as_os_str(), &[], None)
 }
 
-pub fn install_from_user_tool_versions(_process: ProcessRunner) -> Result<bool> {
+pub fn install_from_user_tool_versions() -> Result<bool> {
     let Some(path) = user_tool_versions_path() else {
         return Ok(false);
     };
@@ -48,7 +48,7 @@ pub fn install_from_user_tool_versions(_process: ProcessRunner) -> Result<bool> 
     Ok(true)
 }
 
-pub fn install_from_workspace_tool_versions(_process: ProcessRunner, path: &Path) -> Result<bool> {
+pub fn install_from_workspace_tool_versions(path: &Path) -> Result<bool> {
     if !path.join(".tool-versions").exists() {
         return Ok(false);
     }

@@ -5,7 +5,10 @@ use std::{
 };
 
 use super::runner::run_git_capture;
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    types::RepoKey,
+};
 
 pub fn current_root() -> Result<PathBuf> {
     let root = run_git_capture(&["rev-parse", "--show-toplevel"], None)?;
@@ -13,9 +16,9 @@ pub fn current_root() -> Result<PathBuf> {
 }
 
 pub fn git_common_dir(root: &Path) -> Result<PathBuf> {
-    let gitdir_str = root.to_string_lossy();
+    let root_str = root.to_string_lossy();
     let common_dir_raw = run_git_capture(
-        &["-C", gitdir_str.as_ref(), "rev-parse", "--git-common-dir"],
+        &["-C", root_str.as_ref(), "rev-parse", "--git-common-dir"],
         None,
     )?;
 
@@ -34,13 +37,12 @@ fn normalize_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
-pub fn repo_key_from_common_dir(common_dir: &Path, repos_dir: &Path) -> Result<Option<String>> {
+pub fn repo_key_from_common_dir(common_dir: &Path, repos_dir: &Path) -> Result<Option<RepoKey>> {
     let normalized_common_dir = normalize_path(common_dir)?;
     let normalized_repos_dir = normalize_path(repos_dir)?;
 
-    let relative = match normalized_common_dir.strip_prefix(&normalized_repos_dir) {
-        Ok(rel) => rel,
-        Err(_) => return Ok(None),
+    let Ok(relative) = normalized_common_dir.strip_prefix(&normalized_repos_dir) else {
+        return Ok(None);
     };
 
     let key = relative.to_string_lossy();
@@ -48,7 +50,7 @@ pub fn repo_key_from_common_dir(common_dir: &Path, repos_dir: &Path) -> Result<O
     if key.is_empty() {
         return Ok(None);
     }
-    Ok(Some(key.to_string()))
+    Ok(Some(RepoKey::new(key)))
 }
 
 #[cfg(test)]
@@ -65,12 +67,13 @@ mod tests {
 
     #[test]
     fn repo_key_from_common_dir_extracts_key() {
+        use crate::types::RepoKey;
         let key = repo_key_from_common_dir(
             Path::new("/tmp/custom/repos/github.com/tsauvajon/task.git"),
             Path::new("/tmp/custom/repos"),
         )
         .expect("resolve repo key");
-        assert_eq!(key, Some("github.com/tsauvajon/task".to_string()));
+        assert_eq!(key, Some(RepoKey::new("github.com/tsauvajon/task")));
     }
 
     #[cfg(unix)]
@@ -98,9 +101,10 @@ mod tests {
         .expect("create symlink parent dir");
         symlink(&real_repos_dir, &symlinked_repos_dir).expect("create repos symlink");
 
+        use crate::types::RepoKey;
         let key = repo_key_from_common_dir(&repo_common_dir, &symlinked_repos_dir)
             .expect("resolve repo key with symlink");
-        assert_eq!(key, Some("github.com/tsauvajon/task".to_string()));
+        assert_eq!(key, Some(RepoKey::new("github.com/tsauvajon/task")));
 
         fs::remove_dir_all(base).expect("cleanup temp dirs");
     }

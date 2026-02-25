@@ -7,6 +7,7 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    sync::OnceLock,
 };
 
 use crate::{
@@ -14,13 +15,55 @@ use crate::{
     runtime::process::ManagedTool,
 };
 
+/// A lazily-resolved Nix store binary path, cached in a `OnceLock`.
+///
+/// Construct one as a `static` per tool, then call `capture` / `status`:
+///
+/// ```ignore
+/// static GIT: NixRunner = NixRunner::new(ManagedTool::Git);
+/// GIT.capture(&["status"], None)?;
+/// ```
+pub struct NixRunner {
+    tool: ManagedTool,
+    binary: OnceLock<Result<PathBuf>>,
+}
+
+impl NixRunner {
+    pub const fn new(tool: ManagedTool) -> Self {
+        Self {
+            tool,
+            binary: OnceLock::new(),
+        }
+    }
+
+    fn binary(&self) -> Result<&PathBuf> {
+        match self.binary.get_or_init(|| resolve_nix_binary(self.tool)) {
+            Ok(path) => Ok(path),
+            Err(err) => Err(Error::failed(err.to_string())),
+        }
+    }
+
+    pub fn capture(&self, args: &[&str], cwd: Option<&Path>) -> Result<String> {
+        crate::runtime::process::run_capture(self.binary()?.as_os_str(), args, cwd)
+    }
+
+    pub fn status(&self, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+        crate::runtime::process::run_status(self.binary()?.as_os_str(), args, cwd)
+    }
+
+    pub fn available(&self) -> bool {
+        self.binary().is_ok()
+    }
+}
+
+// NixRunner is used as `static` — safe because OnceLock is Sync.
+unsafe impl Sync for NixRunner {}
+
 /// Resolve the primary binary path for a managed tool via `nix path-info`.
 ///
 /// Returns the absolute path to the binary inside the Nix store, e.g.
-/// `/nix/store/…-git-2.x/bin/git`.  The result is **not** cached here —
-/// callers are expected to hold it in a `OnceLock` themselves (one per tool)
-/// so that the resolution cost is paid at most once per process.
-pub fn resolve_nix_binary(tool: ManagedTool) -> Result<PathBuf> {
+/// `/nix/store/…-git-2.x/bin/git`.
+fn resolve_nix_binary(tool: ManagedTool) -> Result<PathBuf> {
     let package = tool.nix_package();
     let binary_name = tool.binary_name();
 
@@ -71,43 +114,6 @@ fn parse_nix_store_path<'a>(stdout: &'a str, package: &str) -> Result<&'a str> {
                 "Could not resolve nix package {package}: empty output"
             ))
         })
-}
-
-/// Returns a reference to the resolved binary path, or an error.
-///
-/// Intended to be called from a `OnceLock::get_or_init` closure:
-///
-/// ```ignore
-/// static MY_BINARY: OnceLock<Result<PathBuf>> = OnceLock::new();
-///
-/// fn my_binary() -> Result<&'static PathBuf> {
-///     cached_nix_binary(&MY_BINARY, ManagedTool::Tmux)
-/// }
-/// ```
-pub fn cached_nix_binary(
-    lock: &std::sync::OnceLock<Result<PathBuf>>,
-    tool: ManagedTool,
-) -> Result<&PathBuf> {
-    match lock.get_or_init(|| resolve_nix_binary(tool)) {
-        Ok(path) => Ok(path),
-        Err(err) => Err(Error::failed(err.to_string())),
-    }
-}
-
-/// Runs a command using a pre-resolved Nix store binary path, capturing stdout.
-pub fn run_nix_binary_capture(
-    binary_path: &Path,
-    args: &[&str],
-    cwd: Option<&Path>,
-) -> Result<String> {
-    use crate::runtime::process::ProcessRunner;
-    ProcessRunner.run_capture(binary_path.as_os_str(), args, cwd)
-}
-
-/// Runs a command using a pre-resolved Nix store binary path, checking exit status.
-pub fn run_nix_binary_status(binary_path: &Path, args: &[&str], cwd: Option<&Path>) -> Result<()> {
-    use crate::runtime::process::ProcessRunner;
-    ProcessRunner.run_status(binary_path.as_os_str(), args, cwd)
 }
 
 #[cfg(test)]

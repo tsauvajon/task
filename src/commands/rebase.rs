@@ -1,10 +1,11 @@
 use crate::{
     error::{Error, Result},
-    runtime::environment::RuntimeEnvironment,
+    runtime::{environment::RuntimeEnvironment, process},
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs, rev_exists},
         worktrees::rebase,
     },
+    types::{BranchName, RepoKey},
 };
 
 pub fn run(context: &RuntimeEnvironment, args: &[String]) -> Result<()> {
@@ -31,9 +32,7 @@ pub fn run(context: &RuntimeEnvironment, args: &[String]) -> Result<()> {
         return Err(Error::not_found(format!("Base ref not found: {base_ref}")));
     }
 
-    context
-        .process()
-        .log(&format!("Rebasing {repo_key} {branch} onto {base_ref}"));
+    process::log(&format!("Rebasing {repo_key} {branch} onto {base_ref}"));
     rebase(&worktree, &base_ref)
 }
 
@@ -74,7 +73,7 @@ fn parse_rebase_input(args: &[String]) -> Result<RebaseInput> {
 fn resolve_rebase_target(
     context: &RuntimeEnvironment,
     input: RebaseInput,
-) -> Result<(String, String, Option<String>)> {
+) -> Result<(RepoKey, BranchName, Option<String>)> {
     match input {
         RebaseInput::CurrentTask => {
             let (repo_key, branch) = context.tasks().resolve_task_from_args(
@@ -92,7 +91,7 @@ fn resolve_rebase_target(
         }
         RebaseInput::RepoBranch { repo_arg, branch } => {
             let repo_key = context.tasks().resolve_repo_key_input(&repo_arg)?;
-            Ok((repo_key, branch, None))
+            Ok((repo_key, BranchName::new(branch), None))
         }
         RebaseInput::RepoBranchBase {
             repo_arg,
@@ -100,7 +99,7 @@ fn resolve_rebase_target(
             base_ref,
         } => {
             let repo_key = context.tasks().resolve_repo_key_input(&repo_arg)?;
-            Ok((repo_key, branch, Some(base_ref)))
+            Ok((repo_key, BranchName::new(branch), Some(base_ref)))
         }
     }
 }

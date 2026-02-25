@@ -28,10 +28,10 @@ pub fn run(
             .launch_workspace(&row.repo, &row.branch, &row.path);
     }
 
-    let (repo_arg, branch) = context
+    let (repo_key_raw, branch) = context
         .tasks()
         .resolve_repo_branch_inputs(repo_arg, branch_arg)?;
-    let repo_key = context.tasks().resolve_repo_key_input(&repo_arg)?;
+    let repo_key = context.tasks().resolve_repo_key_input(&repo_key_raw)?;
     let worktree = context.tasks().resolve_worktree_path(&repo_key, &branch);
     if !worktree.join(".git").exists() {
         return Err(Error::not_found(format!(
@@ -139,11 +139,14 @@ fn choose_task_interactive(
         .default(0)
         .interact_opt()?;
 
-    index.map(|i| matches[i].0.clone()).ok_or(Error::Cancelled)
+    let Some(i) = index else {
+        return Err(Error::Cancelled);
+    };
+    Ok(matches[i].0.clone())
 }
 
 fn match_task_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
-    if row.branch == query {
+    if row.branch.as_str() == query {
         return Some(MatchKind::Exact);
     }
 
@@ -157,7 +160,7 @@ fn match_task_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
 
 fn match_repo_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
     let short = row.repo.rsplit('/').next().unwrap_or_default();
-    if row.repo == query || short == query {
+    if row.repo.as_str() == query || short == query {
         return Some(MatchKind::Exact);
     }
 
@@ -175,14 +178,17 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{match_repo_name, match_task_name, resolve_match, MatchKind};
-    use crate::runtime::task_rows::{TaskRow, TaskStatus};
+    use crate::{
+        runtime::task_rows::{TaskRow, TaskStatus},
+        types::{BranchName, RepoKey},
+    };
 
     #[test]
     fn task_name_match_prefers_exact() {
         let row = TaskRow {
             status: TaskStatus::Parked,
-            repo: "github.com/acme/tool".to_string(),
-            branch: "feat/login".to_string(),
+            repo: RepoKey::new("github.com/acme/tool"),
+            branch: BranchName::new("feat/login"),
             path: PathBuf::from("/tmp/wt/tool/feat/login"),
         };
         assert_eq!(match_task_name(&row, "feat/login"), Some(MatchKind::Exact));
@@ -193,8 +199,8 @@ mod tests {
     fn repo_name_match_supports_short_repo() {
         let row = TaskRow {
             status: TaskStatus::Parked,
-            repo: "github.com/acme/tool".to_string(),
-            branch: "feat/login".to_string(),
+            repo: RepoKey::new("github.com/acme/tool"),
+            branch: BranchName::new("feat/login"),
             path: PathBuf::from("/tmp/wt/tool/feat/login"),
         };
         assert_eq!(match_repo_name(&row, "tool"), Some(MatchKind::Exact));
@@ -205,14 +211,14 @@ mod tests {
     fn resolve_match_uses_single_exact_without_prompt() {
         let a = TaskRow {
             status: TaskStatus::Parked,
-            repo: "github.com/acme/tool".to_string(),
-            branch: "feat/login".to_string(),
+            repo: RepoKey::new("github.com/acme/tool"),
+            branch: BranchName::new("feat/login"),
             path: PathBuf::from("/tmp/wt/tool/feat/login"),
         };
         let b = TaskRow {
             status: TaskStatus::Parked,
-            repo: "github.com/acme/other".to_string(),
-            branch: "login-fix".to_string(),
+            repo: RepoKey::new("github.com/acme/other"),
+            branch: BranchName::new("login-fix"),
             path: PathBuf::from("/tmp/wt/other/login-fix"),
         };
 

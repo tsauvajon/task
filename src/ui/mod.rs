@@ -107,7 +107,7 @@ fn apply_intent(
                     }
                 }
                 ViewMode::Repos => {
-                    if let Some(repo) = state.selected_repo_row().map(|row| row.repo.clone()) {
+                    if let Some(repo) = state.selected_repo_row().map(|row| row.repo.to_string()) {
                         state.select_repo_for_tasks(repo);
                         refresh_task_rows(context, state)?;
                         state.message = "Opened selected repository tasks".to_string();

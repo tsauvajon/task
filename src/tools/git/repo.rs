@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use super::runner::run_git_capture;
+use super::{gitdir::GitDir, runner::run_git_capture};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,13 +106,9 @@ pub fn is_valid_bare_repo(gitdir: &Path) -> bool {
     if !gitdir.is_dir() {
         return false;
     }
-
-    let gitdir_str = gitdir.to_string_lossy();
-    run_git_capture(
-        &["--git-dir", gitdir_str.as_ref(), "rev-parse", "--is-bare-repository"],
-        None,
-    )
-    .is_ok_and(|output| output.trim() == "true")
+    GitDir::new(gitdir)
+        .capture(&["rev-parse", "--is-bare-repository"])
+        .is_ok_and(|output| output.trim() == "true")
 }
 
 pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<()> {

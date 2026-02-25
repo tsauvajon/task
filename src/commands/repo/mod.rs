@@ -1,7 +1,7 @@
 use crate::{
     commands::{clone, RepoCommand},
     error::Result,
-    runtime::environment::RuntimeEnvironment,
+    runtime::{environment::RuntimeEnvironment, process},
 };
 
 pub fn run(context: &RuntimeEnvironment, command: RepoCommand) -> Result<()> {
@@ -16,7 +16,7 @@ fn list(context: &RuntimeEnvironment) -> Result<()> {
     let repo_keys = context.tasks().available_repo_keys()?;
 
     if repo_keys.is_empty() {
-        context.process().log(&format!(
+        process::log(&format!(
             "No repositories found in {}",
             context.layout().repos_dir().display()
         ));

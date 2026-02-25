@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout as UiLayout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
+    Frame,
 };
 
 use super::state::{InputMode, UiState, ViewMode};
@@ -91,8 +91,8 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
         };
         Some(Row::new(vec![
             Cell::from(status_label(row.status)).style(status_style),
-            Cell::from(row.repo.clone()),
-            Cell::from(row.branch.clone()),
+            Cell::from(row.repo.to_string()),
+            Cell::from(row.branch.to_string()),
             Cell::from(row.path.to_string_lossy().to_string()),
         ]))
     });
@@ -147,7 +147,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
     let rows = state.repo_filtered_indices.iter().filter_map(|index| {
         let row = state.repo_rows.get(*index)?;
         Some(Row::new(vec![
-            Cell::from(row.repo.clone()),
+            Cell::from(row.repo.to_string()),
             Cell::from(row.open_tasks.to_string()).style(
                 Style::default()
                     .fg(Color::Green)

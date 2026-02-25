@@ -2,7 +2,7 @@ use dialoguer::{theme::ColorfulTheme, Confirm};
 
 use crate::{
     error::{Error, Result},
-    runtime::{config::is_interactive_terminal, environment::RuntimeEnvironment, state},
+    runtime::{config::is_interactive_terminal, environment::RuntimeEnvironment, process, state},
     tools::{
         asdf,
         nodejs::runtime::{corepack_available, enable_corepack, node_available},
@@ -26,7 +26,7 @@ pub fn ensure_first_run_setup(env: &RuntimeEnvironment) -> Result<()> {
         guidance,
     )?;
     if applied {
-        env.process().log("First-run setup complete");
+        process::log("First-run setup complete");
         return Ok(());
     }
 
@@ -61,42 +61,41 @@ pub fn apply_full_setup(
 }
 
 pub fn run_full_setup(env: &RuntimeEnvironment) -> Result<()> {
-    let process = env.process();
     let layout = env.layout();
 
     env.tasks().ensure_layout()?;
-    process.log(&format!("Repos dir: {}", layout.repos_dir().display()));
-    process.log(&format!("Worktrees dir: {}", layout.wt_dir().display()));
+    process::log(&format!("Repos dir: {}", layout.repos_dir().display()));
+    process::log(&format!("Worktrees dir: {}", layout.wt_dir().display()));
 
-    if !process.command_exists("nix") {
+    if !process::nix_available() {
         return Err(Error::failed(
             "nix is required for setup. Install nix and retry 'task bootstrap'.",
         ));
     }
 
-    if !asdf::is_available(process) {
-        process.warn("asdf could not be launched via nix. Skipping asdf-managed runtime setup.");
+    if !asdf::is_available() {
+        process::warn("asdf could not be launched via nix. Skipping asdf-managed runtime setup.");
     } else {
-        if !asdf::has_nodejs_plugin(process) {
-            process.log("Installing asdf nodejs plugin");
-            asdf::install_nodejs_plugin(process)?;
+        if !asdf::has_nodejs_plugin() {
+            process::log("Installing asdf nodejs plugin");
+            asdf::install_nodejs_plugin()?;
         }
 
-        if let Err(err) = asdf::import_nodejs_release_keyring(process) {
-            process.warn(&format!("Could not import nodejs release keyring: {err}"));
+        if let Err(err) = asdf::import_nodejs_release_keyring() {
+            process::warn(&format!("Could not import nodejs release keyring: {err}"));
         }
 
-        if asdf::install_from_user_tool_versions(process)? {
-            process.log("Installing runtimes from ~/.tool-versions");
+        if asdf::install_from_user_tool_versions()? {
+            process::log("Installing runtimes from ~/.tool-versions");
         }
     }
 
-    if node_available(process) && corepack_available(process) {
-        let _ = enable_corepack(process);
-        process.log("Enabled corepack");
+    if node_available() && corepack_available() {
+        let _ = enable_corepack();
+        process::log("Enabled corepack");
     }
 
     state::mark_onboarding_complete()?;
-    process.log("Bootstrap complete");
+    process::log("Bootstrap complete");
     Ok(())
 }

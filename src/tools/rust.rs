@@ -1,11 +1,10 @@
 use std::path::Path;
 
-use crate::{error::Result, runtime::process::ProcessRunner};
+use crate::{error::Result, runtime::process};
 
-pub fn run_checks(process: ProcessRunner, path: &Path) -> Result<()> {
-    run_cargo_command(process, path, &["fmt", "--all"])?;
+pub fn run_checks(path: &Path) -> Result<()> {
+    run_cargo_command(path, &["fmt", "--all"])?;
     run_cargo_command(
-        process,
         path,
         &[
             "clippy",
@@ -17,12 +16,12 @@ pub fn run_checks(process: ProcessRunner, path: &Path) -> Result<()> {
             "warnings",
         ],
     )?;
-    run_cargo_command(process, path, &["test", "--workspace", "--all-features"])
+    run_cargo_command(path, &["test", "--workspace", "--all-features"])
 }
 
-fn run_cargo_command(process: ProcessRunner, path: &Path, cargo_args: &[&str]) -> Result<()> {
+fn run_cargo_command(path: &Path, cargo_args: &[&str]) -> Result<()> {
     let args = cargo_command(cargo_args);
-    process.run_status("nix", &args, Some(path))
+    process::run_status("nix", &args, Some(path))
 }
 
 fn cargo_command<'a>(cargo_args: &[&'a str]) -> Vec<&'a str> {
