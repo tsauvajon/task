@@ -315,7 +315,6 @@ mod tests {
                 "run",
                 "nixpkgs#opencode",
                 "--",
-                "opencode",
                 "--session",
                 "ses_123",
             ]

@@ -35,20 +35,6 @@ impl ManagedTool {
         }
     }
 
-    pub fn binary(self) -> &'static str {
-        match self {
-            Self::Git => "git",
-            Self::Tmux => "tmux",
-            Self::Codium => "codium",
-            Self::Opencode => "opencode",
-            Self::Direnv => "direnv",
-            Self::Asdf => "asdf",
-            Self::Pnpm => "pnpm",
-            Self::Corepack => "corepack",
-            Self::Node => "node",
-        }
-    }
-
     pub fn nix_package(self) -> &'static str {
         match self {
             Self::Git => "nixpkgs#git",
@@ -87,7 +73,6 @@ impl CommandPlan {
             "run".to_string(),
             tool.nix_package().to_string(),
             "--".to_string(),
-            tool.binary().to_string(),
         ];
         args.extend(tool_args);
 
@@ -283,10 +268,7 @@ mod tests {
     fn command_plan_wraps_managed_tool_with_nix_run() {
         let plan = CommandPlan::from_program("git", &["status"]);
         assert_eq!(plan.program(), "nix");
-        assert_eq!(
-            plan.args(),
-            vec!["run", "nixpkgs#git", "--", "git", "status"]
-        );
+        assert_eq!(plan.args(), vec!["run", "nixpkgs#git", "--", "status"]);
     }
 
     #[test]

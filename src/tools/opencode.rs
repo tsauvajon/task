@@ -184,10 +184,7 @@ mod tests {
         // Point at a non-existent path — opencode_db_path() returns None.
         let plan = launch_command(Path::new("/nonexistent/worktree"));
         assert_eq!(plan.program(), "nix");
-        assert_eq!(
-            plan.args(),
-            vec!["run", "nixpkgs#opencode", "--", "opencode"]
-        );
+        assert_eq!(plan.args(), vec!["run", "nixpkgs#opencode", "--"]);
     }
 
     #[test]
