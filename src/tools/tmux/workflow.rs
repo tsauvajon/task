@@ -8,7 +8,7 @@ use crate::{
     runtime::process::{CommandPlan, ProcessRunner},
     tools::{
         opencode,
-        vscodium::workflow::{close_task_windows, open_task_window},
+        vscodium::workflow::{CodiumState, close_task_windows, codium_state, open_task_window},
     },
 };
 
@@ -70,6 +70,41 @@ fn new_session_args(session: &str, path: &Path, startup: SessionStartup) -> Vec<
     tmux_args
 }
 
+/// Reopens VSCodium for the given task if it is not already running.
+/// On failure to detect state, warns and attempts to reopen (best effort).
+fn ensure_codium_running(
+    process: ProcessRunner,
+    repo_key: &str,
+    branch: &str,
+    path: &Path,
+    codium_trusted_roots: &[PathBuf],
+) {
+    match codium_state(repo_key, branch) {
+        Ok(CodiumState::Running) => {}
+        Ok(CodiumState::NotRunning) => {
+            if let Err(error) =
+                open_task_window(process, repo_key, branch, path, codium_trusted_roots)
+            {
+                process.warn(&format!(
+                    "Failed to open VSCodium for {repo_key} {branch}: {error}"
+                ));
+            }
+        }
+        Err(error) => {
+            process.warn(&format!(
+                "Could not detect VSCodium state for {repo_key} {branch}: {error}"
+            ));
+            if let Err(error) =
+                open_task_window(process, repo_key, branch, path, codium_trusted_roots)
+            {
+                process.warn(&format!(
+                    "Failed to open VSCodium for {repo_key} {branch}: {error}"
+                ));
+            }
+        }
+    }
+}
+
 pub fn open_task_session(
     process: ProcessRunner,
     repo_key: &str,
@@ -81,15 +116,10 @@ pub fn open_task_session(
         return Ok(OpenResult::Unavailable);
     }
 
+    ensure_codium_running(process, repo_key, branch, path, codium_trusted_roots);
+
     let session = session_name(repo_key, branch);
     if !has_session(process, &session) {
-        if let Err(error) = open_task_window(process, repo_key, branch, path, codium_trusted_roots)
-        {
-            process.warn(&format!(
-                "Failed to open VSCodium for {repo_key} {branch}: {error}"
-            ));
-        }
-
         if process.command_exists("opencode") {
             let opencode_command = opencode::launch_command(path);
             let tmux_args = new_session_args(
