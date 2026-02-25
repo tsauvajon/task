@@ -4,3 +4,5 @@ pub mod refs;
 pub mod repo;
 mod run;
 pub mod worktrees;
+
+pub use run::warmup;

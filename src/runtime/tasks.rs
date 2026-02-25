@@ -8,6 +8,7 @@ use std::{
 
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 use dialoguer::{Select, theme::ColorfulTheme};
+use rayon::prelude::*;
 
 use crate::{
     error::{Error, Result},
@@ -60,21 +61,31 @@ impl TaskResolver {
         Ok(())
     }
 
-    pub fn available_repo_keys(&self) -> Result<Vec<RepoKey>> {
+    /// Returns all repos as `(key, gitdir)` pairs, sorted by key.
+    /// Prefer this over `available_repo_keys` when you need both pieces,
+    /// so the gitdir path is never recomputed from the key.
+    pub fn available_repos(&self) -> Result<Vec<(RepoKey, PathBuf)>> {
         let repos_dir = self.layout.repos_dir().to_path_buf();
-        let gitdirs = collect_gitdirs(&repos_dir)?;
-        let mut keys: Vec<RepoKey> = gitdirs
+        let mut repos: Vec<(RepoKey, PathBuf)> = collect_gitdirs(&repos_dir)?
             .into_iter()
             .filter_map(|gitdir| {
                 let relative = gitdir.strip_prefix(&repos_dir).ok()?;
                 let key = relative.to_string_lossy();
                 let key = key.strip_suffix(".git").unwrap_or(&key);
-                Some(RepoKey::new(key))
+                Some((RepoKey::new(key), gitdir))
             })
             .collect();
-        keys.sort();
-        keys.dedup();
-        Ok(keys)
+        repos.sort_by(|(a, _), (b, _)| a.cmp(b));
+        repos.dedup_by(|(a, _), (b, _)| a == b);
+        Ok(repos)
+    }
+
+    pub fn available_repo_keys(&self) -> Result<Vec<RepoKey>> {
+        Ok(self
+            .available_repos()?
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect())
     }
 
     pub fn resolve_repo_key_input(&self, repo_arg: &str) -> Result<RepoKey> {
@@ -333,14 +344,17 @@ impl TaskResolver {
 
     fn all_tasks(&self) -> Result<Vec<TaskRow>> {
         let open_sessions = self.tmux_sessions();
-        let mut rows = Vec::new();
-        for repo_key in self.available_repo_keys()? {
-            let gitdir = self.layout.repo_gitdir_path(&repo_key);
-            if gitdir.is_dir() {
-                rows.extend(self.repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
-            }
-        }
-        Ok(rows)
+        // Resolve the nix store path for git before entering the parallel
+        // section: the OnceLock inside NixRunner would otherwise block every
+        // rayon thread on the first caller while the rest stall idle.
+        crate::tools::git::warmup();
+        self.available_repos()?
+            .into_par_iter()
+            .map(|(repo_key, gitdir)| self.repo_task_rows(&repo_key, &gitdir, &open_sessions))
+            .try_reduce(Vec::new, |mut acc, mut v| {
+                acc.append(&mut v);
+                Ok(acc)
+            })
     }
 }
 
@@ -349,16 +363,14 @@ fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut gitdirs = Vec::new();
 
     while let Some(current) = stack.pop() {
-        if !current.is_dir() {
-            continue;
-        }
-
-        for entry in fs::read_dir(&current)? {
-            let path = entry?.path();
-            if !path.is_dir() {
+        for entry in fs::read_dir(&current)?.filter_map(|e| e.ok()) {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
                 continue;
             }
-
+            let path = entry.path();
             let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
             if name.ends_with(".git") {
                 gitdirs.push(path);
@@ -419,20 +431,107 @@ fn choose_task_interactive(query: &str, choices: &[&TaskRow]) -> Result<(RepoKey
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs};
+    use std::{env, fs, path::PathBuf};
 
     use super::collect_gitdirs;
 
-    #[test]
-    fn collect_gitdirs_finds_nested_bare_repos() {
-        let base = env::temp_dir().join("task-rs-collect-gitdirs");
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(base.join("repos/github.com/me/app.git")).expect("create nested gitdir");
+    /// RAII guard that removes its directory on drop, including on test failure.
+    struct TempDir(PathBuf);
 
-        let results = collect_gitdirs(&base).expect("collect gitdirs");
-        assert_eq!(results.len(), 1);
-        assert!(results[0].ends_with("app.git"));
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = env::temp_dir().join(format!("task-rs-collect-gitdirs-{name}"));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self(path)
+        }
 
-        let _ = fs::remove_dir_all(base);
+        fn path(&self) -> &PathBuf {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    mod collect_gitdirs {
+        use super::*;
+
+        #[test]
+        fn finds_nested_bare_repos() {
+            let dir = TempDir::new("nested");
+            fs::create_dir_all(dir.path().join("repos/github.com/me/app.git"))
+                .expect("create nested gitdir");
+
+            let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
+            assert_eq!(results.len(), 1);
+            assert!(results[0].ends_with("app.git"));
+        }
+
+        #[test]
+        fn returns_all_repos_across_orgs() {
+            let dir = TempDir::new("multi-org");
+            fs::create_dir_all(dir.path().join("github.com/org-a/alpha.git")).unwrap();
+            fs::create_dir_all(dir.path().join("github.com/org-a/beta.git")).unwrap();
+            fs::create_dir_all(dir.path().join("github.com/org-b/gamma.git")).unwrap();
+            fs::create_dir_all(dir.path().join("gitlab.com/org-c/delta.git")).unwrap();
+
+            let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
+            assert_eq!(results.len(), 4);
+        }
+
+        #[test]
+        fn output_is_sorted() {
+            let dir = TempDir::new("sorted");
+            // Create in reverse alphabetical order to confirm sort is applied.
+            fs::create_dir_all(dir.path().join("github.com/z/zzz.git")).unwrap();
+            fs::create_dir_all(dir.path().join("github.com/a/aaa.git")).unwrap();
+            fs::create_dir_all(dir.path().join("github.com/m/mmm.git")).unwrap();
+
+            let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
+            let names: Vec<String> = results
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            let mut sorted = names.clone();
+            sorted.sort();
+            assert_eq!(names, sorted, "output must be sorted");
+        }
+
+        #[test]
+        fn ignores_non_git_directories_and_files() {
+            let dir = TempDir::new("noise");
+            fs::create_dir_all(dir.path().join("github.com/org/real.git")).unwrap();
+            // A plain directory that should be recursed but not collected.
+            fs::create_dir_all(dir.path().join("github.com/org/not-a-repo")).unwrap();
+            // A file at the root level - should be silently skipped.
+            fs::write(dir.path().join("README.txt"), b"hello").unwrap();
+
+            let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
+            assert_eq!(results.len(), 1);
+            assert!(results[0].ends_with("real.git"));
+        }
+
+        #[test]
+        fn returns_empty_for_empty_directory() {
+            let dir = TempDir::new("empty");
+
+            let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
+            assert!(results.is_empty());
+        }
+
+        #[test]
+        fn handles_deeply_nested_tree() {
+            let dir = TempDir::new("deep");
+            // host / org / repo.git  — 3 levels
+            fs::create_dir_all(dir.path().join("github.com/org/deep.git")).unwrap();
+
+            let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
+            assert_eq!(results.len(), 1);
+            assert!(results[0].ends_with("deep.git"));
+        }
     }
 }

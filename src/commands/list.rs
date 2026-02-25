@@ -1,6 +1,9 @@
+use rayon::prelude::*;
+
 use crate::{
     error::{Error, Result},
     runtime::{environment::RuntimeEnvironment, process, task_rows::TaskRow},
+    tools::git,
 };
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
@@ -32,14 +35,28 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let repo_keys = context.tasks().available_repo_keys()?;
+    // Resolve the nix store path for git before entering the parallel section:
+    // the OnceLock inside NixRunner would otherwise block every rayon thread on
+    // the first caller (~0.5s) while the rest stall idle.
+    git::warmup();
+
+    // Collect all (key, gitdir) pairs first (fast sequential scan), then
+    // fan out all `git worktree list` subprocess calls in one flat parallel pass.
+    let results: Vec<_> = context
+        .tasks()
+        .available_repos()?
+        .into_par_iter()
+        .map(|(repo_key, gitdir)| {
+            let result = context
+                .tasks()
+                .repo_task_rows(&repo_key, &gitdir, &open_sessions);
+            (repo_key, result)
+        })
+        .collect();
+
     let mut skipped_repos = Vec::new();
-    for repo_key in repo_keys {
-        let gitdir = context.layout().repo_gitdir_path(&repo_key);
-        match context
-            .tasks()
-            .repo_task_rows(&repo_key, &gitdir, &open_sessions)
-        {
+    for (repo_key, result) in results {
+        match result {
             Ok(repo_rows) => rows.extend(repo_rows),
             Err(err) => skipped_repos.push((repo_key, err)),
         }
