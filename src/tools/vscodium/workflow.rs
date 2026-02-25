@@ -41,6 +41,22 @@ fn codium_args(user_data_dir: &Path, worktree_path: &Path) -> Vec<String> {
     ]
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodiumState {
+    Running,
+    NotRunning,
+}
+
+pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState, String> {
+    let user_data_dir = task_user_data_dir(repo_key, branch);
+    let pids = codium_pids_for_user_data_dir(&user_data_dir)?;
+    if pids.is_empty() {
+        Ok(CodiumState::NotRunning)
+    } else {
+        Ok(CodiumState::Running)
+    }
+}
+
 pub fn close_task_windows(
     process: ProcessRunner,
     repo_key: &str,
@@ -127,7 +143,7 @@ fn cleanup_user_data_dir(user_data_dir: &Path) -> Result<(), String> {
 mod tests {
     use std::{fs, path::Path};
 
-    use super::{cleanup_user_data_dir, codium_args};
+    use super::{CodiumState, cleanup_user_data_dir, codium_args, codium_state};
 
     #[test]
     fn codium_args_use_expected_flags() {
@@ -141,6 +157,12 @@ mod tests {
                 "/tmp/wt/repo",
             ]
         );
+    }
+
+    #[test]
+    fn codium_state_returns_not_running_for_unknown_task() {
+        let state = codium_state("no-such-repo", "no-such-branch").expect("codium_state");
+        assert_eq!(state, CodiumState::NotRunning);
     }
 
     #[test]

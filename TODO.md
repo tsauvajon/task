@@ -1,4 +1,3 @@
 - Nix by default (like it's done for cargo, but as an abstraction)
-- repo ui filter mode
 - (?) multi repo tasks?
-- repos view -> 't' to open tasks for this repo
+- task open (when parked) should reopen codium if it's closed
