@@ -6,31 +6,108 @@ use std::{
 
 use owo_colors::OwoColorize;
 
-/// Returns the nixpkgs attribute for a tool, if it should be run via `nix run`.
-///
-/// Tools mapped here are launched as `nix run nixpkgs#<pkg> -- <tool> <args…>`.
-/// Tools not in this map are invoked directly (e.g. `nix` itself, `kill`).
-pub fn nix_package_for(tool: &str) -> Option<&'static str> {
-    match tool {
-        "git" => Some("nixpkgs#git"),
-        "tmux" => Some("nixpkgs#tmux"),
-        "codium" => Some("nixpkgs#vscodium"),
-        "opencode" => Some("nixpkgs#opencode"),
-        "direnv" => Some("nixpkgs#direnv"),
-        "asdf" => Some("nixpkgs#asdf-vm"),
-        "pnpm" => Some("nixpkgs#pnpm"),
-        "corepack" | "node" => Some("nixpkgs#nodejs"),
-        _ => None,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedTool {
+    Git,
+    Tmux,
+    Codium,
+    Opencode,
+    Direnv,
+    Asdf,
+    Pnpm,
+    Corepack,
+    Node,
+}
+
+impl ManagedTool {
+    pub fn from_binary(binary: &str) -> Option<Self> {
+        match binary {
+            "git" => Some(Self::Git),
+            "tmux" => Some(Self::Tmux),
+            "codium" => Some(Self::Codium),
+            "opencode" => Some(Self::Opencode),
+            "direnv" => Some(Self::Direnv),
+            "asdf" => Some(Self::Asdf),
+            "pnpm" => Some(Self::Pnpm),
+            "corepack" => Some(Self::Corepack),
+            "node" => Some(Self::Node),
+            _ => None,
+        }
+    }
+
+    pub fn binary(self) -> &'static str {
+        match self {
+            Self::Git => "git",
+            Self::Tmux => "tmux",
+            Self::Codium => "codium",
+            Self::Opencode => "opencode",
+            Self::Direnv => "direnv",
+            Self::Asdf => "asdf",
+            Self::Pnpm => "pnpm",
+            Self::Corepack => "corepack",
+            Self::Node => "node",
+        }
+    }
+
+    pub fn nix_package(self) -> &'static str {
+        match self {
+            Self::Git => "nixpkgs#git",
+            Self::Tmux => "nixpkgs#tmux",
+            Self::Codium => "nixpkgs#vscodium",
+            Self::Opencode => "nixpkgs#opencode",
+            Self::Direnv => "nixpkgs#direnv",
+            Self::Asdf => "nixpkgs#asdf-vm",
+            Self::Pnpm => "nixpkgs#pnpm",
+            Self::Corepack | Self::Node => "nixpkgs#nodejs",
+        }
     }
 }
 
-/// Builds the full argument list for launching `<tool> <args…>` via `nix run`.
-///
-/// Returns `["run", "<nixpkg>", "--", "<tool>", <args…>]`.
-pub fn nix_run_args<'a>(nixpkg: &'a str, tool: &'a str, args: &'a [&'a str]) -> Vec<&'a str> {
-    let mut nix_args = vec!["run", nixpkg, "--", tool];
-    nix_args.extend_from_slice(args);
-    nix_args
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandPlan {
+    program: String,
+    args: Vec<String>,
+}
+
+impl CommandPlan {
+    pub fn from_program(program: &str, args: &[&str]) -> Self {
+        if let Some(tool) = ManagedTool::from_binary(program) {
+            let args = args.iter().map(|arg| (*arg).to_string()).collect();
+            return Self::for_managed_tool(tool, args);
+        }
+
+        Self {
+            program: program.to_string(),
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        }
+    }
+
+    pub fn for_managed_tool(tool: ManagedTool, tool_args: Vec<String>) -> Self {
+        let mut args = vec![
+            "run".to_string(),
+            tool.nix_package().to_string(),
+            "--".to_string(),
+            tool.binary().to_string(),
+        ];
+        args.extend(tool_args);
+
+        Self {
+            program: "nix".to_string(),
+            args,
+        }
+    }
+
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    pub fn args_refs(&self) -> Vec<&str> {
+        self.args.iter().map(String::as_str).collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -48,7 +125,7 @@ impl ProcessRunner {
             return Path::new(name).exists();
         }
 
-        if nix_package_for(name).is_some() {
+        if ManagedTool::from_binary(name).is_some() {
             return self.nix_available();
         }
 
@@ -69,11 +146,9 @@ impl ProcessRunner {
         cwd: Option<&Path>,
     ) -> Result<String, String> {
         let program_str = program.as_ref().to_string_lossy();
-        if let Some(nixpkg) = nix_package_for(&program_str) {
-            let nix_args = nix_run_args(nixpkg, &program_str, args);
-            return self.run_capture_raw("nix", &nix_args, cwd);
-        }
-        self.run_capture_raw(program, args, cwd)
+        let plan = CommandPlan::from_program(&program_str, args);
+        let plan_args = plan.args_refs();
+        self.run_capture_raw(plan.program(), &plan_args, cwd)
     }
 
     pub fn run_status(
@@ -83,11 +158,9 @@ impl ProcessRunner {
         cwd: Option<&Path>,
     ) -> Result<(), String> {
         let program_str = program.as_ref().to_string_lossy();
-        if let Some(nixpkg) = nix_package_for(&program_str) {
-            let nix_args = nix_run_args(nixpkg, &program_str, args);
-            return self.run_status_raw("nix", &nix_args, cwd);
-        }
-        self.run_status_raw(program, args, cwd)
+        let plan = CommandPlan::from_program(&program_str, args);
+        let plan_args = plan.args_refs();
+        self.run_status_raw(plan.program(), &plan_args, cwd)
     }
 
     pub fn spawn_detached(
@@ -97,11 +170,9 @@ impl ProcessRunner {
         cwd: Option<&Path>,
     ) -> Result<(), String> {
         let program_str = program.as_ref().to_string_lossy();
-        if let Some(nixpkg) = nix_package_for(&program_str) {
-            let nix_args = nix_run_args(nixpkg, &program_str, args);
-            return self.spawn_detached_raw("nix", &nix_args, cwd);
-        }
-        self.spawn_detached_raw(program, args, cwd)
+        let plan = CommandPlan::from_program(&program_str, args);
+        let plan_args = plan.args_refs();
+        self.spawn_detached_raw(plan.program(), &plan_args, cwd)
     }
 
     fn run_capture_raw(
@@ -173,38 +244,55 @@ impl ProcessRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::{nix_package_for, nix_run_args};
+    use super::{CommandPlan, ManagedTool};
 
     #[test]
-    fn nix_package_for_maps_known_tools() {
-        assert_eq!(nix_package_for("git"), Some("nixpkgs#git"));
-        assert_eq!(nix_package_for("tmux"), Some("nixpkgs#tmux"));
-        assert_eq!(nix_package_for("codium"), Some("nixpkgs#vscodium"));
-        assert_eq!(nix_package_for("opencode"), Some("nixpkgs#opencode"));
-        assert_eq!(nix_package_for("direnv"), Some("nixpkgs#direnv"));
-        assert_eq!(nix_package_for("asdf"), Some("nixpkgs#asdf-vm"));
-        assert_eq!(nix_package_for("pnpm"), Some("nixpkgs#pnpm"));
-        assert_eq!(nix_package_for("corepack"), Some("nixpkgs#nodejs"));
-        assert_eq!(nix_package_for("node"), Some("nixpkgs#nodejs"));
+    fn managed_tool_from_binary_maps_known_tools() {
+        assert_eq!(ManagedTool::from_binary("git"), Some(ManagedTool::Git));
+        assert_eq!(ManagedTool::from_binary("tmux"), Some(ManagedTool::Tmux));
+        assert_eq!(
+            ManagedTool::from_binary("codium"),
+            Some(ManagedTool::Codium)
+        );
+        assert_eq!(
+            ManagedTool::from_binary("opencode"),
+            Some(ManagedTool::Opencode)
+        );
+        assert_eq!(
+            ManagedTool::from_binary("direnv"),
+            Some(ManagedTool::Direnv)
+        );
+        assert_eq!(ManagedTool::from_binary("asdf"), Some(ManagedTool::Asdf));
+        assert_eq!(ManagedTool::from_binary("pnpm"), Some(ManagedTool::Pnpm));
+        assert_eq!(
+            ManagedTool::from_binary("corepack"),
+            Some(ManagedTool::Corepack)
+        );
+        assert_eq!(ManagedTool::from_binary("node"), Some(ManagedTool::Node));
     }
 
     #[test]
-    fn nix_package_for_returns_none_for_unmapped_tools() {
-        assert_eq!(nix_package_for("nix"), None);
-        assert_eq!(nix_package_for("kill"), None);
-        assert_eq!(nix_package_for("cargo"), None);
-        assert_eq!(nix_package_for("unknown-tool"), None);
+    fn managed_tool_from_binary_returns_none_for_unmapped_tools() {
+        assert_eq!(ManagedTool::from_binary("nix"), None);
+        assert_eq!(ManagedTool::from_binary("kill"), None);
+        assert_eq!(ManagedTool::from_binary("cargo"), None);
+        assert_eq!(ManagedTool::from_binary("unknown-tool"), None);
     }
 
     #[test]
-    fn nix_run_args_produces_correct_invocation() {
-        let args = nix_run_args("nixpkgs#git", "git", &["status"]);
-        assert_eq!(args, vec!["run", "nixpkgs#git", "--", "git", "status"]);
+    fn command_plan_wraps_managed_tool_with_nix_run() {
+        let plan = CommandPlan::from_program("git", &["status"]);
+        assert_eq!(plan.program(), "nix");
+        assert_eq!(
+            plan.args(),
+            vec!["run", "nixpkgs#git", "--", "git", "status"]
+        );
     }
 
     #[test]
-    fn nix_run_args_with_no_tool_args() {
-        let args = nix_run_args("nixpkgs#tmux", "tmux", &[]);
-        assert_eq!(args, vec!["run", "nixpkgs#tmux", "--", "tmux"]);
+    fn command_plan_keeps_direct_programs_unwrapped() {
+        let plan = CommandPlan::from_program("kill", &["-TERM", "123"]);
+        assert_eq!(plan.program(), "kill");
+        assert_eq!(plan.args(), vec!["-TERM", "123"]);
     }
 }
