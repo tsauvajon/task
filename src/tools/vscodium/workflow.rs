@@ -20,7 +20,7 @@ pub fn open_task_window(
     worktree_path: &Path,
     codium_trusted_roots: &[std::path::PathBuf],
 ) -> Result<(), String> {
-    if !process.command_exists("codium") {
+    if !process.command_exists("nix") {
         return Ok(());
     }
 
@@ -33,16 +33,26 @@ pub fn open_task_window(
         ));
     }
 
-    Command::new("codium")
-        .arg("--new-window")
-        .arg("--user-data-dir")
-        .arg(&user_data_dir)
-        .arg(worktree_path)
+    let args = nix_vscodium_args(&user_data_dir, worktree_path);
+    Command::new("nix")
+        .args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+fn nix_vscodium_args(user_data_dir: &Path, worktree_path: &Path) -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "nixpkgs#vscodium".to_string(),
+        "--".to_string(),
+        "--new-window".to_string(),
+        "--user-data-dir".to_string(),
+        user_data_dir.to_string_lossy().to_string(),
+        worktree_path.to_string_lossy().to_string(),
+    ]
 }
 
 pub fn close_task_windows(
@@ -129,9 +139,26 @@ fn cleanup_user_data_dir(user_data_dir: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::Path};
 
-    use super::cleanup_user_data_dir;
+    use super::{cleanup_user_data_dir, nix_vscodium_args};
+
+    #[test]
+    fn nix_vscodium_args_use_expected_launcher_and_flags() {
+        let args = nix_vscodium_args(Path::new("/tmp/task/codium/a"), Path::new("/tmp/wt/repo"));
+        assert_eq!(
+            args,
+            vec![
+                "run",
+                "nixpkgs#vscodium",
+                "--",
+                "--new-window",
+                "--user-data-dir",
+                "/tmp/task/codium/a",
+                "/tmp/wt/repo",
+            ]
+        );
+    }
 
     #[test]
     fn cleanup_task_state_removes_existing_directory() {

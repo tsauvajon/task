@@ -40,9 +40,7 @@ fn check(context: &RuntimeEnvironment) -> DoctorReport {
 
     println!("repos_dir: {}", context.repos_dir().display());
     println!("wt_dir: {}", context.wt_dir().display());
-    for cmd in [
-        "git", "tmux", "vim", "codium", "opencode", "nix", "direnv", "asdf",
-    ] {
+    for cmd in ["git", "tmux", "vim", "opencode", "nix", "direnv", "asdf"] {
         if context.command_exists(cmd) {
             println!("[ok]      {cmd}");
         } else {
