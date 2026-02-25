@@ -5,7 +5,7 @@ use super::{
     process_match::{cmdline_matches_user_data_dir, parse_cmdline_bytes},
     trust::seed_trusted_roots,
 };
-use crate::runtime::process::ProcessRunner;
+use crate::{error::Result, runtime::process::ProcessRunner};
 
 pub fn open_task_window(
     process: ProcessRunner,
@@ -13,16 +13,16 @@ pub fn open_task_window(
     branch: &str,
     worktree_path: &Path,
     codium_trusted_roots: &[std::path::PathBuf],
-) -> Result<(), String> {
+) -> Result<()> {
     if !process.command_exists("codium") {
         return Ok(());
     }
 
     let user_data_dir = task_user_data_dir(repo_key, branch);
-    fs::create_dir_all(&user_data_dir).map_err(|error| error.to_string())?;
-    if let Err(error) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
+    fs::create_dir_all(&user_data_dir)?;
+    if let Err(err) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
         process.warn(&format!(
-            "Could not seed VSCodium trusted roots for {}: {error}",
+            "Could not seed VSCodium trusted roots for {}: {err}",
             user_data_dir.display()
         ));
     }
@@ -36,8 +36,8 @@ fn codium_args(user_data_dir: &Path, worktree_path: &Path) -> Vec<String> {
     vec![
         "--new-window".to_string(),
         "--user-data-dir".to_string(),
-        user_data_dir.to_string_lossy().to_string(),
-        worktree_path.to_string_lossy().to_string(),
+        user_data_dir.to_string_lossy().into_owned(),
+        worktree_path.to_string_lossy().into_owned(),
     ]
 }
 
@@ -47,7 +47,7 @@ pub enum CodiumState {
     NotRunning,
 }
 
-pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState, String> {
+pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState> {
     let user_data_dir = task_user_data_dir(repo_key, branch);
     let pids = codium_pids_for_user_data_dir(&user_data_dir)?;
     if pids.is_empty() {
@@ -57,31 +57,30 @@ pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState, String>
     }
 }
 
-pub fn close_task_windows(
-    process: ProcessRunner,
-    repo_key: &str,
-    branch: &str,
-) -> Result<(), String> {
+pub fn close_task_windows(process: ProcessRunner, repo_key: &str, branch: &str) -> Result<()> {
     let user_data_dir = task_user_data_dir(repo_key, branch);
-    let pids = codium_pids_for_user_data_dir(&user_data_dir)?;
-
-    for pid in pids {
+    for pid in codium_pids_for_user_data_dir(&user_data_dir)? {
         terminate_pid(process, pid)?;
     }
-
     Ok(())
 }
 
-pub fn cleanup_task_state(repo_key: &str, branch: &str) -> Result<(), String> {
+pub fn cleanup_task_state(repo_key: &str, branch: &str) -> Result<()> {
     let user_data_dir = task_user_data_dir(repo_key, branch);
     cleanup_user_data_dir(&user_data_dir)
 }
 
-fn codium_pids_for_user_data_dir(user_data_dir: &Path) -> Result<Vec<u32>, String> {
+fn codium_pids_for_user_data_dir(user_data_dir: &Path) -> Result<Vec<u32>> {
     let mut matches = Vec::new();
 
-    for entry in fs::read_dir("/proc").map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
+    let proc_entries = match fs::read_dir("/proc") {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(matches),
+        Err(err) => return Err(err.into()),
+    };
+
+    for entry in proc_entries {
+        let entry = entry?;
         let name = entry.file_name();
         let Some(pid_text) = name.to_str() else {
             continue;
@@ -104,9 +103,9 @@ fn codium_pids_for_user_data_dir(user_data_dir: &Path) -> Result<Vec<u32>, Strin
     Ok(matches)
 }
 
-fn terminate_pid(process: ProcessRunner, pid: u32) -> Result<(), String> {
-    let pid_text = pid.to_string();
-    let _ = process.run_status("kill", &["-TERM", &pid_text], None);
+fn terminate_pid(process: ProcessRunner, pid: u32) -> Result<()> {
+    let pid_str = pid.to_string();
+    let _ = process.run_status("kill", &["-TERM", &pid_str], None);
 
     for _ in 0..10 {
         if !pid_exists(pid) {
@@ -115,7 +114,7 @@ fn terminate_pid(process: ProcessRunner, pid: u32) -> Result<(), String> {
         thread::sleep(Duration::from_millis(50));
     }
 
-    let _ = process.run_status("kill", &["-KILL", &pid_text], None);
+    let _ = process.run_status("kill", &["-KILL", &pid_str], None);
 
     for _ in 0..10 {
         if !pid_exists(pid) {
@@ -124,26 +123,27 @@ fn terminate_pid(process: ProcessRunner, pid: u32) -> Result<(), String> {
         thread::sleep(Duration::from_millis(50));
     }
 
-    Err(format!("Failed to stop codium process {pid}"))
+    Err(crate::error::Error::failed(format!(
+        "Failed to stop codium process {pid}"
+    )))
 }
 
 fn pid_exists(pid: u32) -> bool {
     Path::new("/proc").join(pid.to_string()).exists()
 }
 
-fn cleanup_user_data_dir(user_data_dir: &Path) -> Result<(), String> {
+fn cleanup_user_data_dir(user_data_dir: &Path) -> Result<()> {
     if !user_data_dir.exists() {
         return Ok(());
     }
-
-    fs::remove_dir_all(user_data_dir).map_err(|error| error.to_string())
+    fs::remove_dir_all(user_data_dir).map_err(crate::error::Error::from)
 }
 
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path};
 
-    use super::{CodiumState, cleanup_user_data_dir, codium_args, codium_state};
+    use super::{cleanup_user_data_dir, codium_args, codium_state, CodiumState};
 
     #[test]
     fn codium_args_use_expected_flags() {
@@ -169,7 +169,7 @@ mod tests {
     fn cleanup_task_state_removes_existing_directory() {
         let base = std::env::temp_dir().join("task-vscodium-cleanup-existing");
         let _ = fs::remove_dir_all(&base);
-        let target = base.join("task").join("codium").join("session");
+        let target = base.join("task/codium/session");
         fs::create_dir_all(target.join("User")).expect("create nested dir");
 
         cleanup_user_data_dir(&target).expect("cleanup state");
@@ -182,7 +182,7 @@ mod tests {
     fn cleanup_task_state_ignores_missing_directory() {
         let base = std::env::temp_dir().join("task-vscodium-cleanup-missing");
         let _ = fs::remove_dir_all(&base);
-        let target = base.join("task").join("codium").join("missing");
+        let target = base.join("task/codium/missing");
 
         cleanup_user_data_dir(&target).expect("cleanup missing state");
 

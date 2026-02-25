@@ -3,19 +3,22 @@ use std::{
     sync::OnceLock,
 };
 
-use crate::runtime::{
-    nix_store::{cached_nix_binary, run_nix_binary_capture, run_nix_binary_status},
-    process::ManagedTool,
+use crate::{
+    error::Result,
+    runtime::{
+        nix_store::{cached_nix_binary, run_nix_binary_capture, run_nix_binary_status},
+        process::ManagedTool,
+    },
 };
 
-static NIX_GIT_BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+static NIX_GIT_BINARY: OnceLock<Result<PathBuf>> = OnceLock::new();
 
-pub(super) fn run_git_capture(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+pub(super) fn run_git_capture(args: &[&str], cwd: Option<&Path>) -> Result<String> {
     let binary = cached_nix_binary(&NIX_GIT_BINARY, ManagedTool::Git)?;
     run_nix_binary_capture(binary, args, cwd)
 }
 
-pub(super) fn run_git_status(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
+pub(super) fn run_git_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
     let binary = cached_nix_binary(&NIX_GIT_BINARY, ManagedTool::Git)?;
     run_nix_binary_status(binary, args, cwd)
 }

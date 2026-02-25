@@ -6,6 +6,7 @@ use super::{
     sessions::{has_session, is_available},
 };
 use crate::{
+    error::Result,
     runtime::process::{CommandPlan, ProcessRunner},
     tools::{
         opencode,
@@ -54,7 +55,7 @@ fn finish_teardown_actions(tmux_available: bool, has_tmux_session: bool) -> Vec<
 }
 
 fn new_session_args(session: &str, path: &Path, startup: SessionStartup) -> Vec<String> {
-    let mut tmux_args = vec![
+    let mut args = vec![
         "new-session".to_string(),
         "-d".to_string(),
         "-s".to_string(),
@@ -64,11 +65,11 @@ fn new_session_args(session: &str, path: &Path, startup: SessionStartup) -> Vec<
     ];
 
     if let SessionStartup::WithOpencode(command) = startup {
-        tmux_args.push(command.program().to_string());
-        tmux_args.extend(command.args().iter().cloned());
+        args.push(command.program().to_string());
+        args.extend(command.args().iter().cloned());
     }
 
-    tmux_args
+    args
 }
 
 /// Reopens VSCodium for the given task if it is not already running.
@@ -82,24 +83,12 @@ fn ensure_codium_running(
 ) {
     match codium_state(repo_key, branch) {
         Ok(CodiumState::Running) => {}
-        Ok(CodiumState::NotRunning) => {
-            if let Err(error) =
+        Ok(CodiumState::NotRunning) | Err(_) => {
+            if let Err(err) =
                 open_task_window(process, repo_key, branch, path, codium_trusted_roots)
             {
                 process.warn(&format!(
-                    "Failed to open VSCodium for {repo_key} {branch}: {error}"
-                ));
-            }
-        }
-        Err(error) => {
-            process.warn(&format!(
-                "Could not detect VSCodium state for {repo_key} {branch}: {error}"
-            ));
-            if let Err(error) =
-                open_task_window(process, repo_key, branch, path, codium_trusted_roots)
-            {
-                process.warn(&format!(
-                    "Failed to open VSCodium for {repo_key} {branch}: {error}"
+                    "Failed to open VSCodium for {repo_key} {branch}: {err}"
                 ));
             }
         }
@@ -112,7 +101,7 @@ pub fn open_task_session(
     branch: &str,
     path: &Path,
     codium_trusted_roots: &[PathBuf],
-) -> Result<OpenResult, String> {
+) -> Result<OpenResult> {
     if !is_available(process) {
         return Ok(OpenResult::Unavailable);
     }
@@ -121,22 +110,18 @@ pub fn open_task_session(
 
     let session = session_name(repo_key, branch);
     if !has_session(process, &session) {
-        if process.command_exists("opencode") {
-            let opencode_command = opencode::launch_command(path);
-            let tmux_args = new_session_args(
-                &session,
-                path,
-                SessionStartup::WithOpencode(opencode_command),
-            );
-            let tmux_args_ref: Vec<&str> = tmux_args.iter().map(String::as_str).collect();
-            run_tmux_status(&tmux_args_ref, None)?;
+        let startup = if process.command_exists("opencode") {
+            SessionStartup::WithOpencode(opencode::launch_command(path))
         } else {
             process.warn("'opencode' is not available; opening tmux with shell panes only.");
-            let tmux_args = new_session_args(&session, path, SessionStartup::ShellOnly);
-            let tmux_args_ref: Vec<&str> = tmux_args.iter().map(String::as_str).collect();
-            run_tmux_status(&tmux_args_ref, None)?;
-        }
+            SessionStartup::ShellOnly
+        };
 
+        let args = new_session_args(&session, path, startup);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        run_tmux_status(&arg_refs, None)?;
+
+        let path_str = path.to_string_lossy();
         run_tmux_status(
             &[
                 "split-window",
@@ -144,7 +129,7 @@ pub fn open_task_session(
                 "-t",
                 &format!("{session}:0"),
                 "-c",
-                path.to_string_lossy().as_ref(),
+                path_str.as_ref(),
             ],
             None,
         )?;
@@ -153,7 +138,7 @@ pub fn open_task_session(
 
     if std::env::var("TMUX")
         .ok()
-        .filter(|value| !value.is_empty())
+        .filter(|v| !v.is_empty())
         .is_some()
     {
         run_tmux_status(&["switch-client", "-t", &session], None)?;
@@ -169,15 +154,15 @@ pub fn park_task(
     repo_key: &str,
     branch: &str,
     path: &Path,
-) -> Result<ParkResult, String> {
+) -> Result<ParkResult> {
     let session = session_name(repo_key, branch);
     let has_tmux_session = has_session(process, &session);
     let mut result = ParkResult::AlreadyParked;
     let title = format!("{repo_key} {branch}");
 
-    if let Err(error) = opencode::rename_latest_session_title(path, &title) {
+    if let Err(err) = opencode::rename_latest_session_title(path, &title) {
         process.warn(&format!(
-            "Failed to update opencode session title for {repo_key} {branch}: {error}"
+            "Failed to update opencode session title for {repo_key} {branch}: {err}"
         ));
     }
 
@@ -196,11 +181,7 @@ pub fn park_task(
     Ok(result)
 }
 
-pub fn finish_task_session(
-    process: ProcessRunner,
-    repo_key: &str,
-    branch: &str,
-) -> Result<(), String> {
+pub fn finish_task_session(process: ProcessRunner, repo_key: &str, branch: &str) -> Result<()> {
     let tmux_available = is_available(process);
     let session = session_name(repo_key, branch);
     let has_tmux_session = tmux_available && has_session(process, &session);

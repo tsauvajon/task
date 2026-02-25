@@ -1,8 +1,11 @@
 use std::io::{self, Write};
 
-use crate::commands::CompletionShell;
+use crate::{
+    commands::CompletionShell,
+    error::{Error, Result},
+};
 
-pub fn run(shell: CompletionShell) -> Result<(), String> {
+pub fn run(shell: CompletionShell) -> Result<()> {
     let script = match shell {
         CompletionShell::Bash => {
             r#"_task_complete() {
@@ -32,8 +35,6 @@ compdef _task_complete task"#
         }
     };
 
-    io::stdout()
-        .write_all(script.as_bytes())
-        .and_then(|_| io::stdout().write_all(b"\n"))
-        .map_err(|error| format!("failed to write completions: {error}"))
+    writeln!(io::stdout(), "{script}")
+        .map_err(|err| Error::failed(format!("failed to write completions: {err}")))
 }

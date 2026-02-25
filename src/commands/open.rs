@@ -3,9 +3,12 @@ use std::{
     io::{self, IsTerminal},
 };
 
-use dialoguer::{Select, theme::ColorfulTheme};
+use dialoguer::{theme::ColorfulTheme, Select};
 
-use crate::runtime::{environment::RuntimeEnvironment, task_rows::TaskRow};
+use crate::{
+    error::{Error, Result},
+    runtime::{environment::RuntimeEnvironment, task_rows::TaskRow},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MatchKind {
@@ -17,25 +20,36 @@ pub fn run(
     context: &RuntimeEnvironment,
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
-) -> Result<(), String> {
+) -> Result<()> {
     if let (Some(query), None) = (repo_arg, branch_arg) {
         let row = select_task_by_query(context, query)?;
-        return context.launch_workspace(&row.repo, &row.branch, &row.path);
+        return context
+            .tasks()
+            .launch_workspace(&row.repo, &row.branch, &row.path);
     }
 
-    let (repo_arg, branch) = context.resolve_repo_branch_inputs(repo_arg, branch_arg)?;
-    let repo_key = context.resolve_repo_key_input(&repo_arg)?;
-    let worktree = context.resolve_worktree_path(&repo_key, &branch);
+    let (repo_arg, branch) = context
+        .tasks()
+        .resolve_repo_branch_inputs(repo_arg, branch_arg)?;
+    let repo_key = context.tasks().resolve_repo_key_input(&repo_arg)?;
+    let worktree = context.tasks().resolve_worktree_path(&repo_key, &branch);
     if !worktree.join(".git").exists() {
-        return Err(format!("Worktree not found: {}", worktree.display()));
+        return Err(Error::not_found(format!(
+            "Worktree not found: {}",
+            worktree.display()
+        )));
     }
-    context.launch_workspace(&repo_key, &branch, &worktree)
+    context
+        .tasks()
+        .launch_workspace(&repo_key, &branch, &worktree)
 }
 
-fn select_task_by_query(context: &RuntimeEnvironment, query: &str) -> Result<TaskRow, String> {
+fn select_task_by_query(context: &RuntimeEnvironment, query: &str) -> Result<TaskRow> {
     let all_rows = all_task_rows(context)?;
     if all_rows.is_empty() {
-        return Err("No tasks found. Run 'task start <repo> <branch>' first.".to_string());
+        return Err(Error::not_found(
+            "No tasks found. Run 'task start <repo> <branch>' first.",
+        ));
     }
 
     let task_matches = collect_matches(&all_rows, query, match_task_name);
@@ -45,21 +59,25 @@ fn select_task_by_query(context: &RuntimeEnvironment, query: &str) -> Result<Tas
 
     let repo_matches = collect_matches(&all_rows, query, match_repo_name);
     if repo_matches.is_empty() {
-        return Err(format!(
+        return Err(Error::not_found(format!(
             "No task found for '{query}'. Searched task names first, then repository names."
-        ));
+        )));
     }
 
     resolve_match(query, &repo_matches, "repository")
 }
 
-fn all_task_rows(context: &RuntimeEnvironment) -> Result<Vec<TaskRow>, String> {
+fn all_task_rows(context: &RuntimeEnvironment) -> Result<Vec<TaskRow>> {
     let mut rows = Vec::new();
     let open_sessions = HashSet::new();
 
-    for repo_key in context.available_repo_keys()? {
+    for repo_key in context.tasks().available_repo_keys()? {
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
-        rows.extend(context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+        rows.extend(
+            context
+                .tasks()
+                .repo_task_rows(&repo_key, &gitdir, &open_sessions)?,
+        );
     }
 
     rows.sort_by(|left, right| {
@@ -80,11 +98,7 @@ fn collect_matches(
         .collect()
 }
 
-fn resolve_match(
-    query: &str,
-    matches: &[(TaskRow, MatchKind)],
-    context: &str,
-) -> Result<TaskRow, String> {
+fn resolve_match(query: &str, matches: &[(TaskRow, MatchKind)], context: &str) -> Result<TaskRow> {
     if matches.len() == 1 {
         return Ok(matches[0].0.clone());
     }
@@ -105,17 +119,17 @@ fn choose_task_interactive(
     query: &str,
     matches: &[(TaskRow, MatchKind)],
     context: &str,
-) -> Result<TaskRow, String> {
+) -> Result<TaskRow> {
     let labels: Vec<String> = matches
         .iter()
         .map(|(row, _)| format!("{} {} ({})", row.repo, row.branch, row.path.display()))
         .collect();
 
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return Err(format!(
+        return Err(Error::failed(format!(
             "Multiple tasks match '{query}' by {context}: {}. Use 'task open <repo> <branch>' to disambiguate.",
             labels.join(" | ")
-        ));
+        )));
     }
 
     let prompt = format!("Multiple tasks match '{query}' by {context}. Choose one:");
@@ -123,14 +137,9 @@ fn choose_task_interactive(
         .with_prompt(prompt)
         .items(&labels)
         .default(0)
-        .interact_opt()
-        .map_err(|error| error.to_string())?;
+        .interact_opt()?;
 
-    if let Some(index) = index {
-        return Ok(matches[index].0.clone());
-    }
-
-    Err("Selection cancelled.".to_string())
+    index.map(|i| matches[i].0.clone()).ok_or(Error::Cancelled)
 }
 
 fn match_task_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
@@ -165,7 +174,7 @@ fn match_repo_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{MatchKind, match_repo_name, match_task_name, resolve_match};
+    use super::{match_repo_name, match_task_name, resolve_match, MatchKind};
     use crate::runtime::task_rows::{TaskRow, TaskStatus};
 
     #[test]

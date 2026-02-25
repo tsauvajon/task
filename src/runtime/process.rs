@@ -6,6 +6,8 @@ use std::{
 
 use owo_colors::OwoColorize;
 
+use crate::error::{Error, Result};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedTool {
     Git,
@@ -47,6 +49,27 @@ impl ManagedTool {
             Self::Corepack | Self::Node => "nixpkgs#nodejs",
         }
     }
+
+    /// The binary name exposed inside the Nix package's `bin/` directory.
+    pub fn binary_name(self) -> &'static str {
+        match self {
+            Self::Git => "git",
+            Self::Tmux => "tmux",
+            Self::Codium => "codium",
+            Self::Opencode => "opencode",
+            Self::Direnv => "direnv",
+            Self::Asdf => "asdf",
+            Self::Pnpm => "pnpm",
+            Self::Corepack => "corepack",
+            Self::Node => "node",
+        }
+    }
+}
+
+impl std::fmt::Display for ManagedTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.binary_name())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,14 +80,13 @@ pub struct CommandPlan {
 
 impl CommandPlan {
     pub fn from_program(program: &str, args: &[&str]) -> Self {
+        let args: Vec<String> = args.iter().map(|&a| a.to_string()).collect();
         if let Some(tool) = ManagedTool::from_binary(program) {
-            let args = args.iter().map(|arg| (*arg).to_string()).collect();
             return Self::for_managed_tool(tool, args);
         }
-
         Self {
             program: program.to_string(),
-            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            args,
         }
     }
 
@@ -75,7 +97,6 @@ impl CommandPlan {
             "--".to_string(),
         ];
         args.extend(tool_args);
-
         Self {
             program: "nix".to_string(),
             args,
@@ -129,7 +150,7 @@ impl ProcessRunner {
         program: impl AsRef<OsStr>,
         args: &[&str],
         cwd: Option<&Path>,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         let program_str = program.as_ref().to_string_lossy();
         let plan = CommandPlan::from_program(&program_str, args);
         let plan_args = plan.args_refs();
@@ -141,7 +162,7 @@ impl ProcessRunner {
         program: impl AsRef<OsStr>,
         args: &[&str],
         cwd: Option<&Path>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let program_str = program.as_ref().to_string_lossy();
         let plan = CommandPlan::from_program(&program_str, args);
         let plan_args = plan.args_refs();
@@ -153,7 +174,7 @@ impl ProcessRunner {
         program: impl AsRef<OsStr>,
         args: &[&str],
         cwd: Option<&Path>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let program_str = program.as_ref().to_string_lossy();
         let plan = CommandPlan::from_program(&program_str, args);
         let plan_args = plan.args_refs();
@@ -165,19 +186,21 @@ impl ProcessRunner {
         program: impl AsRef<OsStr>,
         args: &[&str],
         cwd: Option<&Path>,
-    ) -> Result<String, String> {
-        let mut command = Command::new(program);
-        command.args(args);
+    ) -> Result<String> {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
         if let Some(cwd) = cwd {
-            command.current_dir(cwd);
+            cmd.current_dir(cwd);
         }
-        let output = command.output().map_err(|e| e.to_string())?;
+        let output = cmd.output()?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            if !stderr.is_empty() {
-                return Err(stderr);
-            }
-            return Err(format!("command failed with status {}", output.status));
+            let msg = if stderr.is_empty() {
+                format!("command failed with status {}", output.status)
+            } else {
+                stderr
+            };
+            return Err(Error::failed(msg));
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
@@ -187,18 +210,19 @@ impl ProcessRunner {
         program: impl AsRef<OsStr>,
         args: &[&str],
         cwd: Option<&Path>,
-    ) -> Result<(), String> {
-        let mut command = Command::new(program);
-        command.args(args);
+    ) -> Result<()> {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
         if let Some(cwd) = cwd {
-            command.current_dir(cwd);
+            cmd.current_dir(cwd);
         }
-
-        let status = command.status().map_err(|e| e.to_string())?;
+        let status = cmd.status()?;
         if status.success() {
             return Ok(());
         }
-        Err(format!("command failed with status {status}"))
+        Err(Error::failed(format!(
+            "command failed with status {status}"
+        )))
     }
 
     fn spawn_detached_raw(
@@ -206,16 +230,13 @@ impl ProcessRunner {
         program: impl AsRef<OsStr>,
         args: &[&str],
         cwd: Option<&Path>,
-    ) -> Result<(), String> {
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+    ) -> Result<()> {
+        let mut cmd = Command::new(program);
+        cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
         if let Some(cwd) = cwd {
-            command.current_dir(cwd);
+            cmd.current_dir(cwd);
         }
-        command.spawn().map(|_| ()).map_err(|e| e.to_string())
+        cmd.spawn().map(|_| ()).map_err(Error::from)
     }
 
     pub fn log(&self, message: &str) {

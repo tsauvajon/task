@@ -5,54 +5,71 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::config::config_dir_path;
+use crate::{
+    error::{Error, Result},
+    runtime::config::config_dir_path,
+};
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct TaskStateFile {
     onboarding_complete: bool,
 }
 
-pub fn onboarding_complete() -> Result<bool, String> {
+pub fn onboarding_complete() -> Result<bool> {
     let path = state_file_path()?;
     onboarding_complete_at(&path)
 }
 
-pub fn mark_onboarding_complete() -> Result<(), String> {
+pub fn mark_onboarding_complete() -> Result<()> {
     let path = state_file_path()?;
     mark_onboarding_complete_at(&path)
 }
 
-fn onboarding_complete_at(path: &Path) -> Result<bool, String> {
+fn onboarding_complete_at(path: &Path) -> Result<bool> {
     if !path.is_file() {
         return Ok(false);
     }
 
-    let text = fs::read_to_string(path)
-        .map_err(|error| format!("Could not read state file {}: {error}", path.display()))?;
-    let parsed = toml::from_str::<TaskStateFile>(&text)
-        .map_err(|error| format!("Could not parse state file {}: {error}", path.display()))?;
+    let text = fs::read_to_string(path).map_err(|err| {
+        Error::failed(format!(
+            "Could not read state file {}: {err}",
+            path.display()
+        ))
+    })?;
+    let parsed = toml::from_str::<TaskStateFile>(&text).map_err(|err| {
+        Error::failed(format!(
+            "Could not parse state file {}: {err}",
+            path.display()
+        ))
+    })?;
     Ok(parsed.onboarding_complete)
 }
 
-fn mark_onboarding_complete_at(path: &Path) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("Could not resolve parent directory for {}", path.display()))?;
+fn mark_onboarding_complete_at(path: &Path) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        Error::failed(format!(
+            "Could not resolve parent directory for {}",
+            path.display()
+        ))
+    })?;
 
     fs::create_dir_all(parent)
-        .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
+        .map_err(|err| Error::failed(format!("Could not create {}: {err}", parent.display())))?;
 
     let text = toml::to_string_pretty(&TaskStateFile {
         onboarding_complete: true,
-    })
-    .map_err(|error| error.to_string())?;
-    fs::write(path, text)
-        .map_err(|error| format!("Could not write state file {}: {error}", path.display()))?;
+    })?;
+    fs::write(path, text).map_err(|err| {
+        Error::failed(format!(
+            "Could not write state file {}: {err}",
+            path.display()
+        ))
+    })?;
 
     Ok(())
 }
 
-fn state_file_path() -> Result<PathBuf, String> {
+fn state_file_path() -> Result<PathBuf> {
     Ok(config_dir_path()?.join("state.toml"))
 }
 

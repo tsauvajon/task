@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use crate::runtime::process::{CommandPlan, ManagedTool, ProcessRunner};
+use crate::{
+    error::Result,
+    runtime::process::{CommandPlan, ManagedTool, ProcessRunner},
+};
 
 pub fn auth_storage_reachable(process: ProcessRunner) -> bool {
     process
@@ -10,36 +13,23 @@ pub fn auth_storage_reachable(process: ProcessRunner) -> bool {
         .is_ok()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum OpencodeLaunch {
-    Fresh,
-    Resume { session_id: String },
-}
-
 /// Returns the full command plan for launching opencode for a worktree.
 ///
 /// If a previous opencode session exists for that exact directory, the command
 /// includes `--session <id>` so the TUI resumes it.
 pub fn launch_command(directory: &Path) -> CommandPlan {
-    let launch = match last_session_id(directory) {
-        Some(id) => OpencodeLaunch::Resume { session_id: id },
-        None => OpencodeLaunch::Fresh,
-    };
-
-    match launch {
-        OpencodeLaunch::Fresh => CommandPlan::for_managed_tool(ManagedTool::Opencode, Vec::new()),
-        OpencodeLaunch::Resume { session_id } => CommandPlan::for_managed_tool(
-            ManagedTool::Opencode,
-            vec!["--session".to_string(), session_id],
-        ),
+    match last_session_id(directory) {
+        Some(id) => {
+            CommandPlan::for_managed_tool(ManagedTool::Opencode, vec!["--session".to_string(), id])
+        }
+        None => CommandPlan::for_managed_tool(ManagedTool::Opencode, Vec::new()),
     }
 }
 
-pub fn rename_latest_session_title(directory: &Path, title: &str) -> Result<bool, String> {
+pub fn rename_latest_session_title(directory: &Path, title: &str) -> Result<bool> {
     let Some(db_path) = opencode_db_path() else {
         return Ok(false);
     };
-
     rename_latest_session_title_at_db(&db_path, directory, title)
 }
 
@@ -48,20 +38,19 @@ pub fn rename_latest_session_title(directory: &Path, title: &str) -> Result<bool
 /// database is not accessible.
 fn last_session_id(directory: &Path) -> Option<String> {
     let db_path = opencode_db_path()?;
-    let connection = Connection::open_with_flags(
+    let conn = Connection::open_with_flags(
         &db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;
 
-    let directory_str = directory.to_string_lossy();
-    connection
-        .query_row(
-            "SELECT id FROM session WHERE directory = ?1 ORDER BY time_updated DESC LIMIT 1",
-            rusqlite::params![directory_str],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
+    let dir_str = directory.to_string_lossy();
+    conn.query_row(
+        "SELECT id FROM session WHERE directory = ?1 ORDER BY time_updated DESC LIMIT 1",
+        rusqlite::params![dir_str],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
 }
 
 fn opencode_db_path() -> Option<PathBuf> {
@@ -80,20 +69,17 @@ fn rename_latest_session_title_at_db(
     db_path: &Path,
     directory: &Path,
     title: &str,
-) -> Result<bool, String> {
-    let connection = Connection::open_with_flags(
+) -> Result<bool> {
+    let conn = Connection::open_with_flags(
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
 
-    let directory_str = directory.to_string_lossy();
-    let updated = connection
-        .execute(
-            "UPDATE session SET title = ?1 WHERE id = (SELECT id FROM session WHERE directory = ?2 ORDER BY time_updated DESC LIMIT 1)",
-            rusqlite::params![title, directory_str.as_ref()],
-        )
-        .map_err(|error| error.to_string())?;
+    let dir_str = directory.to_string_lossy();
+    let updated = conn.execute(
+        "UPDATE session SET title = ?1 WHERE id = (SELECT id FROM session WHERE directory = ?2 ORDER BY time_updated DESC LIMIT 1)",
+        rusqlite::params![title, dir_str.as_ref()],
+    )?;
 
     Ok(updated > 0)
 }
@@ -181,7 +167,6 @@ mod tests {
 
     #[test]
     fn launch_command_uses_nix_wrapped_opencode_when_no_db() {
-        // Point at a non-existent path — opencode_db_path() returns None.
         let plan = launch_command(Path::new("/nonexistent/worktree"));
         assert_eq!(plan.program(), "nix");
         assert_eq!(plan.args(), vec!["run", "nixpkgs#opencode", "--"]);

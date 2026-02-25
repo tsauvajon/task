@@ -5,13 +5,13 @@ use self::{
         clone_and_refresh, create_action, finish_and_refresh, park_and_refresh, refresh_repo_rows,
         refresh_task_rows,
     },
-    intent::{UiIntent, from_key},
+    intent::{from_key, UiIntent},
     render::render,
     state::{InputMode, UiAction, UiState, ViewMode},
     tasks::{initial_repo_scope, load_repo_rows, load_task_rows},
     terminal::TerminalGuard,
 };
-use crate::runtime::environment::RuntimeEnvironment;
+use crate::{error::Result, runtime::environment::RuntimeEnvironment};
 
 mod effects;
 mod intent;
@@ -20,8 +20,8 @@ mod state;
 mod tasks;
 mod terminal;
 
-pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
-    context.ensure_layout()?;
+pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
+    context.tasks().ensure_layout()?;
     let task_repo_scope = initial_repo_scope(context, repo_arg);
     let task_rows = load_task_rows(context, task_repo_scope.as_deref())?;
     let repo_rows = load_repo_rows(context)?;
@@ -36,7 +36,9 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), S
 
     match ui_result? {
         UiAction::Quit => Ok(()),
-        UiAction::Open(row) => context.launch_workspace(&row.repo, &row.branch, &row.path),
+        UiAction::Open(row) => context
+            .tasks()
+            .launch_workspace(&row.repo, &row.branch, &row.path),
         UiAction::Create { repo, branch } => {
             crate::commands::start::run(context, &repo, &branch, None)
         }
@@ -47,13 +49,11 @@ fn run_event_loop(
     context: &RuntimeEnvironment,
     terminal: &mut terminal::AppTerminal,
     state: &mut UiState,
-) -> Result<UiAction, String> {
+) -> Result<UiAction> {
     loop {
-        terminal
-            .draw(|frame| render(frame, state))
-            .map_err(|e| e.to_string())?;
+        terminal.draw(|frame| render(frame, state))?;
 
-        let event = event::read().map_err(|e| e.to_string())?;
+        let event = event::read()?;
         if let Event::Key(key) = event {
             let intent = from_key(state.mode, key);
             if let Some(action) = apply_intent(context, state, intent)? {
@@ -67,7 +67,7 @@ fn apply_intent(
     context: &RuntimeEnvironment,
     state: &mut UiState,
     intent: UiIntent,
-) -> Result<Option<UiAction>, String> {
+) -> Result<Option<UiAction>> {
     match intent {
         UiIntent::Quit => Ok(Some(UiAction::Quit)),
         UiIntent::SwitchView => {
@@ -210,8 +210,8 @@ fn apply_intent(
         }
         UiIntent::CreateSubmit => match create_action(context, state) {
             Ok(action) => Ok(Some(action)),
-            Err(message) => {
-                state.message = message;
+            Err(err) => {
+                state.message = err.to_string();
                 Ok(None)
             }
         },
@@ -235,8 +235,8 @@ fn apply_intent(
                 state.message = format!("Cloned repo: {repo_key}");
                 Ok(None)
             }
-            Err(message) => {
-                state.message = message;
+            Err(err) => {
+                state.message = err.to_string();
                 Ok(None)
             }
         },

@@ -1,6 +1,7 @@
 use std::{fs, path::Path};
 
 use super::runner::run_git_capture;
+use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInput {
@@ -22,11 +23,7 @@ pub fn parse_repo_input(input: &str) -> RepoInput {
     } else {
         None
     };
-
-    RepoInput {
-        repo_key,
-        clone_url,
-    }
+    RepoInput { repo_key, clone_url }
 }
 
 pub fn default_clone_url(input: &str) -> String {
@@ -34,11 +31,9 @@ pub fn default_clone_url(input: &str) -> String {
     if is_git_url(trimmed) {
         return trimmed.to_string();
     }
-
     if looks_like_host_path(trimmed) {
         return format!("https://{trimmed}");
     }
-
     trimmed.to_string()
 }
 
@@ -85,25 +80,26 @@ pub fn resolve_repo_query(query: &str, available_keys: &[String]) -> ResolveResu
         return ResolveResult::Resolved(normalized);
     }
 
-    let mut matches = Vec::new();
-    for key in available_keys {
-        let base = key.rsplit('/').next().unwrap_or_default();
-        if key == &normalized || base == normalized || key.ends_with(&format!("/{normalized}")) {
-            matches.push(key.clone());
-        }
-    }
+    let mut matches: Vec<String> = available_keys
+        .iter()
+        .filter(|key| {
+            let base = key.rsplit('/').next().unwrap_or_default();
+            *key == &normalized || base == normalized || key.ends_with(&format!("/{normalized}"))
+        })
+        .cloned()
+        .collect();
     matches.sort();
     matches.dedup();
 
-    if matches.is_empty() {
-        return ResolveResult::Resolved(normalized);
-    }
-
     if matches.len() == 1 {
-        return ResolveResult::Resolved(matches[0].clone());
+        return ResolveResult::Resolved(matches.remove(0));
     }
 
-    ResolveResult::Ambiguous(matches)
+    if matches.is_empty() {
+        ResolveResult::Resolved(normalized)
+    } else {
+        ResolveResult::Ambiguous(matches)
+    }
 }
 
 pub fn is_valid_bare_repo(gitdir: &Path) -> bool {
@@ -113,41 +109,31 @@ pub fn is_valid_bare_repo(gitdir: &Path) -> bool {
 
     let gitdir_str = gitdir.to_string_lossy();
     run_git_capture(
-        &[
-            "--git-dir",
-            &gitdir_str,
-            "rev-parse",
-            "--is-bare-repository",
-        ],
+        &["--git-dir", gitdir_str.as_ref(), "rev-parse", "--is-bare-repository"],
         None,
     )
     .is_ok_and(|output| output.trim() == "true")
 }
 
-pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<(), String> {
+pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<()> {
     if gitdir.is_dir() {
         if is_valid_bare_repo(gitdir) {
             return Ok(());
         }
-        fs::remove_dir_all(gitdir).map_err(|e| {
-            format!(
-                "Failed to remove invalid bare repo at {}: {e}",
+        fs::remove_dir_all(gitdir).map_err(|err| {
+            Error::failed(format!(
+                "Failed to remove invalid bare repo at {}: {err}",
                 gitdir.display()
-            )
+            ))
         })?;
     }
 
     if let Some(parent) = gitdir.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        fs::create_dir_all(parent)?;
     }
 
     run_git_capture(
-        &[
-            "clone",
-            "--bare",
-            repo_url,
-            gitdir.to_string_lossy().as_ref(),
-        ],
+        &["clone", "--bare", repo_url, gitdir.to_string_lossy().as_ref()],
         None,
     )
     .map(|_| ())
@@ -299,7 +285,6 @@ mod tests {
         let path = env::temp_dir().join("task-rs-valid-bare-repo.git");
         let _ = fs::remove_dir_all(&path);
 
-        // Create a real bare repo using git init --bare
         let output = std::process::Command::new("git")
             .args(["init", "--bare", &path.to_string_lossy()])
             .output()

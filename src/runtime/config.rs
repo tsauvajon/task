@@ -4,8 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dialoguer::{Input, theme::ColorfulTheme};
+use dialoguer::{theme::ColorfulTheme, Input};
 use serde::{Deserialize, Serialize};
+
+use crate::error::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct TaskConfig {
@@ -29,64 +31,61 @@ struct VscodiumConfigFile {
 }
 
 impl TaskConfig {
-    pub fn load_if_present() -> Result<Option<Self>, String> {
+    pub fn load_if_present() -> Result<Option<Self>> {
         let config_path = config_file_path()?;
         if !config_path.is_file() {
             return Ok(None);
         }
-
         load_config(&config_path).map(Some)
     }
 
-    pub fn load_or_initialize() -> Result<Self, String> {
+    pub fn load_or_initialize() -> Result<Self> {
         let config_path = config_file_path()?;
         if config_path.is_file() {
             return load_config(&config_path);
         }
 
         if !is_interactive_terminal() {
-            return Err(format!(
+            return Err(Error::failed(format!(
                 "Missing config file at {}. Run task in an interactive terminal to initialize it (for example: 'task doctor --fix' or 'task bootstrap').",
                 config_path.display()
-            ));
+            )));
         }
 
         bootstrap_config(&config_path)
     }
 }
 
-fn load_config(config_path: &Path) -> Result<TaskConfig, String> {
-    let text = fs::read_to_string(config_path).map_err(|error| {
-        format!(
-            "Could not read config file {}: {error}",
+fn load_config(config_path: &Path) -> Result<TaskConfig> {
+    let text = fs::read_to_string(config_path).map_err(|err| {
+        Error::failed(format!(
+            "Could not read config file {}: {err}",
             config_path.display()
-        )
+        ))
     })?;
-    let parsed = toml::from_str::<TaskConfigFile>(&text).map_err(|error| {
-        format!(
-            "Could not parse config file {}: {error}",
+    let parsed = toml::from_str::<TaskConfigFile>(&text).map_err(|err| {
+        Error::failed(format!(
+            "Could not parse config file {}: {err}",
             config_path.display()
-        )
+        ))
     })?;
     to_runtime_config(parsed)
 }
 
-fn bootstrap_config(config_path: &Path) -> Result<TaskConfig, String> {
+fn bootstrap_config(config_path: &Path) -> Result<TaskConfig> {
     let home = home_dir()?;
     let default_repos = home.join("dev/repos");
     let default_wt = home.join("dev/wt");
 
-    let repos_dir = Input::with_theme(&ColorfulTheme::default())
+    let repos_dir: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("repos_dir")
         .default(default_repos.display().to_string())
-        .interact_text()
-        .map_err(|error| error.to_string())?;
+        .interact_text()?;
 
-    let wt_dir = Input::with_theme(&ColorfulTheme::default())
+    let wt_dir: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("wt_dir")
         .default(default_wt.display().to_string())
-        .interact_text()
-        .map_err(|error| error.to_string())?;
+        .interact_text()?;
 
     let config = to_runtime_config(TaskConfigFile {
         repos_dir,
@@ -97,15 +96,15 @@ fn bootstrap_config(config_path: &Path) -> Result<TaskConfig, String> {
     Ok(config)
 }
 
-fn write_config(config_path: &Path, config: &TaskConfig) -> Result<(), String> {
+fn write_config(config_path: &Path, config: &TaskConfig) -> Result<()> {
     let parent = config_path.parent().ok_or_else(|| {
-        format!(
+        Error::failed(format!(
             "Could not resolve parent directory for {}",
             config_path.display()
-        )
+        ))
     })?;
     fs::create_dir_all(parent)
-        .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
+        .map_err(|err| Error::failed(format!("Could not create {}: {err}", parent.display())))?;
 
     let file = TaskConfigFile {
         repos_dir: config.repos_dir.display().to_string(),
@@ -122,13 +121,14 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<(), String> {
             })
         },
     };
-    let text = toml::to_string_pretty(&file).map_err(|error| error.to_string())?;
-    fs::write(config_path, text)
-        .map_err(|error| format!("Could not write {}: {error}", config_path.display()))?;
+    let text = toml::to_string_pretty(&file)?;
+    fs::write(config_path, text).map_err(|err| {
+        Error::failed(format!("Could not write {}: {err}", config_path.display()))
+    })?;
     Ok(())
 }
 
-fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig, String> {
+fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig> {
     let home = home_dir()?;
     let repos_dir = expand_path(file.repos_dir.trim(), &home)?;
     let wt_dir = expand_path(file.wt_dir.trim(), &home)?;
@@ -139,7 +139,7 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig, String> {
                 .trusted_roots
                 .iter()
                 .map(|root| expand_path(root.trim(), &home))
-                .collect::<Result<Vec<PathBuf>, String>>()
+                .collect::<Result<Vec<PathBuf>>>()
         })
         .transpose()?
         .unwrap_or_default();
@@ -150,9 +150,9 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig, String> {
     })
 }
 
-fn expand_path(value: &str, home: &Path) -> Result<PathBuf, String> {
+fn expand_path(value: &str, home: &Path) -> Result<PathBuf> {
     if value.is_empty() {
-        return Err("Config paths must not be empty".to_string());
+        return Err(Error::failed("Config paths must not be empty"));
     }
 
     if value == "~" {
@@ -166,24 +166,21 @@ fn expand_path(value: &str, home: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(value))
 }
 
-pub fn config_file_path() -> Result<PathBuf, String> {
+pub fn config_file_path() -> Result<PathBuf> {
     Ok(config_dir_path()?.join("config.toml"))
 }
 
-pub fn config_dir_path() -> Result<PathBuf, String> {
+pub fn config_dir_path() -> Result<PathBuf> {
     if let Ok(base) = std::env::var("XDG_CONFIG_HOME") {
-        let base = PathBuf::from(base);
-        return Ok(base.join("task"));
+        return Ok(PathBuf::from(base).join("task"));
     }
-
-    let home = home_dir()?;
-    Ok(home.join(".config/task"))
+    Ok(home_dir()?.join(".config/task"))
 }
 
-fn home_dir() -> Result<PathBuf, String> {
+fn home_dir() -> Result<PathBuf> {
     std::env::var("HOME")
         .map(PathBuf::from)
-        .map_err(|_| "HOME is not set".to_string())
+        .map_err(|_| Error::failed("HOME is not set"))
 }
 
 pub fn is_interactive_terminal() -> bool {
@@ -194,7 +191,7 @@ pub fn is_interactive_terminal() -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
+    use super::{expand_path, to_runtime_config, TaskConfigFile, VscodiumConfigFile};
 
     #[test]
     fn expand_path_supports_tilde_prefix() {

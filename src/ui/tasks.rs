@@ -1,5 +1,6 @@
 use super::state::{RepoRow, UiState};
 use crate::{
+    error::{Error, Result},
     runtime::{
         environment::RuntimeEnvironment,
         task_rows::{TaskRow, TaskStatus},
@@ -8,7 +9,7 @@ use crate::{
         git::repo::{default_clone_url, parse_repo_input},
         tmux::{
             sessions::is_available,
-            workflow::{ParkResult, park_task},
+            workflow::{park_task, ParkResult},
         },
     },
 };
@@ -19,27 +20,35 @@ pub(super) fn initial_repo_scope(
 ) -> Option<String> {
     repo_arg
         .map(str::to_string)
-        .or_else(|| context.current_repo_key())
+        .or_else(|| context.tasks().current_repo_key())
 }
 
 pub(super) fn load_task_rows(
     context: &RuntimeEnvironment,
     repo_scope: Option<&str>,
-) -> Result<Vec<TaskRow>, String> {
-    let open_sessions = context.tmux_sessions();
+) -> Result<Vec<TaskRow>> {
+    let open_sessions = context.tasks().tmux_sessions();
     let mut rows = Vec::new();
 
     if let Some(repo_arg) = repo_scope {
-        let repo_key = context.resolve_repo_key_input(repo_arg)?;
+        let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {
-            return Err(format!("Repo not found: {repo_key}"));
+            return Err(Error::not_found(format!("Repo not found: {repo_key}")));
         }
-        rows.extend(context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+        rows.extend(
+            context
+                .tasks()
+                .repo_task_rows(&repo_key, &gitdir, &open_sessions)?,
+        );
     } else {
-        for repo_key in context.available_repo_keys()? {
+        for repo_key in context.tasks().available_repo_keys()? {
             let gitdir = context.layout().repo_gitdir_path(&repo_key);
-            rows.extend(context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?);
+            rows.extend(
+                context
+                    .tasks()
+                    .repo_task_rows(&repo_key, &gitdir, &open_sessions)?,
+            );
         }
     }
 
@@ -53,17 +62,19 @@ pub(super) fn load_task_rows(
     Ok(rows)
 }
 
-pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow>, String> {
-    let open_sessions = context.tmux_sessions();
+pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow>> {
+    let open_sessions = context.tasks().tmux_sessions();
     let mut rows = Vec::new();
 
-    for repo_key in context.available_repo_keys()? {
+    for repo_key in context.tasks().available_repo_keys()? {
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {
             continue;
         }
 
-        let task_rows = context.repo_task_rows(&repo_key, &gitdir, &open_sessions)?;
+        let task_rows = context
+            .tasks()
+            .repo_task_rows(&repo_key, &gitdir, &open_sessions)?;
         let open_tasks = task_rows
             .iter()
             .filter(|row| row.status == TaskStatus::Open)
@@ -81,17 +92,16 @@ pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow
     Ok(rows)
 }
 
-pub(super) fn park_selected(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<(), String> {
+pub(super) fn park_selected(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let Some(row) = state.selected_task_row().cloned() else {
         state.message = "No selected task".to_string();
         return Ok(());
     };
 
     if !is_available(context.process()) {
-        return Err("tmux is not available. Run 'task list' to inspect tasks.".to_string());
+        return Err(Error::failed(
+            "tmux is not available. Run 'task list' to inspect tasks.",
+        ));
     }
 
     match park_task(context.process(), &row.repo, &row.branch, &row.path)? {
@@ -104,10 +114,7 @@ pub(super) fn park_selected(
     Ok(())
 }
 
-pub(super) fn finish_selected(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<(), String> {
+pub(super) fn finish_selected(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let Some(row) = state.selected_task_row().cloned() else {
         state.message = "No selected task".to_string();
         return Ok(());
@@ -122,22 +129,19 @@ pub(super) fn resolve_create_repo(
     context: &RuntimeEnvironment,
     state: &UiState,
     repo_scope: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String> {
     if let Some(row) = state.selected_task_row() {
         return Ok(row.repo.clone());
     }
 
     if let Some(repo_arg) = repo_scope {
-        return context.resolve_repo_input(Some(repo_arg));
+        return context.tasks().resolve_repo_input(Some(repo_arg));
     }
 
-    context.resolve_repo_input(None)
+    context.tasks().resolve_repo_input(None)
 }
 
-pub(super) fn clone_from_input(
-    context: &RuntimeEnvironment,
-    input: &str,
-) -> Result<String, String> {
+pub(super) fn clone_from_input(context: &RuntimeEnvironment, input: &str) -> Result<String> {
     let (repo_url, explicit_repo_key) = parse_clone_input_args(input)?;
     let parsed = parse_repo_input(repo_url);
     let clone_url = parsed
@@ -145,18 +149,18 @@ pub(super) fn clone_from_input(
         .unwrap_or_else(|| default_clone_url(repo_url));
     let repo_key = explicit_repo_key.unwrap_or(parsed.repo_key);
 
-    context.ensure_layout()?;
-    context.clone_bare_repo(&clone_url, &repo_key)?;
+    context.tasks().ensure_layout()?;
+    context.tasks().clone_bare_repo(&clone_url, &repo_key)?;
     Ok(repo_key)
 }
 
-fn parse_clone_input_args(input: &str) -> Result<(&str, Option<String>), String> {
+fn parse_clone_input_args(input: &str) -> Result<(&str, Option<String>)> {
     let tokens: Vec<&str> = input.split_whitespace().collect();
     if tokens.is_empty() {
-        return Err("Clone input cannot be empty".to_string());
+        return Err(Error::failed("Clone input cannot be empty"));
     }
     if tokens.len() > 2 {
-        return Err("Use format: <repo-url> [repo-key]".to_string());
+        return Err(Error::failed("Use format: <repo-url> [repo-key]"));
     }
 
     Ok((tokens[0], tokens.get(1).map(|token| (*token).to_string())))
@@ -185,12 +189,12 @@ mod tests {
     #[test]
     fn parse_clone_input_rejects_empty_value() {
         let error = parse_clone_input_args("  ").expect_err("expected error");
-        assert_eq!(error, "Clone input cannot be empty");
+        assert_eq!(error.to_string(), "Clone input cannot be empty");
     }
 
     #[test]
     fn parse_clone_input_rejects_too_many_parts() {
         let error = parse_clone_input_args("a b c").expect_err("expected error");
-        assert_eq!(error, "Use format: <repo-url> [repo-key]");
+        assert_eq!(error.to_string(), "Use format: <repo-url> [repo-key]");
     }
 }

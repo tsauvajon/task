@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 
-use crate::runtime::environment::RuntimeEnvironment;
+use crate::{error::Result, runtime::environment::RuntimeEnvironment};
 
-pub fn run(context: Option<&RuntimeEnvironment>, words: &[String]) -> Result<(), String> {
-    let values = completion_values(context, words)?;
-    for value in values {
+pub fn run(context: Option<&RuntimeEnvironment>, words: &[String]) -> Result<()> {
+    for value in completion_values(context, words)? {
         println!("{value}");
     }
     Ok(())
@@ -13,7 +12,7 @@ pub fn run(context: Option<&RuntimeEnvironment>, words: &[String]) -> Result<(),
 fn completion_values(
     context: Option<&RuntimeEnvironment>,
     words: &[String],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>> {
     if words.is_empty() {
         return Ok(top_level_commands());
     }
@@ -92,7 +91,7 @@ fn completion_values(
 }
 
 fn top_level_commands() -> Vec<String> {
-    vec![
+    [
         "bootstrap",
         "doctor",
         "clone",
@@ -109,67 +108,70 @@ fn top_level_commands() -> Vec<String> {
         "rebase",
         "completions",
     ]
-    .into_iter()
-    .map(str::to_string)
+    .iter()
+    .map(|&s| s.to_string())
     .collect()
 }
 
-fn repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<String>, String> {
+fn repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<String>> {
     let Some(context) = context else {
         return Ok(Vec::new());
     };
 
-    let mut values = HashSet::new();
-    for key in context.available_repo_keys()? {
-        if let Some(short) = key.rsplit('/').next() {
-            values.insert(short.to_string());
-        }
-    }
-    let mut values: Vec<String> = values.into_iter().collect();
-    values.sort();
-    Ok(values)
+    let mut short_names: Vec<String> = context
+        .tasks()
+        .available_repo_keys()?
+        .into_iter()
+        .filter_map(|key| key.rsplit('/').next().map(str::to_string))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    short_names.sort();
+    Ok(short_names)
 }
 
 fn filter_prefix(values: Vec<String>, current: &str) -> Vec<String> {
     if current.is_empty() {
         return values;
     }
-
     let current_lower = current.to_lowercase();
     values
         .into_iter()
-        .filter(|value| value.to_lowercase().starts_with(&current_lower))
+        .filter(|v| v.to_lowercase().starts_with(&current_lower))
         .collect()
 }
 
 fn task_candidates(
     context: Option<&RuntimeEnvironment>,
     repo_hint: Option<&str>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>> {
     let Some(context) = context else {
         return Ok(Vec::new());
     };
 
     let keys = match repo_hint {
-        Some(repo) => {
-            let resolved = context.resolve_repo_key_input(repo)?;
-            vec![resolved]
-        }
-        None => context.available_repo_keys()?,
+        Some(repo) => vec![context.tasks().resolve_repo_key_input(repo)?],
+        None => context.tasks().available_repo_keys()?,
     };
 
+    // Empty set — completions don't need real tmux session state.
     let open_sessions = HashSet::new();
-    let mut values = HashSet::new();
-    for repo_key in keys {
-        let gitdir = context.layout().repo_gitdir_path(&repo_key);
-        for row in context.repo_task_rows(&repo_key, &gitdir, &open_sessions)? {
-            values.insert(row.branch);
-        }
-    }
-
-    let mut values: Vec<String> = values.into_iter().collect();
-    values.sort();
-    Ok(values)
+    let mut branches: Vec<String> = keys
+        .into_iter()
+        .flat_map(|repo_key| {
+            let gitdir = context.layout().repo_gitdir_path(&repo_key);
+            context
+                .tasks()
+                .repo_task_rows(&repo_key, &gitdir, &open_sessions)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|row| row.branch)
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    branches.sort();
+    Ok(branches)
 }
 
 #[cfg(test)]

@@ -1,28 +1,32 @@
 use std::path::Path;
 
-use crate::{runtime::environment::RuntimeEnvironment, tools::git::worktrees::worktree_list};
+use crate::{
+    error::{Error, Result},
+    runtime::environment::RuntimeEnvironment,
+    tools::git::worktrees::worktree_list,
+};
 
-pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<(), String> {
-    context.ensure_layout()?;
+pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
+    context.tasks().ensure_layout()?;
 
     let repo_arg = repo_arg
         .map(str::to_string)
-        .or_else(|| context.current_repo_key());
+        .or_else(|| context.tasks().current_repo_key());
 
     if let Some(repo_arg) = repo_arg.as_deref() {
-        let repo_key = context.resolve_repo_key_input(repo_arg)?;
+        let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {
-            return Err(format!("Repo not found: {repo_key}"));
+            return Err(Error::not_found(format!("Repo not found: {repo_key}")));
         }
         let output = worktree_list(&gitdir)?;
         print!("{output}");
         return Ok(());
     }
 
-    let repo_keys = context.available_repo_keys()?;
+    let repo_keys = context.tasks().available_repo_keys()?;
     if repo_keys.is_empty() {
-        context.log(&format!(
+        context.process().log(&format!(
             "No repositories found in {}",
             context
                 .layout()

@@ -1,6 +1,7 @@
-use dialoguer::{Confirm, theme::ColorfulTheme};
+use dialoguer::{theme::ColorfulTheme, Confirm};
 
 use crate::{
+    error::{Error, Result},
     runtime::{config::is_interactive_terminal, environment::RuntimeEnvironment, state},
     tools::{
         asdf,
@@ -13,43 +14,41 @@ pub enum SetupApproval<'a> {
     AssumeYes,
 }
 
-pub fn ensure_first_run_setup(context: &RuntimeEnvironment) -> Result<(), String> {
+pub fn ensure_first_run_setup(env: &RuntimeEnvironment) -> Result<()> {
     if state::onboarding_complete()? {
         return Ok(());
     }
 
     let guidance = "First-run setup is required and needs an interactive terminal. Re-run in an interactive terminal, or run 'task doctor' for diagnostics.";
     let applied = apply_full_setup(
-        context,
+        env,
         SetupApproval::Prompt("Run first-run setup now?"),
         guidance,
     )?;
     if applied {
-        context.log("First-run setup complete");
+        env.process().log("First-run setup complete");
         return Ok(());
     }
 
-    Err(
-        "First-run setup cancelled. Run 'task doctor --fix' or 'task bootstrap' when ready."
-            .to_string(),
-    )
+    Err(Error::failed(
+        "First-run setup cancelled. Run 'task doctor --fix' or 'task bootstrap' when ready.",
+    ))
 }
 
 pub fn apply_full_setup(
-    context: &RuntimeEnvironment,
+    env: &RuntimeEnvironment,
     approval: SetupApproval<'_>,
     non_interactive_guidance: &str,
-) -> Result<bool, String> {
+) -> Result<bool> {
     if !is_interactive_terminal() {
-        return Err(non_interactive_guidance.to_string());
+        return Err(Error::failed(non_interactive_guidance));
     }
 
     let approved = match approval {
         SetupApproval::Prompt(prompt) => Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(prompt)
             .default(true)
-            .interact()
-            .map_err(|error| error.to_string())?,
+            .interact()?,
         SetupApproval::AssumeYes => true,
     };
 
@@ -57,44 +56,47 @@ pub fn apply_full_setup(
         return Ok(false);
     }
 
-    run_full_setup(context)?;
+    run_full_setup(env)?;
     Ok(true)
 }
 
-pub fn run_full_setup(context: &RuntimeEnvironment) -> Result<(), String> {
-    context.ensure_layout()?;
-    context.log(&format!("Repos dir: {}", context.repos_dir().display()));
-    context.log(&format!("Worktrees dir: {}", context.wt_dir().display()));
+pub fn run_full_setup(env: &RuntimeEnvironment) -> Result<()> {
+    let process = env.process();
+    let layout = env.layout();
 
-    if !context.command_exists("nix") {
-        return Err(
-            "nix is required for setup. Install nix and retry 'task bootstrap'.".to_string(),
-        );
+    env.tasks().ensure_layout()?;
+    process.log(&format!("Repos dir: {}", layout.repos_dir().display()));
+    process.log(&format!("Worktrees dir: {}", layout.wt_dir().display()));
+
+    if !process.command_exists("nix") {
+        return Err(Error::failed(
+            "nix is required for setup. Install nix and retry 'task bootstrap'.",
+        ));
     }
 
-    if !asdf::is_available(context.process()) {
-        context.warn("asdf could not be launched via nix. Skipping asdf-managed runtime setup.");
+    if !asdf::is_available(process) {
+        process.warn("asdf could not be launched via nix. Skipping asdf-managed runtime setup.");
     } else {
-        if !asdf::has_nodejs_plugin(context.process()) {
-            context.log("Installing asdf nodejs plugin");
-            asdf::install_nodejs_plugin(context.process())?;
+        if !asdf::has_nodejs_plugin(process) {
+            process.log("Installing asdf nodejs plugin");
+            asdf::install_nodejs_plugin(process)?;
         }
 
-        if let Err(error) = asdf::import_nodejs_release_keyring(context.process()) {
-            context.warn(&format!("Could not import nodejs release keyring: {error}"));
+        if let Err(err) = asdf::import_nodejs_release_keyring(process) {
+            process.warn(&format!("Could not import nodejs release keyring: {err}"));
         }
 
-        if asdf::install_from_user_tool_versions(context.process())? {
-            context.log("Installing runtimes from ~/.tool-versions");
+        if asdf::install_from_user_tool_versions(process)? {
+            process.log("Installing runtimes from ~/.tool-versions");
         }
     }
 
-    if node_available(context.process()) && corepack_available(context.process()) {
-        let _ = enable_corepack(context.process());
-        context.log("Enabled corepack");
+    if node_available(process) && corepack_available(process) {
+        let _ = enable_corepack(process);
+        process.log("Enabled corepack");
     }
 
     state::mark_onboarding_complete()?;
-    context.log("Bootstrap complete");
+    process.log("Bootstrap complete");
     Ok(())
 }

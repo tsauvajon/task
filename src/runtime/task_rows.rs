@@ -1,7 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use crate::tools::{
-    git::worktrees::{WorktreeEntry, branch_from_ref, branch_from_worktree_path},
+    git::worktrees::{branch_from_ref, branch_from_worktree_path, WorktreeEntry},
     tmux::naming::session_name,
 };
 
@@ -19,52 +22,57 @@ pub enum TaskStatus {
     Parked,
 }
 
+impl fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open => f.write_str("open"),
+            Self::Parked => f.write_str("parked"),
+        }
+    }
+}
+
 pub fn build_task_rows(
     repo_key: &str,
     wt_dir: &Path,
     entries: &[WorktreeEntry],
     open_sessions: &[String],
 ) -> Vec<TaskRow> {
-    let mut rows = Vec::new();
+    entries
+        .iter()
+        .filter(|e| !e.is_bare)
+        .map(|entry| {
+            let branch = branch_from_ref(entry.branch_ref.as_deref())
+                .or_else(|| branch_from_worktree_path(wt_dir, repo_key, &entry.path))
+                .or_else(|| {
+                    entry
+                        .path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| "unknown".to_string());
 
-    for entry in entries {
-        if entry.is_bare {
-            continue;
-        }
+            let session = session_name(repo_key, &branch);
+            let status = if open_sessions.iter().any(|name| name == &session) {
+                TaskStatus::Open
+            } else {
+                TaskStatus::Parked
+            };
 
-        let branch = branch_from_ref(entry.branch_ref.as_deref())
-            .or_else(|| branch_from_worktree_path(wt_dir, repo_key, &entry.path))
-            .or_else(|| {
-                entry
-                    .path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let session = session_name(repo_key, &branch);
-        let status = if open_sessions.iter().any(|name| name == &session) {
-            TaskStatus::Open
-        } else {
-            TaskStatus::Parked
-        };
-
-        rows.push(TaskRow {
-            status,
-            repo: repo_key.to_string(),
-            branch,
-            path: entry.path.clone(),
-        });
-    }
-
-    rows
+            TaskRow {
+                status,
+                repo: repo_key.to_string(),
+                branch,
+                path: entry.path.clone(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{TaskRow, TaskStatus, build_task_rows};
+    use super::{build_task_rows, TaskRow, TaskStatus};
     use crate::tools::git::worktrees::WorktreeEntry;
 
     #[test]

@@ -1,6 +1,7 @@
 use std::fs;
 
 use crate::{
+    error::{Error, Result},
     runtime::environment::RuntimeEnvironment,
     tools::{
         git::worktrees::{status_porcelain, worktree_prune, worktree_remove},
@@ -14,32 +15,31 @@ pub fn run(
     repo_arg: Option<&str>,
     branch_arg: Option<&str>,
     force: bool,
-) -> Result<(), String> {
-    let (repo_arg, branch) = context.resolve_repo_branch_inputs(repo_arg, branch_arg)?;
-    let repo_key = context.resolve_repo_key_input(&repo_arg)?;
+) -> Result<()> {
+    let (repo_arg, branch) = context
+        .tasks()
+        .resolve_repo_branch_inputs(repo_arg, branch_arg)?;
+    let repo_key = context.tasks().resolve_repo_key_input(&repo_arg)?;
     let gitdir = context.layout().repo_gitdir_path(&repo_key);
-    let worktree = context.resolve_worktree_path(&repo_key, &branch);
+    let worktree = context.tasks().resolve_worktree_path(&repo_key, &branch);
 
     if !gitdir.is_dir() {
-        return Err(format!("Repo not found: {repo_key}"));
+        return Err(Error::not_found(format!("Repo not found: {repo_key}")));
     }
 
     if !worktree.join(".git").exists() {
-        context.warn(&format!(
+        context.process().warn(&format!(
             "Worktree metadata is stale for {}. Pruning stale entries.",
             worktree.display()
         ));
         worktree_prune(&gitdir)?;
 
         if worktree.exists() {
-            let is_empty = fs::read_dir(&worktree)
-                .map_err(|error| error.to_string())?
-                .next()
-                .is_none();
+            let is_empty = fs::read_dir(&worktree)?.next().is_none();
             if is_empty {
                 let _ = fs::remove_dir(&worktree);
             } else {
-                context.warn(&format!(
+                context.process().warn(&format!(
                     "Left non-worktree directory in place: {}",
                     worktree.display()
                 ));
@@ -47,9 +47,9 @@ pub fn run(
         }
 
         finish_task_session(context.process(), &repo_key, &branch)?;
-        if let Err(error) = cleanup_task_state(&repo_key, &branch) {
-            context.warn(&format!(
-                "Failed to remove task editor state for {repo_key} {branch}: {error}"
+        if let Err(err) = cleanup_task_state(&repo_key, &branch) {
+            context.process().warn(&format!(
+                "Failed to remove task editor state for {repo_key} {branch}: {err}"
             ));
         }
         return Ok(());
@@ -58,10 +58,9 @@ pub fn run(
     if !force {
         let status = status_porcelain(&worktree)?;
         if !status.trim().is_empty() {
-            return Err(
-                "Worktree has uncommitted changes. Use --force if you really want to remove it."
-                    .to_string(),
-            );
+            return Err(Error::failed(
+                "Worktree has uncommitted changes. Use --force if you really want to remove it.",
+            ));
         }
     }
 
@@ -72,9 +71,9 @@ pub fn run(
     }
 
     finish_task_session(context.process(), &repo_key, &branch)?;
-    if let Err(error) = cleanup_task_state(&repo_key, &branch) {
-        context.warn(&format!(
-            "Failed to remove task editor state for {repo_key} {branch}: {error}"
+    if let Err(err) = cleanup_task_state(&repo_key, &branch) {
+        context.process().warn(&format!(
+            "Failed to remove task editor state for {repo_key} {branch}: {err}"
         ));
     }
 

@@ -2,43 +2,35 @@ use std::path::Path;
 
 pub fn parse_cmdline_bytes(bytes: &[u8]) -> Vec<String> {
     bytes
-        .split(|value| *value == b'\0')
+        .split(|&b| b == b'\0')
         .filter(|part| !part.is_empty())
-        .map(|part| String::from_utf8_lossy(part).to_string())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
         .collect()
 }
 
 pub fn cmdline_matches_user_data_dir(args: &[String], user_data_dir: &Path) -> bool {
-    if args.is_empty() || !is_codium_binary(&args[0]) {
+    let Some(arg0) = args.first() else {
+        return false;
+    };
+    if !is_codium_binary(arg0) {
         return false;
     }
 
     let target = user_data_dir.to_string_lossy();
-    let mut index = 0;
-    while index < args.len() {
-        if args[index] == "--user-data-dir" {
-            if let Some(value) = args.get(index + 1) {
-                return value == target.as_ref();
-            }
-            return false;
-        }
-
-        if let Some(value) = args[index].strip_prefix("--user-data-dir=") {
-            return value == target.as_ref();
-        }
-
-        index += 1;
-    }
-
-    false
+    // Check both `--user-data-dir <value>` (split form) and `--user-data-dir=<value>` (joined form).
+    args.windows(2)
+        .any(|pair| pair[0] == "--user-data-dir" && pair[1] == target.as_ref())
+        || args.iter().any(|arg| {
+            arg.strip_prefix("--user-data-dir=")
+                .is_some_and(|v| v == target.as_ref())
+        })
 }
 
 fn is_codium_binary(arg0: &str) -> bool {
     Path::new(arg0)
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.contains("codium"))
-        .unwrap_or(false)
+        .is_some_and(|name| name.contains("codium"))
 }
 
 #[cfg(test)]

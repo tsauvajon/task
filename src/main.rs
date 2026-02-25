@@ -5,8 +5,8 @@ fn main() {
     let cli = Cli::parse();
     let code = match commands::run(cli) {
         Ok(()) => 0,
-        Err(error) => {
-            eprintln!("error: {error}");
+        Err(err) => {
+            eprintln!("error: {err}");
             1
         }
     };

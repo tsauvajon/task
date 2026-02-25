@@ -1,5 +1,7 @@
 use crate::{
+    error::{Error, Result},
     runtime::{
+        config::is_interactive_terminal,
         environment::RuntimeEnvironment,
         setup::{self, SetupApproval},
     },
@@ -10,37 +12,40 @@ struct DoctorReport {
     missing_required: bool,
 }
 
-pub fn run(context: &RuntimeEnvironment, fix: bool) -> Result<(), String> {
-    let mut report = check(context);
+pub fn run(env: &RuntimeEnvironment, fix: bool) -> Result<()> {
+    let mut report = check(env);
 
     if fix {
-        apply_fixes(context, SetupApproval::AssumeYes)?;
+        apply_fixes(env, SetupApproval::AssumeYes)?;
         println!("\nRe-running checks after fixes...\n");
-        report = check(context);
-    } else if report.missing_required && crate::runtime::config::is_interactive_terminal() {
+        report = check(env);
+    } else if report.missing_required && is_interactive_terminal() {
         let applied = apply_fixes(
-            context,
+            env,
             SetupApproval::Prompt("Issues found. Apply automatic fixes now?"),
         )?;
         if applied {
             println!("\nRe-running checks after fixes...\n");
-            report = check(context);
+            report = check(env);
         }
     }
 
     if report.missing_required {
-        return Err("Doctor check found missing dependencies".to_string());
+        return Err(Error::failed("Doctor check found missing dependencies"));
     }
 
     Ok(())
 }
 
-fn check(context: &RuntimeEnvironment) -> DoctorReport {
+fn check(env: &RuntimeEnvironment) -> DoctorReport {
+    let process = env.process();
+    let layout = env.layout();
     let mut missing_required = false;
 
-    println!("repos_dir: {}", context.repos_dir().display());
-    println!("wt_dir: {}", context.wt_dir().display());
-    if context.command_exists("nix") {
+    println!("repos_dir: {}", layout.repos_dir().display());
+    println!("wt_dir: {}", layout.wt_dir().display());
+
+    if process.command_exists("nix") {
         println!("[ok]      nix");
         println!("[ok]      managed tools launch via nix run");
     } else {
@@ -49,25 +54,23 @@ fn check(context: &RuntimeEnvironment) -> DoctorReport {
         missing_required = true;
     }
 
-    if context.repos_dir().is_dir() && context.wt_dir().is_dir() {
+    if layout.repos_dir().is_dir() && layout.wt_dir().is_dir() {
         println!("[ok]      configured layout exists");
     } else {
         println!("[missing] configured layout does not exist");
         missing_required = true;
     }
 
-    if context.command_exists("opencode") {
-        if opencode::auth_storage_reachable(context.process()) {
-            println!("[ok]      opencode auth storage reachable");
-        } else {
-            println!("[warn]    opencode auth storage not initialized yet");
-        }
+    if process.command_exists("opencode") && opencode::auth_storage_reachable(process) {
+        println!("[ok]      opencode auth storage reachable");
+    } else if process.command_exists("opencode") {
+        println!("[warn]    opencode auth storage not initialized yet");
     }
 
     DoctorReport { missing_required }
 }
 
-fn apply_fixes(context: &RuntimeEnvironment, approval: SetupApproval<'_>) -> Result<bool, String> {
-    let guidance = "'task doctor --fix' needs an interactive terminal because it applies local setup changes. Re-run in an interactive terminal, or run 'task doctor' for read-only diagnostics.";
-    setup::apply_full_setup(context, approval, guidance)
+fn apply_fixes(env: &RuntimeEnvironment, approval: SetupApproval<'_>) -> Result<bool> {
+    const GUIDANCE: &str = "'task doctor --fix' needs an interactive terminal because it applies local setup changes. Re-run in an interactive terminal, or run 'task doctor' for read-only diagnostics.";
+    setup::apply_full_setup(env, approval, GUIDANCE)
 }

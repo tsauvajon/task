@@ -18,7 +18,10 @@ pub mod start;
 pub mod ui;
 pub mod worktrees;
 
-use crate::runtime::{environment::RuntimeEnvironment, setup};
+use crate::{
+    error::Result,
+    runtime::{environment::RuntimeEnvironment, setup},
+};
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper")]
@@ -102,7 +105,7 @@ pub enum CompletionShell {
     Zsh,
 }
 
-pub fn run(cli: Cli) -> Result<(), String> {
+pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Some(Command::Completions { shell }) => completions::run(shell),
         Some(Command::Complete { words }) => {
@@ -113,7 +116,7 @@ pub fn run(cli: Cli) -> Result<(), String> {
     }
 }
 
-fn run_with_context(command: Option<Command>) -> Result<(), String> {
+fn run_with_context(command: Option<Command>) -> Result<()> {
     let context = RuntimeEnvironment::new()?;
 
     if should_auto_onboard(command.as_ref()) {
@@ -176,7 +179,7 @@ fn should_auto_onboard(command: Option<&Command>) -> bool {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command, CompletionShell, RepoCommand, should_auto_onboard};
+    use super::{should_auto_onboard, Cli, Command, CompletionShell, RepoCommand};
 
     #[test]
     fn cli_parses_start_command() {
@@ -215,7 +218,7 @@ mod tests {
             cli.command,
             Some(Command::Open {
                 repo: None,
-                branch: None,
+                branch: None
             })
         );
     }
@@ -285,7 +288,7 @@ mod tests {
         assert_eq!(
             cli.command,
             Some(Command::Check {
-                worktree_path: None,
+                worktree_path: None
             })
         );
     }

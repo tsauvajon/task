@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "task"
-version = "2.2.1"
+version = "2.4.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1501,6 +1501,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "toml",
 ]
 

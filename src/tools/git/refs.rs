@@ -1,12 +1,14 @@
 use std::path::Path;
 
 use super::runner::{run_git_capture, run_git_status};
+use crate::error::Result;
 
 pub fn detect_default_base(gitdir: &Path) -> String {
+    let gitdir_str = gitdir.to_string_lossy();
     if let Ok(output) = run_git_capture(
         &[
             "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
+            gitdir_str.as_ref(),
             "ls-remote",
             "--symref",
             "origin",
@@ -32,10 +34,11 @@ pub fn detect_default_base(gitdir: &Path) -> String {
         }
     }
 
+    let gitdir_str = gitdir.to_string_lossy();
     if run_git_status(
         &[
             "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
+            gitdir_str.as_ref(),
             "show-ref",
             "--verify",
             "--quiet",
@@ -51,11 +54,12 @@ pub fn detect_default_base(gitdir: &Path) -> String {
     "HEAD".to_string()
 }
 
-pub fn fetch_origin_refs(gitdir: &Path) -> Result<(), String> {
+pub fn fetch_origin_refs(gitdir: &Path) -> Result<()> {
+    let gitdir_str = gitdir.to_string_lossy();
     run_git_status(
         &[
             "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
+            gitdir_str.as_ref(),
             "fetch",
             "origin",
             "--prune",
@@ -66,10 +70,11 @@ pub fn fetch_origin_refs(gitdir: &Path) -> Result<(), String> {
 }
 
 pub fn ref_exists(gitdir: &Path, reference: &str) -> bool {
+    let gitdir_str = gitdir.to_string_lossy();
     run_git_status(
         &[
             "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
+            gitdir_str.as_ref(),
             "show-ref",
             "--verify",
             "--quiet",
@@ -81,11 +86,12 @@ pub fn ref_exists(gitdir: &Path, reference: &str) -> bool {
 }
 
 pub fn rev_exists(gitdir: &Path, revision: &str) -> bool {
+    let gitdir_str = gitdir.to_string_lossy();
     let value = format!("{revision}^{{commit}}");
     run_git_status(
         &[
             "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
+            gitdir_str.as_ref(),
             "rev-parse",
             "--verify",
             "--quiet",
@@ -97,18 +103,12 @@ pub fn rev_exists(gitdir: &Path, revision: &str) -> bool {
 }
 
 pub fn current_branch(root: &Path) -> Option<String> {
+    let root_str = root.to_string_lossy();
     run_git_capture(
-        &[
-            "-C",
-            root.to_string_lossy().as_ref(),
-            "symbolic-ref",
-            "--quiet",
-            "--short",
-            "HEAD",
-        ],
+        &["-C", root_str.as_ref(), "symbolic-ref", "--quiet", "--short", "HEAD"],
         None,
     )
     .ok()
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
+    .map(|s| s.trim().to_owned())
+    .filter(|s| !s.is_empty())
 }

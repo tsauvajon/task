@@ -3,33 +3,34 @@ use std::{
     sync::OnceLock,
 };
 
-use crate::runtime::{
-    nix_store::{cached_nix_binary, run_nix_binary_status},
-    process::ManagedTool,
+use crate::{
+    error::Result,
+    runtime::{
+        nix_store::{cached_nix_binary, run_nix_binary_status},
+        process::ManagedTool,
+    },
 };
 
 // pnpm and corepack ship from the same nixpkgs package (nodejs), but we
 // resolve each binary separately so the OnceLock stores the right path.
-static NIX_PNPM_BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-static NIX_COREPACK_BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-static NIX_NODE_BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+static NIX_PNPM_BINARY: OnceLock<Result<PathBuf>> = OnceLock::new();
+static NIX_COREPACK_BINARY: OnceLock<Result<PathBuf>> = OnceLock::new();
+static NIX_NODE_BINARY: OnceLock<Result<PathBuf>> = OnceLock::new();
 
-fn pnpm_binary() -> Result<&'static PathBuf, String> {
+fn pnpm_binary() -> Result<&'static PathBuf> {
     cached_nix_binary(&NIX_PNPM_BINARY, ManagedTool::Pnpm)
 }
 
-fn corepack_binary() -> Result<&'static PathBuf, String> {
+fn corepack_binary() -> Result<&'static PathBuf> {
     cached_nix_binary(&NIX_COREPACK_BINARY, ManagedTool::Corepack)
 }
 
-pub fn run_pnpm_status(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
-    let binary = pnpm_binary()?;
-    run_nix_binary_status(binary, args, cwd)
+pub fn run_pnpm_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    run_nix_binary_status(pnpm_binary()?, args, cwd)
 }
 
-pub fn run_corepack_status(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
-    let binary = corepack_binary()?;
-    run_nix_binary_status(binary, args, cwd)
+pub fn run_corepack_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    run_nix_binary_status(corepack_binary()?, args, cwd)
 }
 
 /// Returns `true` if the `node` binary can be resolved in the Nix store.

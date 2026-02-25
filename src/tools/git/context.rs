@@ -5,20 +5,17 @@ use std::{
 };
 
 use super::runner::run_git_capture;
+use crate::error::{Error, Result};
 
-pub fn current_root() -> Result<PathBuf, String> {
+pub fn current_root() -> Result<PathBuf> {
     let root = run_git_capture(&["rev-parse", "--show-toplevel"], None)?;
     Ok(PathBuf::from(root.trim()))
 }
 
-pub fn git_common_dir(root: &Path) -> Result<PathBuf, String> {
+pub fn git_common_dir(root: &Path) -> Result<PathBuf> {
+    let gitdir_str = root.to_string_lossy();
     let common_dir_raw = run_git_capture(
-        &[
-            "-C",
-            root.to_string_lossy().as_ref(),
-            "rev-parse",
-            "--git-common-dir",
-        ],
+        &["-C", gitdir_str.as_ref(), "rev-parse", "--git-common-dir"],
         None,
     )?;
 
@@ -26,36 +23,32 @@ pub fn git_common_dir(root: &Path) -> Result<PathBuf, String> {
     if common_dir.is_relative() {
         common_dir = root.join(common_dir);
     }
-    fs::canonicalize(common_dir).map_err(|e| e.to_string())
+    fs::canonicalize(common_dir).map_err(Error::from)
 }
 
-fn normalize_path(path: &Path) -> Result<PathBuf, String> {
+fn normalize_path(path: &Path) -> Result<PathBuf> {
     match fs::canonicalize(path) {
-        Ok(canonical_path) => Ok(canonical_path),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(path.to_path_buf()),
-        Err(error) => Err(error.to_string()),
+        Ok(p) => Ok(p),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(err) => Err(Error::from(err)),
     }
 }
 
-pub fn repo_key_from_common_dir(
-    common_dir: &Path,
-    repos_dir: &Path,
-) -> Result<Option<String>, String> {
+pub fn repo_key_from_common_dir(common_dir: &Path, repos_dir: &Path) -> Result<Option<String>> {
     let normalized_common_dir = normalize_path(common_dir)?;
     let normalized_repos_dir = normalize_path(repos_dir)?;
 
     let relative = match normalized_common_dir.strip_prefix(&normalized_repos_dir) {
-        Ok(relative_path) => relative_path,
+        Ok(rel) => rel,
         Err(_) => return Ok(None),
     };
-    let mut key = relative.to_string_lossy().to_string();
-    if key.ends_with(".git") {
-        key.truncate(key.len() - 4);
-    }
+
+    let key = relative.to_string_lossy();
+    let key = key.strip_suffix(".git").unwrap_or(&key);
     if key.is_empty() {
         return Ok(None);
     }
-    Ok(Some(key))
+    Ok(Some(key.to_string()))
 }
 
 #[cfg(test)]

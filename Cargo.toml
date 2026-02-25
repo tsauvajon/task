@@ -1,6 +1,6 @@
 [package]
 name = "task"
-version = "2.3.0"
+version = "2.4.0"
 edition = "2024"
 
 [dependencies]
@@ -14,4 +14,5 @@ ratatui = "0.30.0"
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+thiserror = "2"
 toml = "1.0.3"

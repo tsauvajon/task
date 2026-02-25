@@ -12,12 +12,10 @@ pub fn list_sessions(process: ProcessRunner) -> HashSet<String> {
         return HashSet::new();
     }
 
-    let output = match run_tmux_capture(&["ls"], None) {
-        Ok(output) => output,
-        Err(_) => return HashSet::new(),
-    };
-
-    parse_sessions(&output)
+    match run_tmux_capture(&["ls"], None) {
+        Ok(output) => parse_sessions(&output),
+        Err(_) => HashSet::new(),
+    }
 }
 
 pub fn has_session(_process: ProcessRunner, session: &str) -> bool {
@@ -27,9 +25,14 @@ pub fn has_session(_process: ProcessRunner, session: &str) -> bool {
 fn parse_sessions(output: &str) -> HashSet<String> {
     output
         .lines()
-        .filter_map(|line| line.split(':').next())
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
+        .filter_map(|line| {
+            let name = line.split(':').next()?.trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
         .collect()
 }
 

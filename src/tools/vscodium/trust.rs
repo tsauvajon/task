@@ -4,8 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::{Value, json};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value};
+
+use crate::error::{Error, Result};
 
 const TRUST_MODEL_KEY: &str = "content.trust.model.key";
 
@@ -16,49 +18,41 @@ const TRUST_MODEL_KEY: &str = "content.trust.model.key";
 ///
 /// We merge configured trusted roots into that JSON document before opening the editor
 /// so task worktrees under those roots open as trusted without disabling workspace trust.
-pub fn seed_trusted_roots(user_data_dir: &Path, trusted_roots: &[PathBuf]) -> Result<(), String> {
-    let mut normalized_roots = Vec::new();
-    for root in trusted_roots {
-        normalized_roots.push(normalize_path(root));
-    }
+pub fn seed_trusted_roots(user_data_dir: &Path, trusted_roots: &[PathBuf]) -> Result<()> {
+    let normalized_roots: Vec<String> = trusted_roots.iter().map(|r| normalize_path(r)).collect();
 
     if normalized_roots.is_empty() {
         return Ok(());
     }
 
-    let global_storage_dir = user_data_dir.join("User").join("globalStorage");
-    fs::create_dir_all(&global_storage_dir).map_err(|error| error.to_string())?;
+    let global_storage_dir = user_data_dir.join("User/globalStorage");
+    fs::create_dir_all(&global_storage_dir)?;
     let db_path = global_storage_dir.join("state.vscdb");
 
-    let connection = Connection::open(&db_path).map_err(|error| error.to_string())?;
-    connection
-        .execute(
-            "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
+    let conn = Connection::open(&db_path)?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
+        [],
+    )?;
 
-    let existing: Option<String> = connection
+    let existing: Option<String> = conn
         .query_row(
             "SELECT value FROM ItemTable WHERE key = ?1",
             params![TRUST_MODEL_KEY],
             |row| row.get(0),
         )
-        .optional()
-        .map_err(|error| error.to_string())?;
+        .optional()?;
 
     let merged = merge_trust_model(existing.as_deref(), &normalized_roots)?;
-    connection
-        .execute(
-            "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
-            params![TRUST_MODEL_KEY, merged],
-        )
-        .map_err(|error| error.to_string())?;
+    conn.execute(
+        "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+        params![TRUST_MODEL_KEY, merged],
+    )?;
 
     Ok(())
 }
 
-fn merge_trust_model(existing: Option<&str>, trusted_roots: &[String]) -> Result<String, String> {
+fn merge_trust_model(existing: Option<&str>, trusted_roots: &[String]) -> Result<String> {
     let mut model = existing
         .and_then(|json| serde_json::from_str::<Value>(json).ok())
         .filter(Value::is_object)
@@ -70,40 +64,28 @@ fn merge_trust_model(existing: Option<&str>, trusted_roots: &[String]) -> Result
 
     let entries = model["uriTrustInfo"]
         .as_array_mut()
-        .ok_or_else(|| "Could not initialize VSCodium trust model".to_string())?;
+        .ok_or_else(|| Error::failed("Could not initialize VSCodium trust model"))?;
 
-    let mut known_paths = HashSet::new();
-    for entry in entries.iter() {
-        if !entry
-            .get("trusted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
-        let Some(uri) = entry.get("uri") else {
-            continue;
-        };
-
-        let path = uri
-            .get("path")
-            .and_then(Value::as_str)
-            .or_else(|| uri.get("fsPath").and_then(Value::as_str));
-        if let Some(path) = path {
-            known_paths.insert(normalize_path(Path::new(path)));
-        }
-    }
+    // Collect paths that are already trusted so we don't add duplicates.
+    let known_paths: HashSet<String> = entries
+        .iter()
+        .filter(|e| e.get("trusted").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|e| e.get("uri"))
+        .filter_map(|uri| {
+            uri.get("path")
+                .and_then(Value::as_str)
+                .or_else(|| uri.get("fsPath").and_then(Value::as_str))
+        })
+        .map(|p| normalize_path(Path::new(p)))
+        .collect();
 
     for root in trusted_roots {
-        if known_paths.contains(root) {
-            continue;
+        if !known_paths.contains(root) {
+            entries.push(trusted_entry(root));
         }
-        entries.push(trusted_entry(root));
-        known_paths.insert(root.clone());
     }
 
-    serde_json::to_string(&model).map_err(|error| error.to_string())
+    Ok(serde_json::to_string(&model)?)
 }
 
 fn trusted_entry(root: &str) -> Value {
@@ -136,7 +118,7 @@ mod tests {
     use super::seed_trusted_roots;
 
     fn read_trust_model(path: &std::path::Path) -> String {
-        let db_path = path.join("User").join("globalStorage").join("state.vscdb");
+        let db_path = path.join("User/globalStorage/state.vscdb");
         let connection = Connection::open(db_path).expect("open sqlite");
         connection
             .query_row(

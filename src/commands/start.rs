@@ -1,6 +1,7 @@
 use std::fs;
 
 use crate::{
+    error::{Error, Result},
     runtime::environment::RuntimeEnvironment,
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs, ref_exists, rev_exists},
@@ -16,36 +17,38 @@ pub fn run(
     repo_arg: &str,
     branch: &str,
     base_ref: Option<&str>,
-) -> Result<(), String> {
-    context.ensure_layout()?;
-    let repo_key = context.resolve_repo_key_input(repo_arg)?;
-    context.ensure_repo_available(repo_arg, &repo_key)?;
+) -> Result<()> {
+    context.tasks().ensure_layout()?;
+    let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
+    context.tasks().ensure_repo_available(repo_arg, &repo_key)?;
 
     let gitdir = context.layout().repo_gitdir_path(&repo_key);
     fetch_origin_refs(&gitdir)?;
 
     let base_ref = base_ref
-        .map(|value| value.to_string())
+        .map(str::to_string)
         .unwrap_or_else(|| detect_default_base(&gitdir));
 
     let worktree = context.layout().worktree_path(&repo_key, branch);
     if worktree.exists() && !worktree.join(".git").exists() {
-        return Err(format!(
+        return Err(Error::failed(format!(
             "Path exists but is not a git worktree: {}",
             worktree.display()
-        ));
+        )));
     }
 
     if worktree.join(".git").exists() {
-        context.log(&format!(
+        context.process().log(&format!(
             "Reusing existing worktree: {}",
             worktree.display()
         ));
-        return context.launch_workspace(&repo_key, branch, &worktree);
+        return context
+            .tasks()
+            .launch_workspace(&repo_key, branch, &worktree);
     }
 
     if let Some(parent) = worktree.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        fs::create_dir_all(parent)?;
     }
 
     if ref_exists(&gitdir, &format!("refs/heads/{branch}")) {
@@ -54,10 +57,12 @@ pub fn run(
         worktree_add_tracking_remote_branch(&gitdir, &worktree, branch)?;
     } else {
         if !rev_exists(&gitdir, &base_ref) {
-            return Err(format!("Base ref not found: {base_ref}"));
+            return Err(Error::not_found(format!("Base ref not found: {base_ref}")));
         }
         worktree_add_from_base(&gitdir, &worktree, branch, &base_ref)?;
     }
 
-    context.launch_workspace(&repo_key, branch, &worktree)
+    context
+        .tasks()
+        .launch_workspace(&repo_key, branch, &worktree)
 }
