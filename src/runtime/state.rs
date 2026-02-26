@@ -98,4 +98,46 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn onboarding_state_errors_on_invalid_toml() {
+        let path = env::temp_dir().join("task-rs-state-invalid.toml");
+        fs::write(&path, b"this is not valid toml ][").expect("write bad toml");
+
+        let err = onboarding_complete_at(&path).expect_err("should fail on bad toml");
+        assert!(
+            err.to_string().contains("Could not parse state file"),
+            "unexpected error: {err}"
+        );
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn mark_onboarding_complete_creates_parent_directories() {
+        let dir = env::temp_dir().join("task-rs-state-new-parent");
+        let nested = dir.join("a").join("b").join("state.toml");
+        let _ = fs::remove_dir_all(&dir);
+
+        mark_onboarding_complete_at(&nested).expect("should create parents and write");
+        assert!(
+            onboarding_complete_at(&nested).expect("should read back"),
+            "onboarding should be true after marking"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn onboarding_state_is_false_when_field_is_false() {
+        let path = env::temp_dir().join("task-rs-state-explicit-false.toml");
+        fs::write(&path, b"onboarding_complete = false").expect("write toml");
+
+        assert!(
+            !onboarding_complete_at(&path).expect("should parse"),
+            "should return false when field is false"
+        );
+
+        let _ = fs::remove_file(&path);
+    }
 }

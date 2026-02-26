@@ -66,3 +66,70 @@ impl<'a> From<&'a PathBuf> for GitDir<'a> {
         Self::new(path.as_path())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{env, process::Command};
+
+    use super::GitDir;
+
+    /// Create a temporary bare git repository and return its path.
+    /// The directory is named with a random-ish suffix so parallel tests
+    /// don't collide.
+    fn make_bare_repo(name: &str) -> std::path::PathBuf {
+        let dir = env::temp_dir().join(format!("task-rs-gitdir-{name}.git"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let status = Command::new("git")
+            .args(["init", "--bare", dir.to_str().expect("valid utf-8 path")])
+            .status()
+            .expect("git must be available");
+        assert!(status.success(), "git init --bare failed");
+        dir
+    }
+
+    #[test]
+    fn path_returns_the_wrapped_path() {
+        let dir = env::temp_dir().join("task-rs-gitdir-path-check.git");
+        let gd = GitDir::new(&dir);
+        assert_eq!(gd.path(), dir.as_path());
+    }
+
+    #[test]
+    fn from_path_ref_and_from_pathbuf_agree() {
+        let dir = env::temp_dir().join("task-rs-gitdir-from-impls.git");
+        let gd_from_ref = GitDir::from(dir.as_path());
+        let gd_from_buf = GitDir::from(&dir);
+        assert_eq!(gd_from_ref.path(), gd_from_buf.path());
+    }
+
+    #[test]
+    fn capture_returns_git_dir_path() {
+        let dir = make_bare_repo("capture-test");
+        let gd = GitDir::new(&dir);
+        let output = gd
+            .capture(&["rev-parse", "--git-dir"])
+            .expect("git rev-parse --git-dir should succeed");
+        // git outputs "." when queried from inside the bare repo directory.
+        assert!(!output.trim().is_empty(), "output should not be empty");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_succeeds_on_valid_bare_repo() {
+        let dir = make_bare_repo("status-test");
+        let gd = GitDir::new(&dir);
+        // `git rev-parse --git-dir` exits 0 on a valid repo.
+        gd.status(&["rev-parse", "--git-dir"])
+            .expect("status should succeed on a valid bare repo");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_errors_on_nonexistent_path() {
+        let dir = env::temp_dir().join("task-rs-gitdir-nonexistent-12345.git");
+        let _ = std::fs::remove_dir_all(&dir);
+        let gd = GitDir::new(&dir);
+        let result = gd.status(&["rev-parse", "--git-dir"]);
+        assert!(result.is_err(), "should fail for a nonexistent git dir");
+    }
+}
