@@ -302,4 +302,168 @@ mod tests {
             assert_eq!(path, std::path::PathBuf::from("/tmp/custom-xdg/task"));
         }
     }
+
+    mod load_config_tests {
+        use std::{env, fs, path::PathBuf};
+
+        use super::super::load_config;
+
+        struct TempDir(PathBuf);
+
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = env::temp_dir().join(format!("task-rs-config-{name}"));
+                let _ = fs::remove_dir_all(&path);
+                fs::create_dir_all(&path).expect("create temp dir");
+                Self(path)
+            }
+
+            fn path(&self) -> &PathBuf {
+                &self.0
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[test]
+        fn loads_minimal_config() {
+            let dir = TempDir::new("load-minimal");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\n",
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load minimal config");
+            assert_eq!(config.repos_dir, PathBuf::from("/tmp/repos"));
+            assert_eq!(config.wt_dir, PathBuf::from("/tmp/wt"));
+            assert!(config.codium_trusted_roots.is_empty());
+        }
+
+        #[test]
+        fn loads_config_with_vscodium() {
+            let dir = TempDir::new("load-vscodium");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\n\n[vscodium]\ntrusted_roots = [\"/tmp/wt/github.com/me\"]\n",
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load vscodium config");
+            assert_eq!(config.codium_trusted_roots.len(), 1);
+            assert_eq!(
+                config.codium_trusted_roots[0],
+                PathBuf::from("/tmp/wt/github.com/me")
+            );
+        }
+
+        #[test]
+        fn errors_on_invalid_toml() {
+            let dir = TempDir::new("load-invalid");
+            let config_path = dir.path().join("config.toml");
+            fs::write(&config_path, "not valid toml {{{").unwrap();
+
+            let err = load_config(&config_path).unwrap_err();
+            assert!(err.to_string().contains("parse"));
+        }
+
+        #[test]
+        fn errors_on_missing_file() {
+            let dir = TempDir::new("load-missing");
+            let config_path = dir.path().join("nonexistent.toml");
+
+            let err = load_config(&config_path).unwrap_err();
+            assert!(err.to_string().contains("read"));
+        }
+
+        #[test]
+        fn errors_on_missing_required_fields() {
+            let dir = TempDir::new("load-missing-fields");
+            let config_path = dir.path().join("config.toml");
+            fs::write(&config_path, "repos_dir = \"/tmp/repos\"\n").unwrap();
+
+            let err = load_config(&config_path).unwrap_err();
+            assert!(err.to_string().contains("parse") || err.to_string().contains("wt_dir"));
+        }
+    }
+
+    mod write_config_tests {
+        use std::{env, fs, path::PathBuf};
+
+        use super::super::{TaskConfig, load_config, write_config};
+
+        struct TempDir(PathBuf);
+
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = env::temp_dir().join(format!("task-rs-config-write-{name}"));
+                let _ = fs::remove_dir_all(&path);
+                fs::create_dir_all(&path).expect("create temp dir");
+                Self(path)
+            }
+
+            fn path(&self) -> &PathBuf {
+                &self.0
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[test]
+        fn round_trips_config() {
+            let dir = TempDir::new("write-round-trip");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                codium_trusted_roots: vec![PathBuf::from("/tmp/trusted")],
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let loaded = load_config(&config_path).expect("load written config");
+
+            assert_eq!(loaded.repos_dir, config.repos_dir);
+            assert_eq!(loaded.wt_dir, config.wt_dir);
+            assert_eq!(loaded.codium_trusted_roots, config.codium_trusted_roots);
+        }
+
+        #[test]
+        fn creates_parent_directories() {
+            let dir = TempDir::new("write-creates-parent");
+            let config_path = dir.path().join("nested/dir/config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                codium_trusted_roots: Vec::new(),
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            assert!(config_path.is_file());
+        }
+
+        #[test]
+        fn omits_vscodium_section_when_empty() {
+            let dir = TempDir::new("write-no-vscodium");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                codium_trusted_roots: Vec::new(),
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(!content.contains("[vscodium]"));
+        }
+    }
 }

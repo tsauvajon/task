@@ -337,3 +337,142 @@ fn view_title(base: &str, filter: &str) -> String {
         format!("{base} - {trimmed}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::layout::Rect;
+
+    use super::{actions_for_mode, centered_rect, status_label, view_title};
+    use crate::{
+        runtime::task_rows::TaskStatus,
+        ui::state::{InputMode, UiState, ViewMode},
+    };
+
+    mod view_title_tests {
+        use super::*;
+
+        #[test]
+        fn returns_base_when_filter_empty() {
+            assert_eq!(view_title("Tasks", ""), "Tasks");
+        }
+
+        #[test]
+        fn returns_base_when_filter_whitespace_only() {
+            assert_eq!(view_title("Tasks", "   "), "Tasks");
+        }
+
+        #[test]
+        fn appends_trimmed_filter() {
+            assert_eq!(view_title("Tasks", " foo "), "Tasks - foo");
+        }
+
+        #[test]
+        fn handles_repos_base() {
+            assert_eq!(view_title("Repos", "bar"), "Repos - bar");
+        }
+    }
+
+    mod status_label_tests {
+        use super::*;
+
+        #[test]
+        fn open_shows_open() {
+            assert_eq!(status_label(TaskStatus::Open), "open");
+        }
+
+        #[test]
+        fn parked_shows_parked() {
+            assert_eq!(status_label(TaskStatus::Parked), "parked");
+        }
+    }
+
+    mod centered_rect_tests {
+        use super::*;
+
+        #[test]
+        fn returns_inner_rect_within_bounds() {
+            let outer = Rect::new(0, 0, 100, 100);
+            let inner = centered_rect(50, 50, outer);
+            // Inner rect should be contained within outer
+            assert!(inner.x >= outer.x);
+            assert!(inner.y >= outer.y);
+            assert!(inner.x + inner.width <= outer.x + outer.width);
+            assert!(inner.y + inner.height <= outer.y + outer.height);
+        }
+
+        #[test]
+        fn full_percent_covers_most_of_area() {
+            let outer = Rect::new(0, 0, 100, 100);
+            let inner = centered_rect(100, 100, outer);
+            // With 100% should cover nearly all the area
+            assert!(inner.width >= outer.width / 2);
+            assert!(inner.height >= outer.height / 2);
+        }
+
+        #[test]
+        fn zero_rect_returns_zero_area() {
+            let outer = Rect::new(0, 0, 0, 0);
+            let inner = centered_rect(50, 50, outer);
+            assert_eq!(inner.width, 0);
+            assert_eq!(inner.height, 0);
+        }
+    }
+
+    mod actions_for_mode_tests {
+        use super::*;
+
+        fn state_with_mode(mode: InputMode, view: ViewMode) -> UiState {
+            let mut state = UiState::new(Vec::new(), Vec::new(), None);
+            state.view = view;
+            state.mode = mode;
+            state
+        }
+
+        #[test]
+        fn normal_tasks_lists_task_actions() {
+            let state = state_with_mode(InputMode::Normal, ViewMode::Tasks);
+            let lines = actions_for_mode(&state);
+            let text: String = lines.iter().map(|l| l.to_string()).collect();
+            assert!(text.contains("open selected task"));
+            assert!(text.contains("park"));
+            assert!(text.contains("finish"));
+            assert!(text.contains("create new task"));
+        }
+
+        #[test]
+        fn normal_repos_lists_repo_actions() {
+            let state = state_with_mode(InputMode::Normal, ViewMode::Repos);
+            let lines = actions_for_mode(&state);
+            let text: String = lines.iter().map(|l| l.to_string()).collect();
+            assert!(text.contains("clone repo"));
+            assert!(text.contains("switch to tasks view"));
+        }
+
+        #[test]
+        fn filter_mode_lists_filter_actions() {
+            let state = state_with_mode(InputMode::Filter, ViewMode::Tasks);
+            let lines = actions_for_mode(&state);
+            let text: String = lines.iter().map(|l| l.to_string()).collect();
+            assert!(text.contains("filter text"));
+            assert!(text.contains("Esc"));
+        }
+
+        #[test]
+        fn create_task_mode_lists_create_actions() {
+            let state = state_with_mode(InputMode::CreateTask, ViewMode::Tasks);
+            let lines = actions_for_mode(&state);
+            let text: String = lines.iter().map(|l| l.to_string()).collect();
+            assert!(text.contains("branch name"));
+            assert!(text.contains("create and open"));
+        }
+
+        #[test]
+        fn clone_repo_mode_lists_clone_actions() {
+            let state = state_with_mode(InputMode::CloneRepo, ViewMode::Repos);
+            let lines = actions_for_mode(&state);
+            let text: String = lines.iter().map(|l| l.to_string()).collect();
+            assert!(text.contains("repo-url"));
+            assert!(text.contains("clone repository"));
+        }
+    }
+}

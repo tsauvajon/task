@@ -31,6 +31,17 @@
           cargo = rustToolchain;
           rustc = rustToolchain;
         };
+        # On macOS, rustfmt is a symlink whose @rpath resolves relative to the
+        # symlink target (rustfmt-preview/bin/../lib) rather than the
+        # rust-default closure that actually holds librustc_driver-*.dylib.
+        # Rather than setting DYLD_LIBRARY_PATH globally (which poisons the
+        # Nix-provided clang with an incompatible LLVM, breaking any C
+        # compilation), we create a thin wrapper that injects the path only for
+        # rustfmt.
+        rustfmtWrapped = pkgs.writeShellScriptBin "rustfmt" ''
+          export DYLD_LIBRARY_PATH="${rustToolchain}/lib"
+          exec "${rustToolchain}/bin/rustfmt" "$@"
+        '';
       in
       {
         packages.default = rustPlatform.buildRustPackage {
@@ -50,14 +61,13 @@
         devShells.default = pkgs.mkShell {
           packages = [
             rustToolchain
+            rustfmtWrapped
           ];
           env = {
-            # On macOS, rustfmt is a symlink whose @rpath resolves relative to
-            # the symlink target (rustfmt-preview/bin/../lib) rather than the
-            # rust-default closure that actually holds librustc_driver-*.dylib.
-            # Setting DYLD_LIBRARY_PATH here lets dyld find the dylib at launch
-            # time.  This is a no-op on Linux (which uses LD_LIBRARY_PATH).
-            DYLD_LIBRARY_PATH = "${rustToolchain}/lib";
+            # Tell cargo to use our wrapped rustfmt rather than the sysroot
+            # copy, so that DYLD_LIBRARY_PATH is set only for rustfmt and not
+            # for clang/cc.
+            RUSTFMT = "${rustfmtWrapped}/bin/rustfmt";
           };
         };
       }

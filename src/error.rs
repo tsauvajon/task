@@ -45,3 +45,47 @@ impl Error {
         Self::NotFound(msg.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn failed_stores_message() {
+        let err = Error::failed("something went wrong");
+        assert_eq!(err.to_string(), "something went wrong");
+    }
+
+    #[test]
+    fn not_found_stores_message() {
+        let err = Error::not_found("repo missing");
+        assert_eq!(err.to_string(), "repo missing");
+    }
+
+    #[test]
+    fn cancelled_has_fixed_display() {
+        let err = Error::Cancelled;
+        assert_eq!(err.to_string(), "Selection cancelled");
+    }
+
+    #[test]
+    fn from_io_error_preserves_message() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let err: Error = io_err.into();
+        assert!(err.to_string().contains("file not found"));
+        assert!(matches!(err, Error::Io(_)));
+    }
+
+    #[test]
+    fn from_json_error_is_json_variant() {
+        let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let err: Error = json_err.into();
+        assert!(matches!(err, Error::Json(_)));
+    }
+
+    #[test]
+    fn failed_accepts_string_and_str() {
+        let _ = Error::failed("from &str");
+        let _ = Error::failed(String::from("from String"));
+    }
+}

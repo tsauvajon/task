@@ -433,14 +433,15 @@ fn choose_task_interactive(query: &str, choices: &[&TaskRow]) -> Result<(RepoKey
 mod tests {
     use std::{env, fs, path::PathBuf};
 
-    use super::collect_gitdirs;
+    use super::{TaskResolver, collect_gitdirs};
+    use crate::runtime::{BranchName, RepoKey, paths::WorkspacePaths};
 
     /// RAII guard that removes its directory on drop, including on test failure.
     struct TempDir(PathBuf);
 
     impl TempDir {
         fn new(name: &str) -> Self {
-            let path = env::temp_dir().join(format!("task-rs-collect-gitdirs-{name}"));
+            let path = env::temp_dir().join(format!("task-rs-tasks-{name}"));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
@@ -455,6 +456,25 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// Create a minimal bare git repo at the given path using `git init --bare`.
+    fn init_bare_repo(path: &std::path::Path) {
+        fs::create_dir_all(path).expect("create bare repo dir");
+        let status = std::process::Command::new("git")
+            .args(["init", "--bare"])
+            .arg(path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git init --bare");
+        assert!(status.success(), "git init --bare failed");
+    }
+
+    /// Build a `TaskResolver` from temp repos and wt dirs.
+    fn resolver_for(repos_dir: &std::path::Path, wt_dir: &std::path::Path) -> TaskResolver {
+        let layout = WorkspacePaths::new(repos_dir, wt_dir);
+        TaskResolver::new(layout, Vec::new())
     }
 
     mod collect_gitdirs {
@@ -532,6 +552,382 @@ mod tests {
             let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
             assert_eq!(results.len(), 1);
             assert!(results[0].ends_with("deep.git"));
+        }
+    }
+
+    mod ensure_layout {
+        use super::*;
+
+        #[test]
+        fn creates_repos_and_wt_dirs() {
+            let dir = TempDir::new("ensure-layout");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            assert!(!repos_dir.is_dir());
+            assert!(!wt_dir.is_dir());
+
+            resolver.ensure_layout().expect("ensure_layout");
+
+            assert!(repos_dir.is_dir());
+            assert!(wt_dir.is_dir());
+        }
+
+        #[test]
+        fn idempotent_when_dirs_already_exist() {
+            let dir = TempDir::new("ensure-layout-idempotent");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            resolver.ensure_layout().expect("ensure_layout idempotent");
+
+            assert!(repos_dir.is_dir());
+            assert!(wt_dir.is_dir());
+        }
+    }
+
+    mod available_repos {
+        use super::*;
+
+        #[test]
+        fn discovers_bare_repos() {
+            let dir = TempDir::new("avail-repos");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            init_bare_repo(&repos_dir.join("github.com/me/lib.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repos = resolver.available_repos().expect("available_repos");
+            let keys: Vec<String> = repos.iter().map(|(k, _)| k.to_string()).collect();
+            assert_eq!(keys.len(), 2);
+            assert!(keys.contains(&"github.com/me/app".to_string()));
+            assert!(keys.contains(&"github.com/me/lib".to_string()));
+        }
+
+        #[test]
+        fn returns_sorted_and_deduped() {
+            let dir = TempDir::new("avail-repos-sorted");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/z/zzz.git"));
+            init_bare_repo(&repos_dir.join("github.com/a/aaa.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repos = resolver.available_repos().expect("available_repos");
+            let keys: Vec<String> = repos.iter().map(|(k, _)| k.to_string()).collect();
+            let mut sorted = keys.clone();
+            sorted.sort();
+            assert_eq!(keys, sorted);
+        }
+
+        #[test]
+        fn returns_empty_when_no_repos() {
+            let dir = TempDir::new("avail-repos-empty");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repos = resolver.available_repos().expect("available_repos");
+            assert!(repos.is_empty());
+        }
+    }
+
+    mod available_repo_keys {
+        use super::*;
+
+        #[test]
+        fn returns_keys_only() {
+            let dir = TempDir::new("avail-keys");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let keys = resolver.available_repo_keys().expect("available_repo_keys");
+            assert_eq!(keys.len(), 1);
+            assert_eq!(keys[0].to_string(), "github.com/me/app");
+        }
+    }
+
+    mod resolve_repo_key_input {
+        use super::*;
+
+        #[test]
+        fn resolves_exact_full_key() {
+            let dir = TempDir::new("resolve-exact");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let key = resolver
+                .resolve_repo_key_input("github.com/me/app")
+                .expect("exact key");
+            assert_eq!(key.to_string(), "github.com/me/app");
+        }
+
+        #[test]
+        fn resolves_short_name_when_unique() {
+            let dir = TempDir::new("resolve-short");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/me/unique-app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let key = resolver
+                .resolve_repo_key_input("unique-app")
+                .expect("short name");
+            assert_eq!(key.to_string(), "github.com/me/unique-app");
+        }
+
+        #[test]
+        fn accepts_clone_url_without_existing_repo() {
+            let dir = TempDir::new("resolve-clone-url");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let key = resolver
+                .resolve_repo_key_input("https://github.com/me/new-app.git")
+                .expect("clone url");
+            assert_eq!(key.to_string(), "github.com/me/new-app");
+        }
+
+        #[test]
+        fn falls_through_to_normalized_key_when_no_repos_exist() {
+            let dir = TempDir::new("resolve-unknown");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            // When no repos exist, resolve_repo_query passes through the normalized key
+            let key = resolver
+                .resolve_repo_key_input("nonexistent")
+                .expect("passthrough key");
+            assert_eq!(key.to_string(), "nonexistent");
+        }
+    }
+
+    mod ensure_repo_available {
+        use super::*;
+
+        #[test]
+        fn returns_ok_when_repo_exists() {
+            let dir = TempDir::new("ensure-avail");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let repo_key = RepoKey::new("github.com/me/app");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            resolver
+                .ensure_repo_available("github.com/me/app", &repo_key)
+                .expect("repo available");
+        }
+
+        #[test]
+        fn errors_when_repo_missing_and_no_clone_url() {
+            let dir = TempDir::new("ensure-avail-missing");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let repo_key = RepoKey::new("github.com/me/missing");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver
+                .ensure_repo_available("missing", &repo_key)
+                .unwrap_err();
+            assert!(err.to_string().contains("not found"));
+        }
+    }
+
+    mod resolve_worktree_path {
+        use super::*;
+
+        #[test]
+        fn returns_fallback_when_no_gitdir() {
+            let dir = TempDir::new("resolve-wt-path-no-gitdir");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let branch = BranchName::new("feature-x");
+            let path = resolver.resolve_worktree_path(&repo_key, &branch);
+            assert_eq!(path, wt_dir.join("github.com/me/app/feature-x"));
+        }
+
+        #[test]
+        fn returns_fallback_when_gitdir_exists_but_no_worktree() {
+            let dir = TempDir::new("resolve-wt-path-no-wt");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let repo_key = RepoKey::new("github.com/me/app");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let branch = BranchName::new("feature-y");
+            let path = resolver.resolve_worktree_path(&repo_key, &branch);
+            // Bare repo has no worktrees, so falls back to computed path
+            assert_eq!(path, wt_dir.join("github.com/me/app/feature-y"));
+        }
+    }
+
+    mod resolve_repo_branch_inputs {
+        use super::*;
+
+        #[test]
+        fn returns_direct_pair_when_both_provided() {
+            let dir = TempDir::new("resolve-rb-both");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let (repo, branch) = resolver
+                .resolve_repo_branch_inputs(Some("github.com/me/app"), Some("feat"))
+                .expect("both provided");
+            assert_eq!(repo.to_string(), "github.com/me/app");
+            assert_eq!(branch.to_string(), "feat");
+        }
+    }
+
+    mod resolve_repo_input {
+        use super::*;
+
+        #[test]
+        fn returns_provided_repo_arg() {
+            let dir = TempDir::new("resolve-repo-input-arg");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let key = resolver
+                .resolve_repo_input(Some("github.com/me/app"))
+                .expect("provided arg");
+            assert_eq!(key.to_string(), "github.com/me/app");
+        }
+
+        #[test]
+        fn errors_without_arg_and_outside_worktree() {
+            let dir = TempDir::new("resolve-repo-input-none");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver.resolve_repo_input(None).unwrap_err();
+            assert!(err.to_string().contains("not specified"));
+        }
+    }
+
+    mod resolve_task_from_args {
+        use super::*;
+
+        #[test]
+        fn resolves_repo_and_branch_from_two_args() {
+            let dir = TempDir::new("resolve-task-from-args-two");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let args = vec!["github.com/me/app".to_string(), "feature-x".to_string()];
+            let (repo, branch) = resolver
+                .resolve_task_from_args(&args, "usage: task rebase <repo> <branch>")
+                .expect("two args");
+            assert_eq!(repo.to_string(), "github.com/me/app");
+            assert_eq!(branch.to_string(), "feature-x");
+        }
+
+        #[test]
+        fn errors_on_too_many_args() {
+            let dir = TempDir::new("resolve-task-from-args-many");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let args = vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+            ];
+            let err = resolver
+                .resolve_task_from_args(&args, "too many")
+                .unwrap_err();
+            assert_eq!(err.to_string(), "too many");
+        }
+    }
+
+    mod repo_task_rows {
+        use std::collections::HashSet;
+
+        use super::*;
+
+        #[test]
+        fn returns_empty_for_bare_repo_with_no_worktrees() {
+            let dir = TempDir::new("task-rows-empty");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let repo_key = RepoKey::new("github.com/me/app");
+            let gitdir = repos_dir.join("github.com/me/app.git");
+            init_bare_repo(&gitdir);
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let rows = resolver
+                .repo_task_rows(&repo_key, &gitdir, &HashSet::new())
+                .expect("task rows");
+            assert!(rows.is_empty());
+        }
+
+        #[test]
+        fn discovers_worktree_entries() {
+            let dir = TempDir::new("task-rows-wt");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let repo_key = RepoKey::new("github.com/me/app");
+            let gitdir = repos_dir.join("github.com/me/app.git");
+            init_bare_repo(&gitdir);
+
+            // Create an initial commit so we can create worktrees from it
+            let wt_path = wt_dir.join("github.com/me/app/main");
+            fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+            // Use git worktree add from the bare repo
+            let status = std::process::Command::new("git")
+                .args([
+                    "--git-dir",
+                    gitdir.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "--orphan",
+                    "-b",
+                    "main",
+                    wt_path.to_str().unwrap(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("git worktree add");
+            assert!(status.success(), "git worktree add --orphan failed");
+
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+            let rows = resolver
+                .repo_task_rows(&repo_key, &gitdir, &HashSet::new())
+                .expect("task rows");
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].branch.to_string(), "main");
         }
     }
 }
