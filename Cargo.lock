@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "task"
-version = "2.8.1"
+version = "2.8.2"
 dependencies = [
  "clap",
  "clap_complete",

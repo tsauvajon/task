@@ -474,5 +474,63 @@ mod tests {
             assert!(text.contains("repo-url"));
             assert!(text.contains("clone repository"));
         }
+
+        #[test]
+        fn clone_repo_mode_interpolates_input_text() {
+            let mut state = state_with_mode(InputMode::CloneRepo, ViewMode::Repos);
+            state.clone_input = "git@github.com:me/app.git".to_string();
+            let lines = actions_for_mode(&state);
+            let text: String = lines.iter().map(|l| l.to_string()).collect();
+            assert!(
+                text.contains("git@github.com:me/app.git"),
+                "clone_input should appear in actions: {text}"
+            );
+        }
+
+        #[test]
+        fn filter_mode_same_actions_regardless_of_view() {
+            // Filter mode actions must not vary by view — they always show the
+            // same six lines regardless of whether Tasks or Repos is active.
+            let tasks_state = state_with_mode(InputMode::Filter, ViewMode::Tasks);
+            let repos_state = state_with_mode(InputMode::Filter, ViewMode::Repos);
+            let tasks_lines: Vec<String> = actions_for_mode(&tasks_state)
+                .iter()
+                .map(|l| l.to_string())
+                .collect();
+            let repos_lines: Vec<String> = actions_for_mode(&repos_state)
+                .iter()
+                .map(|l| l.to_string())
+                .collect();
+            assert_eq!(
+                tasks_lines, repos_lines,
+                "Filter mode actions should be identical regardless of view"
+            );
+        }
+
+        #[test]
+        fn normal_tasks_does_not_include_repo_specific_actions() {
+            let state = state_with_mode(InputMode::Normal, ViewMode::Tasks);
+            let lines = actions_for_mode(&state);
+            let text: String = lines.iter().map(|l| l.to_string()).collect();
+            assert!(
+                !text.contains("clone repo"),
+                "tasks view should not include clone action: {text}"
+            );
+        }
+
+        #[test]
+        fn normal_repos_does_not_include_task_specific_actions() {
+            let state = state_with_mode(InputMode::Normal, ViewMode::Repos);
+            let lines = actions_for_mode(&state);
+            let text: String = lines.iter().map(|l| l.to_string()).collect();
+            assert!(
+                !text.contains("park"),
+                "repos view should not include park action: {text}"
+            );
+            assert!(
+                !text.contains("finish"),
+                "repos view should not include finish action: {text}"
+            );
+        }
     }
 }

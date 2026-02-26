@@ -92,7 +92,118 @@ pub fn current_branch(root: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ls_remote_branch;
+    use std::{env, fs, process::Command};
+
+    use super::{current_branch, parse_ls_remote_branch, ref_exists, rev_exists};
+
+    /// Create a temporary bare git repository.
+    fn make_bare_repo(name: &str) -> std::path::PathBuf {
+        let dir = env::temp_dir().join(format!("task-rs-refs-bare-{name}.git"));
+        let _ = fs::remove_dir_all(&dir);
+        let status = Command::new("git")
+            .args(["init", "--bare", dir.to_str().expect("valid utf-8")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git must be available");
+        assert!(status.success(), "git init --bare failed");
+        dir
+    }
+
+    /// Create a regular git repo with an initial commit on `main` and return
+    /// its path (the working tree root, which is also the `.git` parent).
+    fn make_regular_repo_with_commit(name: &str) -> std::path::PathBuf {
+        let dir = env::temp_dir().join(format!("task-rs-refs-regular-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create dir");
+
+        let run = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("git must be available");
+            assert!(status.success(), "git {args:?} failed");
+        };
+
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        // Create an initial commit so HEAD points to a real branch
+        fs::write(dir.join("README.md"), "hello").expect("write README");
+        run(&["add", "."]);
+        run(&["commit", "-m", "initial"]);
+        dir
+    }
+
+    mod ref_exists_tests {
+        use super::*;
+
+        #[test]
+        fn returns_false_for_nonexistent_ref() {
+            let dir = make_bare_repo("ref-exists-false");
+            let exists = ref_exists(&dir, "refs/heads/nonexistent-branch-xyz");
+            assert!(!exists, "nonexistent ref should return false");
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn returns_false_on_nonexistent_gitdir() {
+            let dir = env::temp_dir().join("task-rs-refs-nonexistent-gitdir.git");
+            let _ = fs::remove_dir_all(&dir);
+            let exists = ref_exists(&dir, "refs/heads/main");
+            assert!(!exists, "nonexistent gitdir should return false");
+        }
+    }
+
+    mod rev_exists_tests {
+        use super::*;
+
+        #[test]
+        fn returns_false_for_nonexistent_revision() {
+            let dir = make_bare_repo("rev-exists-false");
+            let exists = rev_exists(&dir, "nonexistent-branch-xyz");
+            assert!(!exists, "nonexistent revision should return false");
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn returns_false_on_nonexistent_gitdir() {
+            let dir = env::temp_dir().join("task-rs-refs-nonexistent-rev-gitdir.git");
+            let _ = fs::remove_dir_all(&dir);
+            let exists = rev_exists(&dir, "HEAD");
+            assert!(!exists, "nonexistent gitdir should return false");
+        }
+    }
+
+    mod current_branch_tests {
+        use super::*;
+
+        #[test]
+        fn returns_branch_for_regular_repo_with_commit() {
+            let dir = make_regular_repo_with_commit("current-branch-main");
+            let branch = current_branch(&dir);
+            assert_eq!(
+                branch.as_deref(),
+                Some("main"),
+                "expected 'main' branch, got {branch:?}"
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn returns_none_for_bare_repo() {
+            // Bare repos have no working tree and HEAD is symbolic, but
+            // `git symbolic-ref --quiet --short HEAD` returns a non-zero exit
+            // in a bare repo when there are no commits (detached or unborn).
+            // Either way the function must not panic.
+            let dir = make_bare_repo("current-branch-bare");
+            let _branch = current_branch(&dir); // must not panic
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
 
     mod parse_ls_remote_branch {
         use super::*;

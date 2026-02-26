@@ -320,4 +320,99 @@ mod tests {
             );
         }
     }
+
+    mod initial_repo_scope_tests {
+        use std::{env, fs};
+
+        use super::super::initial_repo_scope;
+        use crate::runtime::environment::RuntimeEnvironment;
+
+        fn env_no_context() -> RuntimeEnvironment {
+            let base = env::temp_dir().join("task-rs-ui-tasks-scope-no-ctx");
+            let repos_dir = base.join("repos");
+            let wt_dir = base.join("wt");
+            let _ = fs::remove_dir_all(&base);
+            fs::create_dir_all(&repos_dir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+            RuntimeEnvironment::from_paths(&repos_dir, &wt_dir)
+        }
+
+        #[test]
+        fn returns_repo_arg_when_provided() {
+            let env = env_no_context();
+            let scope = initial_repo_scope(&env, Some("github.com/me/app"));
+            assert_eq!(scope, Some("github.com/me/app".to_string()));
+        }
+
+        #[test]
+        fn returns_none_when_no_arg_and_no_context() {
+            // Not inside a worktree → current_repo_key() returns None.
+            let env = env_no_context();
+            let scope = initial_repo_scope(&env, None);
+            assert_eq!(scope, None);
+        }
+    }
+
+    mod load_task_rows_tests {
+        use std::{env, fs, process::Command};
+
+        use super::super::load_task_rows;
+        use crate::runtime::environment::RuntimeEnvironment;
+
+        fn init_bare_repo(path: &std::path::Path) {
+            fs::create_dir_all(path).expect("create repo dir");
+            let status = Command::new("git")
+                .args(["init", "--bare"])
+                .arg(path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("git must be available");
+            assert!(status.success(), "git init --bare failed");
+        }
+
+        fn env_for(base: &str) -> (std::path::PathBuf, RuntimeEnvironment) {
+            let base_dir = env::temp_dir().join(format!("task-rs-ui-tasks-load-{base}"));
+            let repos_dir = base_dir.join("repos");
+            let wt_dir = base_dir.join("wt");
+            let _ = fs::remove_dir_all(&base_dir);
+            fs::create_dir_all(&repos_dir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+            let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir);
+            (base_dir, env)
+        }
+
+        #[test]
+        fn returns_empty_rows_when_no_repos() {
+            let (_base, env) = env_for("no-repos");
+            let rows = load_task_rows(&env, None).expect("load_task_rows");
+            assert!(rows.is_empty(), "expected no rows with no repos");
+        }
+
+        #[test]
+        fn errors_when_scoped_repo_does_not_exist() {
+            let (_base, env) = env_for("missing-scoped");
+            let result = load_task_rows(&env, Some("github.com/me/nonexistent"));
+            assert!(result.is_err(), "should error for a missing scoped repo");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("not found") || msg.contains("nonexistent"),
+                "error should mention the missing repo: {msg}"
+            );
+        }
+
+        #[test]
+        fn returns_ok_for_existing_bare_repo_with_no_worktrees() {
+            let (base, env) = env_for("bare-no-wt");
+            let repos_dir = base.join("repos");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let rows = load_task_rows(&env, Some("github.com/me/app")).expect("load_task_rows");
+            // Bare repo with no worktrees → empty result
+            assert!(
+                rows.is_empty(),
+                "expected no task rows for a bare repo with no worktrees"
+            );
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
 }

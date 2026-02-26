@@ -89,7 +89,7 @@ fn check_dirty_worktree(force: bool, worktree: &std::path::Path) -> Result<()> {
         return Ok(());
     }
     let status = status_porcelain(worktree)?;
-    if !status.trim().is_empty() {
+    if is_status_dirty(&status) {
         return Err(Error::failed(
             "Worktree has uncommitted changes. Use --force if you really want to remove it.",
         ));
@@ -97,11 +97,17 @@ fn check_dirty_worktree(force: bool, worktree: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Returns `true` when a `git status --porcelain` output indicates uncommitted
+/// changes (i.e. the output is non-empty after trimming).
+fn is_status_dirty(status: &str) -> bool {
+    !status.trim().is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{env, fs, path::PathBuf};
 
-    use super::{WorktreeState, classify_worktree_state};
+    use super::{WorktreeState, classify_worktree_state, is_status_dirty};
 
     struct TempDir(PathBuf);
 
@@ -145,6 +151,52 @@ mod tests {
             let path = env::temp_dir().join("task-rs-finish-nonexistent");
             let _ = fs::remove_dir_all(&path);
             assert_eq!(classify_worktree_state(&path), WorktreeState::Stale);
+        }
+    }
+
+    mod dirty_status {
+        use super::*;
+
+        #[test]
+        fn empty_output_is_clean() {
+            assert!(!is_status_dirty(""));
+        }
+
+        #[test]
+        fn whitespace_only_is_clean() {
+            assert!(!is_status_dirty("   \n  "));
+        }
+
+        #[test]
+        fn modified_file_is_dirty() {
+            assert!(is_status_dirty(" M src/main.rs\n"));
+        }
+
+        #[test]
+        fn untracked_file_is_dirty() {
+            assert!(is_status_dirty("?? new_file.txt\n"));
+        }
+
+        #[test]
+        fn multiple_changes_are_dirty() {
+            assert!(is_status_dirty("M  src/lib.rs\n?? scratch.txt\n"));
+        }
+    }
+
+    mod check_dirty_worktree_force {
+        use std::path::Path;
+
+        use super::super::check_dirty_worktree;
+
+        #[test]
+        fn force_true_always_succeeds_without_reading_status() {
+            // Pass a nonexistent path — if it tries to run git it would fail.
+            let bogus = Path::new("/nonexistent/path/that/cannot/exist");
+            let result = check_dirty_worktree(true, bogus);
+            assert!(
+                result.is_ok(),
+                "force=true should bypass dirty check: {result:?}"
+            );
         }
     }
 }

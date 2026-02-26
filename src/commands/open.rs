@@ -99,6 +99,21 @@ fn collect_matches(
 }
 
 fn resolve_match(query: &str, matches: &[(TaskRow, MatchKind)], context: &str) -> Result<TaskRow> {
+    let allow_prompt = io::stdin().is_terminal() && io::stdout().is_terminal();
+    resolve_match_impl(query, matches, context, allow_prompt)
+}
+
+/// Inner, testable core of `resolve_match`.
+///
+/// `allow_prompt` controls whether an interactive `Select` may be shown.
+/// Production code derives this from `is_terminal()`; tests pass `false`
+/// to guarantee a deterministic, non-blocking result.
+fn resolve_match_impl(
+    query: &str,
+    matches: &[(TaskRow, MatchKind)],
+    context: &str,
+    allow_prompt: bool,
+) -> Result<TaskRow> {
     if matches.len() == 1 {
         return Ok(matches[0].0.clone());
     }
@@ -112,30 +127,32 @@ fn resolve_match(query: &str, matches: &[(TaskRow, MatchKind)], context: &str) -
         return Ok(exact[0].clone());
     }
 
-    choose_task_interactive(query, matches, context)
-}
-
-fn choose_task_interactive(
-    query: &str,
-    matches: &[(TaskRow, MatchKind)],
-    context: &str,
-) -> Result<TaskRow> {
+    // Still ambiguous — build the label list once for both the error message
+    // and the interactive prompt.
     let labels: Vec<String> = matches
         .iter()
         .map(|(row, _)| format!("{} {} ({})", row.repo, row.branch, row.path.display()))
         .collect();
 
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+    if !allow_prompt {
         return Err(Error::failed(format!(
             "Multiple tasks match '{query}' by {context}: {}. Use 'task open <repo> <branch>' to disambiguate.",
             labels.join(" | ")
         )));
     }
 
-    let prompt = format!("Multiple tasks match '{query}' by {context}. Choose one:");
+    choose_task_interactive(query, &labels, matches)
+}
+
+fn choose_task_interactive(
+    query: &str,
+    labels: &[String],
+    matches: &[(TaskRow, MatchKind)],
+) -> Result<TaskRow> {
+    let prompt = format!("Multiple tasks match '{query}'. Choose one:");
     let index = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(prompt)
-        .items(&labels)
+        .items(labels)
         .default(0)
         .interact_opt()?;
 
@@ -177,7 +194,7 @@ fn match_repo_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{MatchKind, match_repo_name, match_task_name, resolve_match};
+    use super::{MatchKind, match_repo_name, match_task_name, resolve_match_impl};
     use crate::runtime::{
         BranchName, RepoKey,
         task_rows::{TaskRow, TaskStatus},
@@ -186,60 +203,145 @@ mod tests {
     mod match_task_name {
         use super::*;
 
-        #[test]
-        fn prefers_exact() {
-            let row = TaskRow {
+        fn row(branch: &str) -> TaskRow {
+            TaskRow {
                 status: TaskStatus::Parked,
                 repo: RepoKey::new("github.com/acme/tool"),
-                branch: BranchName::new("feat/login"),
+                branch: BranchName::new(branch),
                 path: PathBuf::from("/tmp/wt/tool/feat/login"),
-            };
-            assert_eq!(match_task_name(&row, "feat/login"), Some(MatchKind::Exact));
-            assert_eq!(match_task_name(&row, "login"), Some(MatchKind::Partial));
+            }
+        }
+
+        #[test]
+        fn prefers_exact() {
+            let r = row("feat/login");
+            assert_eq!(match_task_name(&r, "feat/login"), Some(MatchKind::Exact));
+            assert_eq!(match_task_name(&r, "login"), Some(MatchKind::Partial));
+        }
+
+        #[test]
+        fn returns_none_when_no_match() {
+            let r = row("feat/login");
+            assert_eq!(match_task_name(&r, "unrelated"), None);
+        }
+
+        #[test]
+        fn case_insensitive_partial_match() {
+            let r = row("feat/Login");
+            assert_eq!(match_task_name(&r, "login"), Some(MatchKind::Partial));
         }
     }
 
     mod match_repo_name {
         use super::*;
 
-        #[test]
-        fn supports_short_repo() {
-            let row = TaskRow {
+        fn row(repo: &str) -> TaskRow {
+            TaskRow {
                 status: TaskStatus::Parked,
-                repo: RepoKey::new("github.com/acme/tool"),
+                repo: RepoKey::new(repo),
                 branch: BranchName::new("feat/login"),
                 path: PathBuf::from("/tmp/wt/tool/feat/login"),
-            };
-            assert_eq!(match_repo_name(&row, "tool"), Some(MatchKind::Exact));
-            assert_eq!(match_repo_name(&row, "acme"), Some(MatchKind::Partial));
+            }
+        }
+
+        #[test]
+        fn supports_short_repo() {
+            let r = row("github.com/acme/tool");
+            assert_eq!(match_repo_name(&r, "tool"), Some(MatchKind::Exact));
+            assert_eq!(match_repo_name(&r, "acme"), Some(MatchKind::Partial));
+        }
+
+        #[test]
+        fn full_key_exact_match() {
+            let r = row("github.com/acme/tool");
+            assert_eq!(
+                match_repo_name(&r, "github.com/acme/tool"),
+                Some(MatchKind::Exact)
+            );
+        }
+
+        #[test]
+        fn returns_none_when_no_match() {
+            let r = row("github.com/acme/tool");
+            assert_eq!(match_repo_name(&r, "unrelated-org"), None);
+        }
+
+        #[test]
+        fn case_insensitive_partial_match() {
+            let r = row("github.com/Acme/Tool");
+            assert_eq!(match_repo_name(&r, "acme"), Some(MatchKind::Partial));
         }
     }
 
     mod resolve_match {
         use super::*;
 
+        fn make_row(repo: &str, branch: &str) -> TaskRow {
+            TaskRow {
+                status: TaskStatus::Parked,
+                repo: RepoKey::new(repo),
+                branch: BranchName::new(branch),
+                path: PathBuf::from(format!("/tmp/wt/{repo}/{branch}")),
+            }
+        }
+
+        /// Thin wrapper that always passes `allow_prompt = false` so no test
+        /// ever blocks waiting for terminal input, regardless of whether the
+        /// test runner is attached to a TTY.
+        fn resolve(
+            query: &str,
+            matches: &[(TaskRow, MatchKind)],
+            context: &str,
+        ) -> crate::error::Result<TaskRow> {
+            resolve_match_impl(query, matches, context, false)
+        }
+
         #[test]
         fn uses_single_exact_without_prompt() {
-            let a = TaskRow {
-                status: TaskStatus::Parked,
-                repo: RepoKey::new("github.com/acme/tool"),
-                branch: BranchName::new("feat/login"),
-                path: PathBuf::from("/tmp/wt/tool/feat/login"),
-            };
-            let b = TaskRow {
-                status: TaskStatus::Parked,
-                repo: RepoKey::new("github.com/acme/other"),
-                branch: BranchName::new("login-fix"),
-                path: PathBuf::from("/tmp/wt/other/login-fix"),
-            };
+            let a = make_row("github.com/acme/tool", "feat/login");
+            let b = make_row("github.com/acme/other", "login-fix");
 
-            let selected = resolve_match(
+            let selected = resolve(
                 "feat/login",
                 &[(a.clone(), MatchKind::Exact), (b, MatchKind::Partial)],
                 "task name",
             )
             .expect("select exact match");
             assert_eq!(selected, a);
+        }
+
+        #[test]
+        fn single_partial_match_returned_directly() {
+            let a = make_row("github.com/acme/tool", "feat/login");
+
+            let selected = resolve("login", &[(a.clone(), MatchKind::Partial)], "task name")
+                .expect("single partial match");
+            assert_eq!(selected, a);
+        }
+
+        #[test]
+        fn multiple_exact_matches_errors_when_prompt_disallowed() {
+            // Call resolve_match_impl with allow_prompt=false so no dialoguer
+            // Select is ever constructed, regardless of whether stdin is a TTY.
+            let a = make_row("github.com/acme/tool", "login");
+            let b = make_row("github.com/acme/other", "login");
+
+            let result = resolve_match_impl(
+                "login",
+                &[(a, MatchKind::Exact), (b, MatchKind::Exact)],
+                "task name",
+                false,
+            );
+            assert!(result.is_err(), "two exact matches must yield an error");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("Multiple tasks match"),
+                "error should explain the ambiguity: {msg}"
+            );
+            assert!(
+                msg.contains("disambiguate"),
+                "error should suggest how to fix it: {msg}"
+            );
         }
     }
 }

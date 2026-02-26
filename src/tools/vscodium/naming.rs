@@ -7,13 +7,19 @@ pub fn key(repo_key: &str, branch: &str) -> String {
 }
 
 pub fn codium_state_root() -> PathBuf {
-    if let Ok(value) = std::env::var("XDG_STATE_HOME")
+    let xdg = std::env::var("XDG_STATE_HOME").ok();
+    let home = std::env::var("HOME").ok();
+    codium_state_root_from(xdg.as_deref(), home.as_deref())
+}
+
+fn codium_state_root_from(xdg_state_home: Option<&str>, home: Option<&str>) -> PathBuf {
+    if let Some(value) = xdg_state_home
         && !value.trim().is_empty()
     {
         return PathBuf::from(value).join("task").join("codium");
     }
 
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let home = home.unwrap_or("/tmp");
     PathBuf::from(home)
         .join(".local")
         .join("state")
@@ -27,7 +33,7 @@ pub fn user_data_dir(repo_key: &str, branch: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{codium_state_root, key, user_data_dir};
+    use super::{codium_state_root_from, key, user_data_dir};
 
     #[test]
     fn key_matches_tmux_session_name() {
@@ -45,18 +51,7 @@ mod tests {
 
     #[test]
     fn codium_state_root_uses_xdg_state_home_when_set() {
-        let prev = std::env::var_os("XDG_STATE_HOME");
-        // SAFETY: single-threaded test binary section; no other thread reads this var.
-        unsafe {
-            std::env::set_var("XDG_STATE_HOME", "/tmp/custom-state");
-        }
-        let root = codium_state_root();
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-                None => std::env::remove_var("XDG_STATE_HOME"),
-            }
-        }
+        let root = codium_state_root_from(Some("/tmp/custom-state"), Some("/home/ignored"));
         assert_eq!(
             root,
             std::path::PathBuf::from("/tmp/custom-state/task/codium")
@@ -65,31 +60,28 @@ mod tests {
 
     #[test]
     fn codium_state_root_falls_back_to_home_dot_local_state() {
-        let prev_xdg = std::env::var_os("XDG_STATE_HOME");
-        let prev_home = std::env::var_os("HOME");
-        // SAFETY: single-threaded test binary section; no other thread reads these vars.
-        unsafe {
-            std::env::remove_var("XDG_STATE_HOME");
-            std::env::set_var("HOME", "/home/testuser");
-        }
-
-        let root = codium_state_root();
-
-        // Restore
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-                None => std::env::remove_var("XDG_STATE_HOME"),
-            }
-            match prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-
+        let root = codium_state_root_from(None, Some("/home/testuser"));
         assert_eq!(
             root,
             std::path::PathBuf::from("/home/testuser/.local/state/task/codium")
+        );
+    }
+
+    #[test]
+    fn codium_state_root_ignores_blank_xdg_and_falls_back_to_home() {
+        let root = codium_state_root_from(Some("  "), Some("/home/testuser"));
+        assert_eq!(
+            root,
+            std::path::PathBuf::from("/home/testuser/.local/state/task/codium")
+        );
+    }
+
+    #[test]
+    fn codium_state_root_uses_tmp_when_both_absent() {
+        let root = codium_state_root_from(None, None);
+        assert_eq!(
+            root,
+            std::path::PathBuf::from("/tmp/.local/state/task/codium")
         );
     }
 }
