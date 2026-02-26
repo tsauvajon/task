@@ -225,50 +225,109 @@ pub fn warn(message: &str) {
 mod tests {
     use super::{CommandPlan, ManagedTool};
 
-    #[test]
-    fn managed_tool_from_binary_maps_known_tools() {
-        assert_eq!(ManagedTool::from_binary("git"), Some(ManagedTool::Git));
-        assert_eq!(ManagedTool::from_binary("tmux"), Some(ManagedTool::Tmux));
-        assert_eq!(
-            ManagedTool::from_binary("codium"),
-            Some(ManagedTool::Codium)
-        );
-        assert_eq!(
-            ManagedTool::from_binary("opencode"),
-            Some(ManagedTool::Opencode)
-        );
-        assert_eq!(
-            ManagedTool::from_binary("direnv"),
-            Some(ManagedTool::Direnv)
-        );
-        assert_eq!(ManagedTool::from_binary("asdf"), Some(ManagedTool::Asdf));
-        assert_eq!(ManagedTool::from_binary("pnpm"), Some(ManagedTool::Pnpm));
-        assert_eq!(
-            ManagedTool::from_binary("corepack"),
-            Some(ManagedTool::Corepack)
-        );
-        assert_eq!(ManagedTool::from_binary("node"), Some(ManagedTool::Node));
+    mod managed_tool {
+        use super::*;
+
+        #[test]
+        fn from_binary_maps_known_tools() {
+            assert_eq!(ManagedTool::from_binary("git"), Some(ManagedTool::Git));
+            assert_eq!(ManagedTool::from_binary("tmux"), Some(ManagedTool::Tmux));
+            assert_eq!(
+                ManagedTool::from_binary("codium"),
+                Some(ManagedTool::Codium)
+            );
+            assert_eq!(
+                ManagedTool::from_binary("opencode"),
+                Some(ManagedTool::Opencode)
+            );
+            assert_eq!(
+                ManagedTool::from_binary("direnv"),
+                Some(ManagedTool::Direnv)
+            );
+            assert_eq!(ManagedTool::from_binary("asdf"), Some(ManagedTool::Asdf));
+            assert_eq!(ManagedTool::from_binary("pnpm"), Some(ManagedTool::Pnpm));
+            assert_eq!(
+                ManagedTool::from_binary("corepack"),
+                Some(ManagedTool::Corepack)
+            );
+            assert_eq!(ManagedTool::from_binary("node"), Some(ManagedTool::Node));
+        }
+
+        #[test]
+        fn from_binary_returns_none_for_unmapped_tools() {
+            assert_eq!(ManagedTool::from_binary("nix"), None);
+            assert_eq!(ManagedTool::from_binary("kill"), None);
+            assert_eq!(ManagedTool::from_binary("cargo"), None);
+            assert_eq!(ManagedTool::from_binary("unknown-tool"), None);
+        }
     }
 
-    #[test]
-    fn managed_tool_from_binary_returns_none_for_unmapped_tools() {
-        assert_eq!(ManagedTool::from_binary("nix"), None);
-        assert_eq!(ManagedTool::from_binary("kill"), None);
-        assert_eq!(ManagedTool::from_binary("cargo"), None);
-        assert_eq!(ManagedTool::from_binary("unknown-tool"), None);
+    mod command_plan {
+        use super::*;
+
+        #[test]
+        fn wraps_managed_tool_with_nix_run() {
+            let plan = CommandPlan::from_program("git", &["status"]);
+            assert_eq!(plan.program(), "nix");
+            assert_eq!(plan.args(), vec!["run", "nixpkgs#git", "--", "status"]);
+        }
+
+        #[test]
+        fn keeps_direct_programs_unwrapped() {
+            let plan = CommandPlan::from_program("kill", &["-TERM", "123"]);
+            assert_eq!(plan.program(), "kill");
+            assert_eq!(plan.args(), vec!["-TERM", "123"]);
+        }
+
+        #[test]
+        fn args_refs_returns_str_slices() {
+            let plan = CommandPlan::from_program("kill", &["-TERM", "456"]);
+            assert_eq!(plan.args_refs(), vec!["-TERM", "456"]);
+        }
+
+        #[test]
+        fn for_managed_tool_with_extra_args_appends_after_separator() {
+            let plan = CommandPlan::for_managed_tool(
+                ManagedTool::Git,
+                vec!["status".to_string(), "--short".to_string()],
+            );
+            assert_eq!(plan.program(), "nix");
+            assert_eq!(
+                plan.args(),
+                vec!["run", "nixpkgs#git", "--", "status", "--short"]
+            );
+        }
+
+        #[test]
+        fn for_managed_tool_with_no_extra_args_ends_with_separator() {
+            let plan = CommandPlan::for_managed_tool(ManagedTool::Tmux, Vec::new());
+            assert_eq!(plan.program(), "nix");
+            assert_eq!(plan.args(), vec!["run", "nixpkgs#tmux", "--"]);
+        }
     }
 
-    #[test]
-    fn command_plan_wraps_managed_tool_with_nix_run() {
-        let plan = CommandPlan::from_program("git", &["status"]);
-        assert_eq!(plan.program(), "nix");
-        assert_eq!(plan.args(), vec!["run", "nixpkgs#git", "--", "status"]);
-    }
+    mod managed_tool_metadata {
+        use super::*;
 
-    #[test]
-    fn command_plan_keeps_direct_programs_unwrapped() {
-        let plan = CommandPlan::from_program("kill", &["-TERM", "123"]);
-        assert_eq!(plan.program(), "kill");
-        assert_eq!(plan.args(), vec!["-TERM", "123"]);
+        #[test]
+        fn display_returns_binary_name() {
+            assert_eq!(ManagedTool::Git.to_string(), "git");
+            assert_eq!(ManagedTool::Tmux.to_string(), "tmux");
+            assert_eq!(ManagedTool::Corepack.to_string(), "corepack");
+        }
+
+        #[test]
+        fn nix_package_returns_expected_package() {
+            assert_eq!(ManagedTool::Git.nix_package(), "nixpkgs#git");
+            assert_eq!(ManagedTool::Node.nix_package(), "nixpkgs#nodejs");
+            assert_eq!(ManagedTool::Corepack.nix_package(), "nixpkgs#nodejs");
+        }
+
+        #[test]
+        fn binary_name_matches_tool_name() {
+            assert_eq!(ManagedTool::Git.binary_name(), "git");
+            assert_eq!(ManagedTool::Opencode.binary_name(), "opencode");
+            assert_eq!(ManagedTool::Pnpm.binary_name(), "pnpm");
+        }
     }
 }

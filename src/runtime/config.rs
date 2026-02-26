@@ -193,45 +193,113 @@ mod tests {
 
     use super::{TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
 
-    #[test]
-    fn expand_path_supports_tilde_prefix() {
-        let home = Path::new("/tmp/home");
-        assert_eq!(
-            expand_path("~/dev/repos", home).unwrap(),
-            home.join("dev/repos")
-        );
+    mod expand_path {
+        use super::*;
+
+        #[test]
+        fn supports_tilde_prefix() {
+            let home = Path::new("/tmp/home");
+            assert_eq!(
+                expand_path("~/dev/repos", home).unwrap(),
+                home.join("dev/repos")
+            );
+        }
+
+        #[test]
+        fn rejects_empty_values() {
+            let home = Path::new("/tmp/home");
+            assert!(expand_path("", home).is_err());
+        }
+
+        #[test]
+        fn returns_home_for_tilde_alone() {
+            let home = Path::new("/home/user");
+            assert_eq!(expand_path("~", home).unwrap(), home);
+        }
+
+        #[test]
+        fn returns_absolute_path_unchanged() {
+            let home = Path::new("/home/user");
+            assert_eq!(
+                expand_path("/absolute/path", home).unwrap(),
+                std::path::PathBuf::from("/absolute/path")
+            );
+        }
+
+        #[test]
+        fn returns_absolute_path_unchanged_without_tilde() {
+            let home = Path::new("/home/user");
+            assert_eq!(
+                expand_path("/srv/repos", home).unwrap(),
+                std::path::PathBuf::from("/srv/repos")
+            );
+        }
     }
 
-    #[test]
-    fn expand_path_rejects_empty_values() {
-        let home = Path::new("/tmp/home");
-        assert!(expand_path("", home).is_err());
+    mod to_runtime_config {
+        use super::*;
+
+        #[test]
+        fn supports_legacy_file_without_vscodium_section() {
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "~/dev/repos".to_string(),
+                wt_dir: "~/dev/wt".to_string(),
+                vscodium: None,
+            })
+            .expect("runtime config");
+
+            assert!(config.codium_trusted_roots.is_empty());
+        }
+
+        #[test]
+        fn expands_vscodium_trusted_roots() {
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "~/dev/repos".to_string(),
+                wt_dir: "~/dev/wt".to_string(),
+                vscodium: Some(VscodiumConfigFile {
+                    trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_string()],
+                }),
+            })
+            .expect("runtime config");
+
+            assert_eq!(config.codium_trusted_roots.len(), 1);
+            assert!(config.codium_trusted_roots[0].ends_with("dev/wt/github.com/tsauvajon"));
+        }
+
+        #[test]
+        fn expands_repos_and_wt_dirs() {
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "~/repos".to_string(),
+                wt_dir: "~/wt".to_string(),
+                vscodium: None,
+            })
+            .expect("runtime config");
+
+            assert!(config.repos_dir.ends_with("repos"));
+            assert!(config.wt_dir.ends_with("wt"));
+        }
     }
 
-    #[test]
-    fn to_runtime_config_supports_legacy_file_without_vscodium_section() {
-        let config = to_runtime_config(TaskConfigFile {
-            repos_dir: "~/dev/repos".to_string(),
-            wt_dir: "~/dev/wt".to_string(),
-            vscodium: None,
-        })
-        .expect("runtime config");
+    mod config_dir_path {
+        use super::super::config_dir_path;
 
-        assert!(config.codium_trusted_roots.is_empty());
-    }
-
-    #[test]
-    fn to_runtime_config_expands_vscodium_trusted_roots() {
-        let config = to_runtime_config(TaskConfigFile {
-            repos_dir: "~/dev/repos".to_string(),
-            wt_dir: "~/dev/wt".to_string(),
-            vscodium: Some(VscodiumConfigFile {
-                trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_string()],
-            }),
-        })
-        .expect("runtime config");
-
-        assert_eq!(config.codium_trusted_roots.len(), 1);
-        assert!(config.codium_trusted_roots[0].ends_with("dev/wt/github.com/tsauvajon"));
+        #[test]
+        fn uses_xdg_config_home_when_set() {
+            // Temporarily set XDG_CONFIG_HOME for this test.
+            let prev = std::env::var_os("XDG_CONFIG_HOME");
+            // SAFETY: single-threaded test binary section; no other thread reads this var.
+            unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", "/tmp/custom-xdg");
+            }
+            let path = config_dir_path().expect("config_dir_path");
+            // Restore
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                    None => std::env::remove_var("XDG_CONFIG_HOME"),
+                }
+            }
+            assert_eq!(path, std::path::PathBuf::from("/tmp/custom-xdg/task"));
+        }
     }
 }

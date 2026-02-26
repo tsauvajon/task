@@ -79,3 +79,81 @@ impl From<RepoKey> for PathBuf {
         PathBuf::from(k.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::RepoKey;
+
+    #[test]
+    fn new_stores_the_string() {
+        let k = RepoKey::new("github.com/owner/repo");
+        assert_eq!(k.as_str(), "github.com/owner/repo");
+    }
+
+    #[test]
+    fn from_str_ref_and_from_string_agree() {
+        let from_str: RepoKey = "github.com/owner/repo".into();
+        let from_string: RepoKey = "github.com/owner/repo".to_string().into();
+        assert_eq!(from_str, from_string);
+    }
+
+    #[test]
+    fn display_returns_inner_string() {
+        let k = RepoKey::new("github.com/owner/repo");
+        assert_eq!(k.to_string(), "github.com/owner/repo");
+    }
+
+    #[test]
+    fn deref_allows_str_operations() {
+        let k = RepoKey::new("github.com/owner/repo");
+        assert!(k.contains('/'));
+        assert_eq!(k.len(), "github.com/owner/repo".len());
+    }
+
+    #[test]
+    fn as_ref_str_returns_inner_str() {
+        let k = RepoKey::new("github.com/owner/repo");
+        let s: &str = k.as_ref();
+        assert_eq!(s, "github.com/owner/repo");
+    }
+
+    #[test]
+    fn as_ref_path_converts_to_path() {
+        let k = RepoKey::new("github.com/owner/repo");
+        let p: &Path = k.as_ref();
+        assert_eq!(p, Path::new("github.com/owner/repo"));
+    }
+
+    #[test]
+    fn into_string_round_trips() {
+        let k = RepoKey::new("github.com/owner/repo");
+        let s: String = k.into();
+        assert_eq!(s, "github.com/owner/repo");
+    }
+
+    #[test]
+    fn into_path_buf_converts_correctly() {
+        let k = RepoKey::new("github.com/owner/repo");
+        let p: PathBuf = k.into();
+        assert_eq!(p, PathBuf::from("github.com/owner/repo"));
+    }
+
+    #[test]
+    fn ordering_is_lexicographic() {
+        let a = RepoKey::new("github.com/a/repo");
+        let b = RepoKey::new("github.com/b/repo");
+        assert!(a < b);
+        assert!(b > a);
+        assert_eq!(a, RepoKey::new("github.com/a/repo"));
+    }
+
+    #[test]
+    fn can_be_used_as_hash_map_key() {
+        use std::collections::HashMap;
+        let mut map: HashMap<RepoKey, u32> = HashMap::new();
+        map.insert(RepoKey::new("github.com/owner/repo"), 42);
+        assert_eq!(map.get("github.com/owner/repo"), Some(&42));
+    }
+}

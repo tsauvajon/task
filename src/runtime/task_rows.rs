@@ -119,4 +119,64 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn build_task_rows_filters_out_bare_entries() {
+        let wt_dir = Path::new("/tmp/dev/wt");
+        let repo_key = RepoKey::new("github.com/tsauvajon/task");
+        let entries = vec![
+            WorktreeEntry {
+                path: "/tmp/dev/repos/github.com/tsauvajon/task.git".into(),
+                branch_ref: None,
+                is_bare: true,
+            },
+            WorktreeEntry {
+                path: "/tmp/dev/wt/github.com/tsauvajon/task/main".into(),
+                branch_ref: Some("refs/heads/main".to_string()),
+                is_bare: false,
+            },
+        ];
+
+        let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].branch, BranchName::new("main"));
+    }
+
+    #[test]
+    fn build_task_rows_falls_back_to_path_stem_for_missing_branch_ref() {
+        let wt_dir = Path::new("/tmp/dev/wt");
+        let repo_key = RepoKey::new("github.com/tsauvajon/task");
+        // No branch_ref AND path is outside the wt_dir/repo_key prefix,
+        // so branch_from_worktree_path also returns None.
+        // The final fallback is the last path component.
+        let entries = vec![WorktreeEntry {
+            path: "/some/other/dir/mybranch".into(),
+            branch_ref: None,
+            is_bare: false,
+        }];
+
+        let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].branch, BranchName::new("mybranch"));
+    }
+
+    #[test]
+    fn build_task_rows_returns_empty_for_only_bare_entry() {
+        let wt_dir = Path::new("/tmp/dev/wt");
+        let repo_key = RepoKey::new("github.com/tsauvajon/task");
+        let entries = vec![WorktreeEntry {
+            path: "/tmp/dev/repos/github.com/tsauvajon/task.git".into(),
+            branch_ref: None,
+            is_bare: true,
+        }];
+
+        let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn task_status_display() {
+        assert_eq!(TaskStatus::Open.to_string(), "open");
+        assert_eq!(TaskStatus::Parked.to_string(), "parked");
+    }
 }

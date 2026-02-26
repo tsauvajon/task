@@ -46,4 +46,27 @@ mod tests {
         assert!(sessions.contains("task_a"));
         assert!(sessions.contains("default"));
     }
+
+    #[test]
+    fn parse_sessions_returns_empty_for_empty_input() {
+        let sessions = parse_sessions("");
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn parse_sessions_skips_blank_lines() {
+        let text = "\n\ntask_b: 1 windows\n\n";
+        let sessions = parse_sessions(text);
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions.contains("task_b"));
+    }
+
+    #[test]
+    fn parse_sessions_handles_session_with_no_colon() {
+        // A line with no colon → split(':').next() returns the whole line.
+        // If non-empty it should be collected.
+        let text = "orphaned-session\n";
+        let sessions = parse_sessions(text);
+        assert!(sessions.contains("orphaned-session"));
+    }
 }

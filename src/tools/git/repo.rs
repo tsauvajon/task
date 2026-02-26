@@ -166,137 +166,212 @@ mod tests {
         resolve_repo_query,
     };
 
-    #[test]
-    fn normalize_repo_key_handles_git_urls() {
-        assert_eq!(
-            normalize_repo_key("git@github.com:tsauvajon/goto.git"),
-            "github.com/tsauvajon/goto"
-        );
-        assert_eq!(
-            normalize_repo_key("https://github.com/tsauvajon/goto.git"),
-            "github.com/tsauvajon/goto"
-        );
+    mod normalize_repo_key {
+        use super::*;
+
+        #[test]
+        fn handles_git_urls() {
+            assert_eq!(
+                normalize_repo_key("git@github.com:tsauvajon/goto.git"),
+                "github.com/tsauvajon/goto"
+            );
+            assert_eq!(
+                normalize_repo_key("https://github.com/tsauvajon/goto.git"),
+                "github.com/tsauvajon/goto"
+            );
+        }
+
+        #[test]
+        fn handles_plain_keys() {
+            assert_eq!(
+                normalize_repo_key("github.com/tsauvajon/goto.git"),
+                "github.com/tsauvajon/goto"
+            );
+            assert_eq!(
+                normalize_repo_key("/github.com/tsauvajon/goto"),
+                "github.com/tsauvajon/goto"
+            );
+        }
+
+        #[test]
+        fn handles_ssh_git_url() {
+            assert_eq!(
+                normalize_repo_key("ssh://git@github.com/tsauvajon/goto.git"),
+                "github.com/tsauvajon/goto"
+            );
+        }
     }
 
-    #[test]
-    fn normalize_repo_key_handles_plain_keys() {
-        assert_eq!(
-            normalize_repo_key("github.com/tsauvajon/goto.git"),
-            "github.com/tsauvajon/goto"
-        );
-        assert_eq!(
-            normalize_repo_key("/github.com/tsauvajon/goto"),
-            "github.com/tsauvajon/goto"
-        );
+    mod parse_repo_input {
+        use super::*;
+
+        #[test]
+        fn keeps_clone_scheme() {
+            let parsed = parse_repo_input("git@github.com:tsauvajon/goto.git");
+            assert_eq!(parsed.repo_key, "github.com/tsauvajon/goto");
+            assert_eq!(
+                parsed.clone_url,
+                Some("git@github.com:tsauvajon/goto.git".to_string())
+            );
+        }
+
+        #[test]
+        fn has_no_clone_url_for_plain_key() {
+            let parsed = parse_repo_input("github.com/tsauvajon/goto");
+            assert_eq!(parsed.repo_key, "github.com/tsauvajon/goto");
+            assert_eq!(parsed.clone_url, None);
+        }
     }
 
-    #[test]
-    fn normalize_repo_key_handles_ssh_git_url() {
-        assert_eq!(
-            normalize_repo_key("ssh://git@github.com/tsauvajon/goto.git"),
-            "github.com/tsauvajon/goto"
-        );
+    mod default_clone_url {
+        use super::*;
+
+        #[test]
+        fn keeps_protocol_urls() {
+            assert_eq!(
+                default_clone_url("git@github.com:tsauvajon/goto.git"),
+                "git@github.com:tsauvajon/goto.git"
+            );
+            assert_eq!(
+                default_clone_url("https://github.com/tsauvajon/goto.git"),
+                "https://github.com/tsauvajon/goto.git"
+            );
+        }
+
+        #[test]
+        fn prefixes_https_for_host_paths() {
+            assert_eq!(
+                default_clone_url("github.com/tsauvajon/goto"),
+                "https://github.com/tsauvajon/goto"
+            );
+        }
     }
 
-    #[test]
-    fn parse_repo_input_keeps_clone_scheme() {
-        let parsed = parse_repo_input("git@github.com:tsauvajon/goto.git");
-        assert_eq!(parsed.repo_key, "github.com/tsauvajon/goto");
-        assert_eq!(
-            parsed.clone_url,
-            Some("git@github.com:tsauvajon/goto.git".to_string())
-        );
+    mod normalize_repo_key_extra {
+        use super::*;
+
+        #[test]
+        fn trims_whitespace() {
+            assert_eq!(
+                normalize_repo_key("  github.com/acme/repo  "),
+                "github.com/acme/repo"
+            );
+        }
+
+        #[test]
+        fn strips_multiple_leading_slashes() {
+            assert_eq!(
+                normalize_repo_key("///github.com/acme/repo"),
+                "github.com/acme/repo"
+            );
+        }
     }
 
-    #[test]
-    fn parse_repo_input_has_no_clone_url_for_plain_key() {
-        let parsed = parse_repo_input("github.com/tsauvajon/goto");
-        assert_eq!(parsed.repo_key, "github.com/tsauvajon/goto");
-        assert_eq!(parsed.clone_url, None);
+    mod default_clone_url_extra {
+        use super::*;
+
+        #[test]
+        fn returns_plain_string_unchanged_when_no_dot_in_host() {
+            // A value like "myrepo" has no host dot → returned as-is.
+            assert_eq!(default_clone_url("myrepo"), "myrepo");
+        }
     }
 
-    #[test]
-    fn default_clone_url_keeps_protocol_urls() {
-        assert_eq!(
-            default_clone_url("git@github.com:tsauvajon/goto.git"),
-            "git@github.com:tsauvajon/goto.git"
-        );
-        assert_eq!(
-            default_clone_url("https://github.com/tsauvajon/goto.git"),
-            "https://github.com/tsauvajon/goto.git"
-        );
-    }
+    mod resolve_repo_query {
+        use super::*;
 
-    #[test]
-    fn default_clone_url_prefixes_https_for_host_paths() {
-        assert_eq!(
-            default_clone_url("github.com/tsauvajon/goto"),
-            "https://github.com/tsauvajon/goto"
-        );
-    }
-
-    #[test]
-    fn resolve_repo_query_by_short_name_when_unique() {
-        let keys = vec![
-            "github.com/tsauvajon/goto".to_string(),
-            "github.com/tsauvajon/task".to_string(),
-        ];
-
-        let resolved = resolve_repo_query("goto", &keys);
-        assert_eq!(
-            resolved,
-            ResolveResult::Resolved("github.com/tsauvajon/goto".to_string())
-        );
-    }
-
-    #[test]
-    fn resolve_repo_query_reports_ambiguity() {
-        let keys = vec![
-            "github.com/tsauvajon/goto".to_string(),
-            "github.com/example/goto".to_string(),
-        ];
-
-        let resolved = resolve_repo_query("goto", &keys);
-        assert_eq!(
-            resolved,
-            ResolveResult::Ambiguous(vec![
-                "github.com/example/goto".to_string(),
+        #[test]
+        fn by_short_name_when_unique() {
+            let keys = vec![
                 "github.com/tsauvajon/goto".to_string(),
-            ])
-        );
+                "github.com/tsauvajon/task".to_string(),
+            ];
+
+            let resolved = resolve_repo_query("goto", &keys);
+            assert_eq!(
+                resolved,
+                ResolveResult::Resolved("github.com/tsauvajon/goto".to_string())
+            );
+        }
+
+        #[test]
+        fn reports_ambiguity() {
+            let keys = vec![
+                "github.com/tsauvajon/goto".to_string(),
+                "github.com/example/goto".to_string(),
+            ];
+
+            let resolved = resolve_repo_query("goto", &keys);
+            assert_eq!(
+                resolved,
+                ResolveResult::Ambiguous(vec![
+                    "github.com/example/goto".to_string(),
+                    "github.com/tsauvajon/goto".to_string(),
+                ])
+            );
+        }
+
+        #[test]
+        fn falls_through_to_resolved_when_no_matches() {
+            // When there are no suffix matches the query is returned as
+            // Resolved (treated as a new key the caller provides).
+            let keys = vec!["github.com/acme/alpha".to_string()];
+            let result = resolve_repo_query("github.com/acme/beta", &keys);
+            assert_eq!(
+                result,
+                ResolveResult::Resolved("github.com/acme/beta".to_string())
+            );
+        }
+
+        #[test]
+        fn matches_full_key_exactly() {
+            let keys = vec![
+                "github.com/acme/alpha".to_string(),
+                "github.com/acme/beta".to_string(),
+            ];
+            let result = resolve_repo_query("github.com/acme/alpha", &keys);
+            assert_eq!(
+                result,
+                ResolveResult::Resolved("github.com/acme/alpha".to_string())
+            );
+        }
     }
 
-    #[test]
-    fn is_valid_bare_repo_rejects_nonexistent_path() {
-        let path = env::temp_dir().join("task-rs-nonexistent-bare-repo");
-        let _ = fs::remove_dir_all(&path);
-        assert!(!is_valid_bare_repo(&path));
-    }
+    mod is_valid_bare_repo {
+        use super::*;
 
-    #[test]
-    fn is_valid_bare_repo_rejects_empty_directory() {
-        let path = env::temp_dir().join("task-rs-empty-bare-repo");
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).expect("create empty dir");
+        #[test]
+        fn rejects_nonexistent_path() {
+            let path = env::temp_dir().join("task-rs-nonexistent-bare-repo");
+            let _ = fs::remove_dir_all(&path);
+            assert!(!is_valid_bare_repo(&path));
+        }
 
-        assert!(!is_valid_bare_repo(&path));
+        #[test]
+        fn rejects_empty_directory() {
+            let path = env::temp_dir().join("task-rs-empty-bare-repo");
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create empty dir");
 
-        let _ = fs::remove_dir_all(&path);
-    }
+            assert!(!is_valid_bare_repo(&path));
 
-    #[test]
-    fn is_valid_bare_repo_accepts_real_bare_repo() {
-        let path = env::temp_dir().join("task-rs-valid-bare-repo.git");
-        let _ = fs::remove_dir_all(&path);
+            let _ = fs::remove_dir_all(&path);
+        }
 
-        let output = std::process::Command::new("git")
-            .args(["init", "--bare", &path.to_string_lossy()])
-            .output()
-            .expect("git init --bare");
-        assert!(output.status.success(), "git init --bare failed");
+        #[test]
+        fn accepts_real_bare_repo() {
+            let path = env::temp_dir().join("task-rs-valid-bare-repo.git");
+            let _ = fs::remove_dir_all(&path);
 
-        assert!(is_valid_bare_repo(&path));
+            let output = std::process::Command::new("git")
+                .args(["init", "--bare", &path.to_string_lossy()])
+                .output()
+                .expect("git init --bare");
+            assert!(output.status.success(), "git init --bare failed");
 
-        let _ = fs::remove_dir_all(&path);
+            assert!(is_valid_bare_repo(&path));
+
+            let _ = fs::remove_dir_all(&path);
+        }
     }
 }
