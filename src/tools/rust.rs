@@ -24,6 +24,19 @@ pub fn run_checks(path: &Path) -> Result<()> {
     )
 }
 
+pub fn run_coverage(path: &Path) -> Result<()> {
+    run_cargo_command(
+        path,
+        &[
+            "llvm-cov",
+            "--workspace",
+            "--all-features",
+            "--summary-only",
+        ],
+        DyldLibraryPathMode::Unset,
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DyldLibraryPathMode {
     Preserve,
@@ -78,6 +91,28 @@ mod tests {
                 "cargo",
                 "test",
                 "--workspace",
+            ]
+        );
+    }
+
+    #[test]
+    fn cargo_command_supports_coverage_subcommand() {
+        let args = cargo_command(
+            &["llvm-cov", "--workspace", "--summary-only"],
+            DyldLibraryPathMode::Unset,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "develop",
+                "-c",
+                "env",
+                "-u",
+                "DYLD_LIBRARY_PATH",
+                "cargo",
+                "llvm-cov",
+                "--workspace",
+                "--summary-only",
             ]
         );
     }

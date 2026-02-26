@@ -144,47 +144,59 @@ mod tests {
 
     use super::{CodiumState, cleanup_user_data_dir, codium_args, codium_state};
 
-    #[test]
-    fn codium_args_use_expected_flags() {
-        let args = codium_args(Path::new("/tmp/task/codium/a"), Path::new("/tmp/wt/repo"));
-        assert_eq!(
-            args,
-            vec![
-                "--new-window",
-                "--user-data-dir",
-                "/tmp/task/codium/a",
-                "/tmp/wt/repo",
-            ]
-        );
+    mod codium_args {
+        use super::*;
+
+        #[test]
+        fn uses_expected_flags() {
+            let args = codium_args(Path::new("/tmp/task/codium/a"), Path::new("/tmp/wt/repo"));
+            assert_eq!(
+                args,
+                vec![
+                    "--new-window",
+                    "--user-data-dir",
+                    "/tmp/task/codium/a",
+                    "/tmp/wt/repo",
+                ]
+            );
+        }
     }
 
-    #[test]
-    fn codium_state_returns_not_running_for_unknown_task() {
-        let state = codium_state("no-such-repo", "no-such-branch").expect("codium_state");
-        assert_eq!(state, CodiumState::NotRunning);
+    mod codium_state {
+        use super::*;
+
+        #[test]
+        fn returns_not_running_for_unknown_task() {
+            let state = codium_state("no-such-repo", "no-such-branch").expect("codium_state");
+            assert_eq!(state, CodiumState::NotRunning);
+        }
     }
 
-    #[test]
-    fn cleanup_task_state_removes_existing_directory() {
-        let base = std::env::temp_dir().join("task-vscodium-cleanup-existing");
-        let _ = fs::remove_dir_all(&base);
-        let target = base.join("task/codium/session");
-        fs::create_dir_all(target.join("User")).expect("create nested dir");
+    mod cleanup_user_data_dir {
+        use super::*;
 
-        cleanup_user_data_dir(&target).expect("cleanup state");
-        assert!(!target.exists());
+        #[test]
+        fn removes_existing_directory() {
+            let base = std::env::temp_dir().join("task-vscodium-cleanup-existing");
+            let _ = fs::remove_dir_all(&base);
+            let target = base.join("task/codium/session");
+            fs::create_dir_all(target.join("User")).expect("create nested dir");
 
-        let _ = fs::remove_dir_all(&base);
-    }
+            cleanup_user_data_dir(&target).expect("cleanup state");
+            assert!(!target.exists());
 
-    #[test]
-    fn cleanup_task_state_ignores_missing_directory() {
-        let base = std::env::temp_dir().join("task-vscodium-cleanup-missing");
-        let _ = fs::remove_dir_all(&base);
-        let target = base.join("task/codium/missing");
+            let _ = fs::remove_dir_all(&base);
+        }
 
-        cleanup_user_data_dir(&target).expect("cleanup missing state");
+        #[test]
+        fn ignores_missing_directory() {
+            let base = std::env::temp_dir().join("task-vscodium-cleanup-missing");
+            let _ = fs::remove_dir_all(&base);
+            let target = base.join("task/codium/missing");
 
-        let _ = fs::remove_dir_all(&base);
+            cleanup_user_data_dir(&target).expect("cleanup missing state");
+
+            let _ = fs::remove_dir_all(&base);
+        }
     }
 }

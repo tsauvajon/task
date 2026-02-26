@@ -183,51 +183,63 @@ mod tests {
         task_rows::{TaskRow, TaskStatus},
     };
 
-    #[test]
-    fn task_name_match_prefers_exact() {
-        let row = TaskRow {
-            status: TaskStatus::Parked,
-            repo: RepoKey::new("github.com/acme/tool"),
-            branch: BranchName::new("feat/login"),
-            path: PathBuf::from("/tmp/wt/tool/feat/login"),
-        };
-        assert_eq!(match_task_name(&row, "feat/login"), Some(MatchKind::Exact));
-        assert_eq!(match_task_name(&row, "login"), Some(MatchKind::Partial));
+    mod match_task_name {
+        use super::*;
+
+        #[test]
+        fn prefers_exact() {
+            let row = TaskRow {
+                status: TaskStatus::Parked,
+                repo: RepoKey::new("github.com/acme/tool"),
+                branch: BranchName::new("feat/login"),
+                path: PathBuf::from("/tmp/wt/tool/feat/login"),
+            };
+            assert_eq!(match_task_name(&row, "feat/login"), Some(MatchKind::Exact));
+            assert_eq!(match_task_name(&row, "login"), Some(MatchKind::Partial));
+        }
     }
 
-    #[test]
-    fn repo_name_match_supports_short_repo() {
-        let row = TaskRow {
-            status: TaskStatus::Parked,
-            repo: RepoKey::new("github.com/acme/tool"),
-            branch: BranchName::new("feat/login"),
-            path: PathBuf::from("/tmp/wt/tool/feat/login"),
-        };
-        assert_eq!(match_repo_name(&row, "tool"), Some(MatchKind::Exact));
-        assert_eq!(match_repo_name(&row, "acme"), Some(MatchKind::Partial));
+    mod match_repo_name {
+        use super::*;
+
+        #[test]
+        fn supports_short_repo() {
+            let row = TaskRow {
+                status: TaskStatus::Parked,
+                repo: RepoKey::new("github.com/acme/tool"),
+                branch: BranchName::new("feat/login"),
+                path: PathBuf::from("/tmp/wt/tool/feat/login"),
+            };
+            assert_eq!(match_repo_name(&row, "tool"), Some(MatchKind::Exact));
+            assert_eq!(match_repo_name(&row, "acme"), Some(MatchKind::Partial));
+        }
     }
 
-    #[test]
-    fn resolve_match_uses_single_exact_without_prompt() {
-        let a = TaskRow {
-            status: TaskStatus::Parked,
-            repo: RepoKey::new("github.com/acme/tool"),
-            branch: BranchName::new("feat/login"),
-            path: PathBuf::from("/tmp/wt/tool/feat/login"),
-        };
-        let b = TaskRow {
-            status: TaskStatus::Parked,
-            repo: RepoKey::new("github.com/acme/other"),
-            branch: BranchName::new("login-fix"),
-            path: PathBuf::from("/tmp/wt/other/login-fix"),
-        };
+    mod resolve_match {
+        use super::*;
 
-        let selected = resolve_match(
-            "feat/login",
-            &[(a.clone(), MatchKind::Exact), (b, MatchKind::Partial)],
-            "task name",
-        )
-        .expect("select exact match");
-        assert_eq!(selected, a);
+        #[test]
+        fn uses_single_exact_without_prompt() {
+            let a = TaskRow {
+                status: TaskStatus::Parked,
+                repo: RepoKey::new("github.com/acme/tool"),
+                branch: BranchName::new("feat/login"),
+                path: PathBuf::from("/tmp/wt/tool/feat/login"),
+            };
+            let b = TaskRow {
+                status: TaskStatus::Parked,
+                repo: RepoKey::new("github.com/acme/other"),
+                branch: BranchName::new("login-fix"),
+                path: PathBuf::from("/tmp/wt/other/login-fix"),
+            };
+
+            let selected = resolve_match(
+                "feat/login",
+                &[(a.clone(), MatchKind::Exact), (b, MatchKind::Partial)],
+                "task name",
+            )
+            .expect("select exact match");
+            assert_eq!(selected, a);
+        }
     }
 }

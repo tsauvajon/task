@@ -179,31 +179,35 @@ fn parse_clone_input_args(input: &str) -> Result<(&str, Option<String>)> {
 mod tests {
     use super::parse_clone_input_args;
 
-    #[test]
-    fn parse_clone_input_accepts_url_only() {
-        let parsed =
-            parse_clone_input_args("git@github.com:me/app.git").expect("parse clone input");
-        assert_eq!(parsed.0, "git@github.com:me/app.git");
-        assert_eq!(parsed.1, None);
-    }
+    mod parse_clone_input_args {
+        use super::*;
 
-    #[test]
-    fn parse_clone_input_accepts_url_and_key() {
-        let parsed = parse_clone_input_args("git@github.com:me/app.git github.com/me/app")
-            .expect("parse clone input");
-        assert_eq!(parsed.0, "git@github.com:me/app.git");
-        assert_eq!(parsed.1, Some("github.com/me/app".to_string()));
-    }
+        #[test]
+        fn accepts_url_only() {
+            let parsed =
+                parse_clone_input_args("git@github.com:me/app.git").expect("parse clone input");
+            assert_eq!(parsed.0, "git@github.com:me/app.git");
+            assert_eq!(parsed.1, None);
+        }
 
-    #[test]
-    fn parse_clone_input_rejects_empty_value() {
-        let error = parse_clone_input_args("  ").expect_err("expected error");
-        assert_eq!(error.to_string(), "Clone input cannot be empty");
-    }
+        #[test]
+        fn accepts_url_and_key() {
+            let parsed = parse_clone_input_args("git@github.com:me/app.git github.com/me/app")
+                .expect("parse clone input");
+            assert_eq!(parsed.0, "git@github.com:me/app.git");
+            assert_eq!(parsed.1, Some("github.com/me/app".to_string()));
+        }
 
-    #[test]
-    fn parse_clone_input_rejects_too_many_parts() {
-        let error = parse_clone_input_args("a b c").expect_err("expected error");
-        assert_eq!(error.to_string(), "Use format: <repo-url> [repo-key]");
+        #[test]
+        fn rejects_empty_value() {
+            let error = parse_clone_input_args("  ").expect_err("expected error");
+            assert_eq!(error.to_string(), "Clone input cannot be empty");
+        }
+
+        #[test]
+        fn rejects_too_many_parts() {
+            let error = parse_clone_input_args("a b c").expect_err("expected error");
+            assert_eq!(error.to_string(), "Use format: <repo-url> [repo-key]");
+        }
     }
 }

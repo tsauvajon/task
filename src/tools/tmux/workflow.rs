@@ -201,91 +201,103 @@ mod tests {
     };
     use crate::runtime::process::{CommandPlan, ManagedTool};
 
-    #[test]
-    fn park_teardown_closes_codium_before_tmux_when_session_exists() {
-        let actions = park_teardown_actions(true);
-        assert_eq!(
-            actions,
-            vec![TeardownAction::CloseCodium, TeardownAction::KillTmuxSession]
-        );
+    mod park_teardown {
+        use super::*;
+
+        #[test]
+        fn closes_codium_before_tmux_when_session_exists() {
+            let actions = park_teardown_actions(true);
+            assert_eq!(
+                actions,
+                vec![TeardownAction::CloseCodium, TeardownAction::KillTmuxSession]
+            );
+        }
+
+        #[test]
+        fn only_closes_codium_without_tmux_session() {
+            let actions = park_teardown_actions(false);
+            assert_eq!(actions, vec![TeardownAction::CloseCodium]);
+        }
     }
 
-    #[test]
-    fn park_teardown_only_closes_codium_without_tmux_session() {
-        let actions = park_teardown_actions(false);
-        assert_eq!(actions, vec![TeardownAction::CloseCodium]);
+    mod finish_teardown {
+        use super::*;
+
+        #[test]
+        fn closes_codium_before_tmux_when_available_and_open() {
+            let actions = finish_teardown_actions(true, true);
+            assert_eq!(
+                actions,
+                vec![TeardownAction::CloseCodium, TeardownAction::KillTmuxSession]
+            );
+        }
+
+        #[test]
+        fn only_closes_codium_when_tmux_unavailable() {
+            let actions = finish_teardown_actions(false, false);
+            assert_eq!(actions, vec![TeardownAction::CloseCodium]);
+        }
+
+        #[test]
+        fn only_closes_codium_when_session_missing() {
+            let actions = finish_teardown_actions(true, false);
+            assert_eq!(actions, vec![TeardownAction::CloseCodium]);
+        }
     }
 
-    #[test]
-    fn finish_teardown_closes_codium_before_tmux_when_available_and_open() {
-        let actions = finish_teardown_actions(true, true);
-        assert_eq!(
-            actions,
-            vec![TeardownAction::CloseCodium, TeardownAction::KillTmuxSession]
-        );
-    }
+    mod new_session_args {
+        use super::*;
 
-    #[test]
-    fn finish_teardown_only_closes_codium_when_tmux_unavailable() {
-        let actions = finish_teardown_actions(false, false);
-        assert_eq!(actions, vec![TeardownAction::CloseCodium]);
-    }
-
-    #[test]
-    fn finish_teardown_only_closes_codium_when_session_missing() {
-        let actions = finish_teardown_actions(true, false);
-        assert_eq!(actions, vec![TeardownAction::CloseCodium]);
-    }
-
-    #[test]
-    fn new_session_args_shell_only_does_not_include_opencode_command() {
-        let args = new_session_args(
-            "repo-branch",
-            Path::new("/tmp/wt/repo"),
-            SessionStartup::ShellOnly,
-        );
-        assert_eq!(
-            args,
-            vec![
-                "new-session",
-                "-d",
-                "-s",
+        #[test]
+        fn shell_only_does_not_include_opencode_command() {
+            let args = new_session_args(
                 "repo-branch",
-                "-c",
-                "/tmp/wt/repo"
-            ]
-        );
-    }
+                Path::new("/tmp/wt/repo"),
+                SessionStartup::ShellOnly,
+            );
+            assert_eq!(
+                args,
+                vec![
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "repo-branch",
+                    "-c",
+                    "/tmp/wt/repo"
+                ]
+            );
+        }
 
-    #[test]
-    fn new_session_args_with_opencode_uses_nix_wrapped_command() {
-        let opencode_command = CommandPlan::for_managed_tool(
-            ManagedTool::Opencode,
-            vec!["--session".to_string(), "ses_123".to_string()],
-        );
+        #[test]
+        fn with_opencode_uses_nix_wrapped_command() {
+            let opencode_command = CommandPlan::for_managed_tool(
+                ManagedTool::Opencode,
+                vec!["--session".to_string(), "ses_123".to_string()],
+            );
 
-        let args = new_session_args(
-            "repo-branch",
-            Path::new("/tmp/wt/repo"),
-            SessionStartup::WithOpencode(opencode_command),
-        );
-
-        assert_eq!(
-            args,
-            vec![
-                "new-session",
-                "-d",
-                "-s",
+            let args = new_session_args(
                 "repo-branch",
-                "-c",
-                "/tmp/wt/repo",
-                "nix",
-                "run",
-                "nixpkgs#opencode",
-                "--",
-                "--session",
-                "ses_123",
-            ]
-        );
+                Path::new("/tmp/wt/repo"),
+                SessionStartup::WithOpencode(opencode_command),
+            );
+
+            assert_eq!(
+                args,
+                vec![
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "repo-branch",
+                    "-c",
+                    "/tmp/wt/repo",
+                    "nix",
+                    "run",
+                    "nixpkgs#opencode",
+                    "--",
+                    "--session",
+                    "ses_123",
+                ]
+            );
+        }
     }
 }

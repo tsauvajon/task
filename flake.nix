@@ -23,6 +23,7 @@
         rustToolchain = pkgs.rust-bin.nightly.latest.default.override {
           extensions = [
             "clippy"
+            "llvm-tools-preview"
             "rustfmt"
           ];
         };

@@ -107,62 +107,66 @@ fn resolve_rebase_target(
 mod tests {
     use super::{RebaseInput, parse_rebase_input};
 
-    #[test]
-    fn parse_rebase_input_handles_current_task() {
-        let args = Vec::<String>::new();
-        assert_eq!(parse_rebase_input(&args).unwrap(), RebaseInput::CurrentTask);
-    }
+    mod parse_rebase_input {
+        use super::*;
 
-    #[test]
-    fn parse_rebase_input_handles_query() {
-        let args = vec!["feature/login".to_string()];
-        assert_eq!(
-            parse_rebase_input(&args).unwrap(),
-            RebaseInput::Query("feature/login".to_string())
-        );
-    }
+        #[test]
+        fn handles_current_task() {
+            let args = Vec::<String>::new();
+            assert_eq!(parse_rebase_input(&args).unwrap(), RebaseInput::CurrentTask);
+        }
 
-    #[test]
-    fn parse_rebase_input_handles_repo_branch() {
-        let args = vec!["task".to_string(), "feature/login".to_string()];
-        assert_eq!(
-            parse_rebase_input(&args).unwrap(),
-            RebaseInput::RepoBranch {
-                repo_arg: "task".to_string(),
-                branch: "feature/login".to_string(),
-            }
-        );
-    }
+        #[test]
+        fn handles_query() {
+            let args = vec!["feature/login".to_string()];
+            assert_eq!(
+                parse_rebase_input(&args).unwrap(),
+                RebaseInput::Query("feature/login".to_string())
+            );
+        }
 
-    #[test]
-    fn parse_rebase_input_handles_repo_branch_base() {
-        let args = vec![
-            "task".to_string(),
-            "feature/login".to_string(),
-            "origin/main".to_string(),
-        ];
-        assert_eq!(
-            parse_rebase_input(&args).unwrap(),
-            RebaseInput::RepoBranchBase {
-                repo_arg: "task".to_string(),
-                branch: "feature/login".to_string(),
-                base_ref: "origin/main".to_string(),
-            }
-        );
-    }
+        #[test]
+        fn handles_repo_branch() {
+            let args = vec!["task".to_string(), "feature/login".to_string()];
+            assert_eq!(
+                parse_rebase_input(&args).unwrap(),
+                RebaseInput::RepoBranch {
+                    repo_arg: "task".to_string(),
+                    branch: "feature/login".to_string(),
+                }
+            );
+        }
 
-    #[test]
-    fn parse_rebase_input_rejects_too_many_args() {
-        let args = vec![
-            "task".to_string(),
-            "feature/login".to_string(),
-            "origin/main".to_string(),
-            "extra".to_string(),
-        ];
-        let error = parse_rebase_input(&args).expect_err("must reject extra args");
-        assert_eq!(
-            error.to_string(),
-            "Usage: task rebase [query] | [repo branch [base-ref]]"
-        );
+        #[test]
+        fn handles_repo_branch_base() {
+            let args = vec![
+                "task".to_string(),
+                "feature/login".to_string(),
+                "origin/main".to_string(),
+            ];
+            assert_eq!(
+                parse_rebase_input(&args).unwrap(),
+                RebaseInput::RepoBranchBase {
+                    repo_arg: "task".to_string(),
+                    branch: "feature/login".to_string(),
+                    base_ref: "origin/main".to_string(),
+                }
+            );
+        }
+
+        #[test]
+        fn rejects_too_many_args() {
+            let args = vec![
+                "task".to_string(),
+                "feature/login".to_string(),
+                "origin/main".to_string(),
+                "extra".to_string(),
+            ];
+            let error = parse_rebase_input(&args).expect_err("must reject extra args");
+            assert_eq!(
+                error.to_string(),
+                "Usage: task rebase [query] | [repo branch [base-ref]]"
+            );
+        }
     }
 }

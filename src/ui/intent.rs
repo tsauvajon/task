@@ -114,88 +114,108 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    #[test]
-    fn normal_mode_maps_navigation_intents() {
-        assert_eq!(
-            from_key(InputMode::Normal, key(KeyCode::Down)),
-            UiIntent::MoveNext
-        );
-        assert_eq!(
-            from_key(InputMode::Normal, key(KeyCode::Char('k'))),
-            UiIntent::MovePrev
-        );
-        assert_eq!(
-            from_key(InputMode::Normal, key(KeyCode::Enter)),
-            UiIntent::OpenSelected
-        );
+    mod normal_mode {
+        use super::*;
+
+        #[test]
+        fn maps_navigation_intents() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Down)),
+                UiIntent::MoveNext
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('k'))),
+                UiIntent::MovePrev
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Enter)),
+                UiIntent::OpenSelected
+            );
+        }
+
+        #[test]
+        fn maps_view_switch_intent() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Tab)),
+                UiIntent::SwitchView
+            );
+        }
     }
 
-    #[test]
-    fn filter_mode_maps_editing_intents() {
-        assert_eq!(
-            from_key(InputMode::Filter, key(KeyCode::Tab)),
-            UiIntent::SwitchView
-        );
-        assert_eq!(
-            from_key(InputMode::Filter, key(KeyCode::Esc)),
-            UiIntent::FilterCancel
-        );
-        assert_eq!(
-            from_key(InputMode::Filter, key(KeyCode::Backspace)),
-            UiIntent::FilterBackspace
-        );
-        assert_eq!(
-            from_key(InputMode::Filter, key(KeyCode::Char('a'))),
-            UiIntent::FilterAppend('a')
-        );
+    mod filter_mode {
+        use super::*;
+
+        #[test]
+        fn maps_editing_intents() {
+            assert_eq!(
+                from_key(InputMode::Filter, key(KeyCode::Tab)),
+                UiIntent::SwitchView
+            );
+            assert_eq!(
+                from_key(InputMode::Filter, key(KeyCode::Esc)),
+                UiIntent::FilterCancel
+            );
+            assert_eq!(
+                from_key(InputMode::Filter, key(KeyCode::Backspace)),
+                UiIntent::FilterBackspace
+            );
+            assert_eq!(
+                from_key(InputMode::Filter, key(KeyCode::Char('a'))),
+                UiIntent::FilterAppend('a')
+            );
+        }
     }
 
-    #[test]
-    fn create_mode_maps_create_intents() {
-        assert_eq!(
-            from_key(InputMode::CreateTask, key(KeyCode::Esc)),
-            UiIntent::CreateCancel
-        );
-        assert_eq!(
-            from_key(InputMode::CreateTask, key(KeyCode::Enter)),
-            UiIntent::CreateSubmit
-        );
-        assert_eq!(
-            from_key(InputMode::CreateTask, key(KeyCode::Char('b'))),
-            UiIntent::CreateAppend('b')
-        );
+    mod create_mode {
+        use super::*;
+
+        #[test]
+        fn maps_create_intents() {
+            assert_eq!(
+                from_key(InputMode::CreateTask, key(KeyCode::Esc)),
+                UiIntent::CreateCancel
+            );
+            assert_eq!(
+                from_key(InputMode::CreateTask, key(KeyCode::Enter)),
+                UiIntent::CreateSubmit
+            );
+            assert_eq!(
+                from_key(InputMode::CreateTask, key(KeyCode::Char('b'))),
+                UiIntent::CreateAppend('b')
+            );
+        }
     }
 
-    #[test]
-    fn normal_mode_maps_view_switch_intent() {
-        assert_eq!(
-            from_key(InputMode::Normal, key(KeyCode::Tab)),
-            UiIntent::SwitchView
-        );
+    mod clone_mode {
+        use super::*;
+
+        #[test]
+        fn maps_clone_intents() {
+            assert_eq!(
+                from_key(InputMode::CloneRepo, key(KeyCode::Esc)),
+                UiIntent::CloneCancel
+            );
+            assert_eq!(
+                from_key(InputMode::CloneRepo, key(KeyCode::Enter)),
+                UiIntent::CloneSubmit
+            );
+            assert_eq!(
+                from_key(InputMode::CloneRepo, key(KeyCode::Char('g'))),
+                UiIntent::CloneAppend('g')
+            );
+        }
     }
 
-    #[test]
-    fn clone_mode_maps_clone_intents() {
-        assert_eq!(
-            from_key(InputMode::CloneRepo, key(KeyCode::Esc)),
-            UiIntent::CloneCancel
-        );
-        assert_eq!(
-            from_key(InputMode::CloneRepo, key(KeyCode::Enter)),
-            UiIntent::CloneSubmit
-        );
-        assert_eq!(
-            from_key(InputMode::CloneRepo, key(KeyCode::Char('g'))),
-            UiIntent::CloneAppend('g')
-        );
-    }
+    mod global {
+        use super::*;
 
-    #[test]
-    fn ctrl_c_quits_in_any_mode() {
-        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(from_key(InputMode::Normal, key), UiIntent::Quit);
-        assert_eq!(from_key(InputMode::Filter, key), UiIntent::Quit);
-        assert_eq!(from_key(InputMode::CreateTask, key), UiIntent::Quit);
-        assert_eq!(from_key(InputMode::CloneRepo, key), UiIntent::Quit);
+        #[test]
+        fn ctrl_c_quits_in_any_mode() {
+            let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::Normal, key), UiIntent::Quit);
+            assert_eq!(from_key(InputMode::Filter, key), UiIntent::Quit);
+            assert_eq!(from_key(InputMode::CreateTask, key), UiIntent::Quit);
+            assert_eq!(from_key(InputMode::CloneRepo, key), UiIntent::Quit);
+        }
     }
 }

@@ -5,6 +5,7 @@ pub mod check;
 pub mod clone;
 pub mod complete;
 pub mod completions;
+pub mod coverage;
 pub mod doctor;
 pub mod finish;
 pub mod list;
@@ -79,6 +80,8 @@ pub enum Command {
     Prune { repo: Option<String> },
     #[command(about = "Run project checks for current task", alias = "done")]
     Check { worktree_path: Option<String> },
+    #[command(about = "Run Rust test coverage via cargo-llvm-cov")]
+    Coverage { worktree_path: Option<String> },
     #[command(about = "Rebase task branch onto a base ref")]
     Rebase { args: Vec<String> },
     #[command(about = "Generate shell completion scripts")]
@@ -150,6 +153,9 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
         }) => finish::run(&context, repo.as_deref(), branch.as_deref(), force),
         Some(Command::Prune { repo }) => prune::run(&context, repo.as_deref()),
         Some(Command::Check { worktree_path }) => check::run(&context, worktree_path.as_deref()),
+        Some(Command::Coverage { worktree_path }) => {
+            coverage::run(&context, worktree_path.as_deref())
+        }
         Some(Command::Rebase { args }) => rebase::run(&context, &args),
         Some(Command::Completions { .. }) | Some(Command::Complete { .. }) => {
             unreachable!("completion commands are handled before runtime initialization")
@@ -170,180 +176,200 @@ mod tests {
 
     use super::{Cli, Command, CompletionShell, RepoCommand, should_auto_onboard};
 
-    #[test]
-    fn cli_parses_start_command() {
-        let cli = Cli::parse_from(["task", "start", "goto", "bump-deps"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Start {
+    mod cli_parsing {
+        use super::*;
+
+        #[test]
+        fn parses_start_command() {
+            let cli = Cli::parse_from(["task", "start", "goto", "bump-deps"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Start {
+                    repo: "goto".to_string(),
+                    branch: "bump-deps".to_string(),
+                    base_ref: None,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_park_command_without_args() {
+            let cli = Cli::parse_from(["task", "park"]);
+            assert_eq!(cli.command, Some(Command::Park));
+        }
+
+        #[test]
+        fn parses_completions_command() {
+            let cli = Cli::parse_from(["task", "completions", "fish"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Completions {
+                    shell: CompletionShell::Fish,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_open_without_args() {
+            let cli = Cli::parse_from(["task", "open"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Open {
+                    repo: None,
+                    branch: None
+                })
+            );
+        }
+
+        #[test]
+        fn parses_open_with_repo_only() {
+            let cli = Cli::parse_from(["task", "open", "goto"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Open {
+                    repo: Some("goto".to_string()),
+                    branch: None,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_rebase_command() {
+            let cli = Cli::parse_from(["task", "rebase", "goto", "bump-deps"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Rebase {
+                    args: vec!["goto".to_string(), "bump-deps".to_string()],
+                })
+            );
+        }
+
+        #[test]
+        fn parses_rebase_without_args() {
+            let cli = Cli::parse_from(["task", "rebase"]);
+            assert_eq!(cli.command, Some(Command::Rebase { args: Vec::new() }));
+        }
+
+        #[test]
+        fn parses_rebase_with_query_arg() {
+            let cli = Cli::parse_from(["task", "rebase", "bump-deps"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Rebase {
+                    args: vec!["bump-deps".to_string()],
+                })
+            );
+        }
+
+        #[test]
+        fn parses_finish_with_force_only() {
+            let cli = Cli::parse_from(["task", "finish", "--force"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Finish {
+                    repo: None,
+                    branch: None,
+                    force: true,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_prune_without_repo() {
+            let cli = Cli::parse_from(["task", "prune"]);
+            assert_eq!(cli.command, Some(Command::Prune { repo: None }));
+        }
+
+        #[test]
+        fn parses_check_command() {
+            let cli = Cli::parse_from(["task", "check"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Check {
+                    worktree_path: None
+                })
+            );
+        }
+
+        #[test]
+        fn parses_doctor_fix_flag() {
+            let cli = Cli::parse_from(["task", "doctor", "--fix"]);
+            assert_eq!(cli.command, Some(Command::Doctor { fix: true }));
+        }
+
+        #[test]
+        fn parses_doctor_without_fix_flag() {
+            let cli = Cli::parse_from(["task", "doctor"]);
+            assert_eq!(cli.command, Some(Command::Doctor { fix: false }));
+        }
+
+        #[test]
+        fn parses_coverage_command() {
+            let cli = Cli::parse_from(["task", "coverage"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Coverage {
+                    worktree_path: None
+                })
+            );
+        }
+
+        #[test]
+        fn parses_ui_command() {
+            let cli = Cli::parse_from(["task", "ui", "goto"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Ui {
+                    repo: Some("goto".to_string()),
+                })
+            );
+        }
+
+        #[test]
+        fn parses_repo_list_command() {
+            let cli = Cli::parse_from(["task", "repo", "list"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Repo {
+                    command: RepoCommand::List,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_repo_clone_command() {
+            let cli =
+                Cli::parse_from(["task", "repo", "clone", "git@github.com:me/app.git", "app"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Repo {
+                    command: RepoCommand::Clone {
+                        repo_url: "git@github.com:me/app.git".to_string(),
+                        repo_key: Some("app".to_string()),
+                    },
+                })
+            );
+        }
+
+        #[test]
+        fn allows_no_command() {
+            let cli = Cli::parse_from(["task"]);
+            assert_eq!(cli.command, None);
+        }
+    }
+
+    mod auto_onboarding {
+        use super::*;
+
+        #[test]
+        fn skips_bootstrap_and_doctor() {
+            assert!(!should_auto_onboard(Some(&Command::Bootstrap)));
+            assert!(!should_auto_onboard(Some(&Command::Doctor { fix: false })));
+            assert!(should_auto_onboard(Some(&Command::Start {
                 repo: "goto".to_string(),
-                branch: "bump-deps".to_string(),
+                branch: "feature".to_string(),
                 base_ref: None,
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_park_command_without_args() {
-        let cli = Cli::parse_from(["task", "park"]);
-        assert_eq!(cli.command, Some(Command::Park));
-    }
-
-    #[test]
-    fn cli_parses_completions_command() {
-        let cli = Cli::parse_from(["task", "completions", "fish"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Completions {
-                shell: CompletionShell::Fish,
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_open_without_args() {
-        let cli = Cli::parse_from(["task", "open"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Open {
-                repo: None,
-                branch: None
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_open_with_repo_only() {
-        let cli = Cli::parse_from(["task", "open", "goto"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Open {
-                repo: Some("goto".to_string()),
-                branch: None,
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_rebase_command() {
-        let cli = Cli::parse_from(["task", "rebase", "goto", "bump-deps"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Rebase {
-                args: vec!["goto".to_string(), "bump-deps".to_string()],
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_rebase_without_args() {
-        let cli = Cli::parse_from(["task", "rebase"]);
-        assert_eq!(cli.command, Some(Command::Rebase { args: Vec::new() }));
-    }
-
-    #[test]
-    fn cli_parses_rebase_with_query_arg() {
-        let cli = Cli::parse_from(["task", "rebase", "bump-deps"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Rebase {
-                args: vec!["bump-deps".to_string()],
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_finish_with_force_only() {
-        let cli = Cli::parse_from(["task", "finish", "--force"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Finish {
-                repo: None,
-                branch: None,
-                force: true,
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_prune_without_repo() {
-        let cli = Cli::parse_from(["task", "prune"]);
-        assert_eq!(cli.command, Some(Command::Prune { repo: None }));
-    }
-
-    #[test]
-    fn cli_parses_check_command() {
-        let cli = Cli::parse_from(["task", "check"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Check {
-                worktree_path: None
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_doctor_fix_flag() {
-        let cli = Cli::parse_from(["task", "doctor", "--fix"]);
-        assert_eq!(cli.command, Some(Command::Doctor { fix: true }));
-    }
-
-    #[test]
-    fn cli_parses_doctor_without_fix_flag() {
-        let cli = Cli::parse_from(["task", "doctor"]);
-        assert_eq!(cli.command, Some(Command::Doctor { fix: false }));
-    }
-
-    #[test]
-    fn auto_onboarding_skips_bootstrap_and_doctor() {
-        assert!(!should_auto_onboard(Some(&Command::Bootstrap)));
-        assert!(!should_auto_onboard(Some(&Command::Doctor { fix: false })));
-        assert!(should_auto_onboard(Some(&Command::Start {
-            repo: "goto".to_string(),
-            branch: "feature".to_string(),
-            base_ref: None,
-        })));
-    }
-
-    #[test]
-    fn cli_parses_ui_command() {
-        let cli = Cli::parse_from(["task", "ui", "goto"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Ui {
-                repo: Some("goto".to_string()),
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_repo_list_command() {
-        let cli = Cli::parse_from(["task", "repo", "list"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Repo {
-                command: RepoCommand::List,
-            })
-        );
-    }
-
-    #[test]
-    fn cli_parses_repo_clone_command() {
-        let cli = Cli::parse_from(["task", "repo", "clone", "git@github.com:me/app.git", "app"]);
-        assert_eq!(
-            cli.command,
-            Some(Command::Repo {
-                command: RepoCommand::Clone {
-                    repo_url: "git@github.com:me/app.git".to_string(),
-                    repo_key: Some("app".to_string()),
-                },
-            })
-        );
-    }
-
-    #[test]
-    fn cli_allows_no_command() {
-        let cli = Cli::parse_from(["task"]);
-        assert_eq!(cli.command, None);
+            })));
+        }
     }
 }

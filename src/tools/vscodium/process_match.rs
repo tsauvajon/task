@@ -39,62 +39,70 @@ mod tests {
 
     use super::{cmdline_matches_user_data_dir, parse_cmdline_bytes};
 
-    #[test]
-    fn parse_cmdline_bytes_splits_nul_separated_args() {
-        let parsed = parse_cmdline_bytes(b"codium\0--new-window\0/tmp/wt/repo\0");
-        assert_eq!(parsed, vec!["codium", "--new-window", "/tmp/wt/repo"]);
+    mod parse_cmdline_bytes {
+        use super::*;
+
+        #[test]
+        fn splits_nul_separated_args() {
+            let parsed = parse_cmdline_bytes(b"codium\0--new-window\0/tmp/wt/repo\0");
+            assert_eq!(parsed, vec!["codium", "--new-window", "/tmp/wt/repo"]);
+        }
     }
 
-    #[test]
-    fn cmdline_matches_split_flag_form() {
-        let args = vec![
-            "codium".to_string(),
-            "--new-window".to_string(),
-            "--user-data-dir".to_string(),
-            "/tmp/task/codium/a".to_string(),
-            "/tmp/wt/repo".to_string(),
-        ];
-        assert!(cmdline_matches_user_data_dir(
-            &args,
-            Path::new("/tmp/task/codium/a")
-        ));
-    }
+    mod cmdline_matches_user_data_dir {
+        use super::*;
 
-    #[test]
-    fn cmdline_matches_equals_flag_form() {
-        let args = vec![
-            "/usr/bin/codium".to_string(),
-            "--user-data-dir=/tmp/task/codium/a".to_string(),
-        ];
-        assert!(cmdline_matches_user_data_dir(
-            &args,
-            Path::new("/tmp/task/codium/a")
-        ));
-    }
+        #[test]
+        fn matches_split_flag_form() {
+            let args = vec![
+                "codium".to_string(),
+                "--new-window".to_string(),
+                "--user-data-dir".to_string(),
+                "/tmp/task/codium/a".to_string(),
+                "/tmp/wt/repo".to_string(),
+            ];
+            assert!(cmdline_matches_user_data_dir(
+                &args,
+                Path::new("/tmp/task/codium/a")
+            ));
+        }
 
-    #[test]
-    fn cmdline_rejects_non_matching_directory() {
-        let args = vec![
-            "codium".to_string(),
-            "--user-data-dir".to_string(),
-            "/tmp/task/codium/a".to_string(),
-        ];
-        assert!(!cmdline_matches_user_data_dir(
-            &args,
-            Path::new("/tmp/task/codium/b")
-        ));
-    }
+        #[test]
+        fn matches_equals_flag_form() {
+            let args = vec![
+                "/usr/bin/codium".to_string(),
+                "--user-data-dir=/tmp/task/codium/a".to_string(),
+            ];
+            assert!(cmdline_matches_user_data_dir(
+                &args,
+                Path::new("/tmp/task/codium/a")
+            ));
+        }
 
-    #[test]
-    fn cmdline_rejects_non_codium_binary() {
-        let args = vec![
-            "bash".to_string(),
-            "--user-data-dir".to_string(),
-            "/tmp/task/codium/a".to_string(),
-        ];
-        assert!(!cmdline_matches_user_data_dir(
-            &args,
-            Path::new("/tmp/task/codium/a")
-        ));
+        #[test]
+        fn rejects_non_matching_directory() {
+            let args = vec![
+                "codium".to_string(),
+                "--user-data-dir".to_string(),
+                "/tmp/task/codium/a".to_string(),
+            ];
+            assert!(!cmdline_matches_user_data_dir(
+                &args,
+                Path::new("/tmp/task/codium/b")
+            ));
+        }
+
+        #[test]
+        fn rejects_non_codium_binary() {
+            let args = vec![
+                "bash".to_string(),
+                "--user-data-dir".to_string(),
+                "/tmp/task/codium/a".to_string(),
+            ];
+            assert!(!cmdline_matches_user_data_dir(
+                &args,
+                Path::new("/tmp/task/codium/a")
+            ));
+        }
     }
 }
