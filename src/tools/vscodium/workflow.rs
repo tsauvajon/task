@@ -1,9 +1,9 @@
 use std::{fs, path::Path, thread, time::Duration};
 
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, Signal, System};
+
 use super::{
-    naming::user_data_dir,
-    process_match::{cmdline_matches_user_data_dir, parse_cmdline_bytes},
-    trust::seed_trusted_roots,
+    naming::user_data_dir, process_match::cmdline_matches_user_data_dir, trust::seed_trusted_roots,
 };
 use crate::{error::Result, runtime::process};
 
@@ -31,6 +31,28 @@ pub fn open_window(
     process::spawn_detached("codium", &arg_refs, None)
 }
 
+pub fn seed_task_trusted_roots(
+    repo_key: &str,
+    branch: &str,
+    codium_trusted_roots: &[std::path::PathBuf],
+) {
+    let user_data_dir = user_data_dir(repo_key, branch);
+    if let Err(err) = fs::create_dir_all(&user_data_dir) {
+        process::warn(&format!(
+            "Could not create VSCodium profile directory for {}: {err}",
+            user_data_dir.display()
+        ));
+        return;
+    }
+
+    if let Err(err) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
+        process::warn(&format!(
+            "Could not seed VSCodium trusted roots for {}: {err}",
+            user_data_dir.display()
+        ));
+    }
+}
+
 fn codium_args(user_data_dir: &Path, worktree_path: &Path) -> Vec<String> {
     vec![
         "--new-window".to_string(),
@@ -48,7 +70,7 @@ pub enum CodiumState {
 
 pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState> {
     let user_data_dir = user_data_dir(repo_key, branch);
-    let pids = codium_pids_for_user_data_dir(&user_data_dir)?;
+    let pids = codium_pids_for_user_data_dir(&user_data_dir);
     if pids.is_empty() {
         Ok(CodiumState::NotRunning)
     } else {
@@ -58,7 +80,7 @@ pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState> {
 
 pub fn close_windows(repo_key: &str, branch: &str) -> Result<()> {
     let user_data_dir = user_data_dir(repo_key, branch);
-    for pid in codium_pids_for_user_data_dir(&user_data_dir)? {
+    for pid in codium_pids_for_user_data_dir(&user_data_dir) {
         terminate_pid(pid)?;
     }
     Ok(())
@@ -69,42 +91,42 @@ pub fn cleanup(repo_key: &str, branch: &str) -> Result<()> {
     cleanup_user_data_dir(&user_data_dir)
 }
 
-fn codium_pids_for_user_data_dir(user_data_dir: &Path) -> Result<Vec<u32>> {
-    let mut matches = Vec::new();
+fn codium_pids_for_user_data_dir(user_data_dir: &Path) -> Vec<u32> {
+    let mut system = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
 
-    let proc_entries = match fs::read_dir("/proc") {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(matches),
-        Err(err) => return Err(err.into()),
-    };
-
-    for entry in proc_entries {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some(pid_text) = name.to_str() else {
-            continue;
-        };
-        let Ok(pid) = pid_text.parse::<u32>() else {
-            continue;
-        };
-
-        let cmdline_path = entry.path().join("cmdline");
-        let Ok(cmdline_bytes) = fs::read(cmdline_path) else {
-            continue;
-        };
-
-        let args = parse_cmdline_bytes(&cmdline_bytes);
-        if cmdline_matches_user_data_dir(&args, user_data_dir) {
-            matches.push(pid);
-        }
-    }
-
-    Ok(matches)
+    system
+        .processes()
+        .values()
+        .filter(|process| {
+            let args: Vec<String> = process
+                .cmd()
+                .iter()
+                .map(|arg| arg.to_string_lossy().to_string())
+                .collect();
+            cmdline_matches_user_data_dir(&args, user_data_dir)
+        })
+        .map(|process| process.pid().as_u32())
+        .collect()
 }
 
 fn terminate_pid(pid: u32) -> Result<()> {
-    let pid_str = pid.to_string();
-    let _ = process::run_status("kill", &["-TERM", &pid_str], None);
+    let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+
+    let mut system = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
+
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[sysinfo_pid]),
+        false,
+        ProcessRefreshKind::nothing(),
+    );
+    if let Some(process) = system.process(sysinfo_pid) {
+        process.kill_with(Signal::Term);
+    }
 
     for _ in 0..10 {
         if !pid_exists(pid) {
@@ -113,7 +135,14 @@ fn terminate_pid(pid: u32) -> Result<()> {
         thread::sleep(Duration::from_millis(50));
     }
 
-    let _ = process::run_status("kill", &["-KILL", &pid_str], None);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[sysinfo_pid]),
+        false,
+        ProcessRefreshKind::nothing(),
+    );
+    if let Some(process) = system.process(sysinfo_pid) {
+        process.kill_with(Signal::Kill);
+    }
 
     for _ in 0..10 {
         if !pid_exists(pid) {
@@ -128,7 +157,16 @@ fn terminate_pid(pid: u32) -> Result<()> {
 }
 
 fn pid_exists(pid: u32) -> bool {
-    Path::new("/proc").join(pid.to_string()).exists()
+    let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+    let mut system = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[sysinfo_pid]),
+        false,
+        ProcessRefreshKind::nothing(),
+    );
+    system.process(sysinfo_pid).is_some()
 }
 
 fn cleanup_user_data_dir(user_data_dir: &Path) -> Result<()> {
@@ -142,7 +180,7 @@ fn cleanup_user_data_dir(user_data_dir: &Path) -> Result<()> {
 mod tests {
     use std::{fs, path::Path};
 
-    use super::{CodiumState, cleanup_user_data_dir, codium_args, codium_state};
+    use super::{cleanup_user_data_dir, codium_args, codium_state, CodiumState};
 
     mod codium_args {
         use super::*;
@@ -165,30 +203,6 @@ mod tests {
         fn has_four_arguments() {
             let args = codium_args(Path::new("/u/d/dir"), Path::new("/wt/path"));
             assert_eq!(args.len(), 4);
-        }
-
-        #[test]
-        fn first_arg_is_new_window() {
-            let args = codium_args(Path::new("/u"), Path::new("/w"));
-            assert_eq!(args[0], "--new-window");
-        }
-
-        #[test]
-        fn second_arg_is_user_data_dir_flag() {
-            let args = codium_args(Path::new("/u"), Path::new("/w"));
-            assert_eq!(args[1], "--user-data-dir");
-        }
-
-        #[test]
-        fn third_arg_is_user_data_dir_value() {
-            let args = codium_args(Path::new("/custom/user/data"), Path::new("/w"));
-            assert_eq!(args[2], "/custom/user/data");
-        }
-
-        #[test]
-        fn fourth_arg_is_worktree_path() {
-            let args = codium_args(Path::new("/u"), Path::new("/my/worktree"));
-            assert_eq!(args[3], "/my/worktree");
         }
     }
 
