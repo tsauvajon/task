@@ -40,17 +40,8 @@ pub fn apply_full_setup(
     approval: SetupApproval<'_>,
     non_interactive_guidance: &str,
 ) -> Result<bool> {
-    if !is_interactive_terminal() {
-        return Err(Error::failed(non_interactive_guidance));
-    }
-
-    let approved = match approval {
-        SetupApproval::Prompt(prompt) => Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(prompt)
-            .default(true)
-            .interact()?,
-        SetupApproval::AssumeYes => true,
-    };
+    ensure_interactive_terminal(is_interactive_terminal(), non_interactive_guidance)?;
+    let approved = resolve_setup_approval(approval)?;
 
     if !approved {
         return Ok(false);
@@ -90,7 +81,7 @@ pub fn run_full_setup(env: &RuntimeEnvironment) -> Result<()> {
         }
     }
 
-    if node_available() && corepack_available() {
+    if should_enable_corepack(node_available(), corepack_available()) {
         let _ = enable_corepack();
         process::log("Enabled corepack");
     }
@@ -98,4 +89,114 @@ pub fn run_full_setup(env: &RuntimeEnvironment) -> Result<()> {
     state::mark_onboarding_complete()?;
     process::log("Bootstrap complete");
     Ok(())
+}
+
+fn ensure_interactive_terminal(is_interactive: bool, guidance: &str) -> Result<()> {
+    if is_interactive {
+        return Ok(());
+    }
+    Err(Error::failed(guidance))
+}
+
+fn resolve_setup_approval(approval: SetupApproval<'_>) -> Result<bool> {
+    resolve_setup_approval_with(approval, |prompt| {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(prompt)
+            .default(true)
+            .interact()
+            .map_err(Error::from)
+    })
+}
+
+fn resolve_setup_approval_with<F>(
+    approval: SetupApproval<'_>,
+    mut confirm_prompt: F,
+) -> Result<bool>
+where
+    F: FnMut(&str) -> Result<bool>,
+{
+    match approval {
+        SetupApproval::Prompt(prompt) => confirm_prompt(prompt),
+        SetupApproval::AssumeYes => Ok(true),
+    }
+}
+
+fn should_enable_corepack(node_installed: bool, corepack_installed: bool) -> bool {
+    node_installed && corepack_installed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SetupApproval, ensure_interactive_terminal, resolve_setup_approval_with,
+        should_enable_corepack,
+    };
+
+    mod ensure_interactive_terminal {
+        use super::*;
+
+        #[test]
+        fn allows_interactive_terminal() {
+            ensure_interactive_terminal(true, "guidance").expect("interactive terminal is allowed");
+        }
+
+        #[test]
+        fn rejects_non_interactive_terminal_with_guidance() {
+            let err =
+                ensure_interactive_terminal(false, "use a terminal").expect_err("expected error");
+            assert!(err.to_string().contains("use a terminal"));
+        }
+    }
+
+    mod resolve_setup_approval_with {
+        use super::*;
+
+        #[test]
+        fn approve_without_prompt_when_assume_yes() {
+            let approved = resolve_setup_approval_with(SetupApproval::AssumeYes, |_| {
+                panic!("prompt should not be invoked")
+            })
+            .expect("approval should succeed");
+            assert!(approved);
+        }
+
+        #[test]
+        fn returns_prompt_decision() {
+            let approved =
+                resolve_setup_approval_with(SetupApproval::Prompt("Run setup?"), |prompt| {
+                    assert_eq!(prompt, "Run setup?");
+                    Ok(false)
+                })
+                .expect("approval should succeed");
+            assert!(!approved);
+        }
+
+        #[test]
+        fn propagates_prompt_errors() {
+            let err = resolve_setup_approval_with(SetupApproval::Prompt("Run setup?"), |_| {
+                Err(crate::error::Error::failed("prompt failed"))
+            })
+            .expect_err("expected prompt error");
+            assert!(err.to_string().contains("prompt failed"));
+        }
+    }
+
+    mod should_enable_corepack {
+        use super::*;
+
+        #[test]
+        fn true_when_node_and_corepack_are_available() {
+            assert!(should_enable_corepack(true, true));
+        }
+
+        #[test]
+        fn false_when_node_is_missing() {
+            assert!(!should_enable_corepack(false, true));
+        }
+
+        #[test]
+        fn false_when_corepack_is_missing() {
+            assert!(!should_enable_corepack(true, false));
+        }
+    }
 }

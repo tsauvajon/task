@@ -51,3 +51,20 @@ impl Drop for TerminalGuard {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::TerminalGuard;
+
+    #[test]
+    fn drop_ignores_none_terminal() {
+        let drop_result = catch_unwind(AssertUnwindSafe(|| {
+            let guard = TerminalGuard { terminal: None };
+            drop(guard);
+        }));
+
+        assert!(drop_result.is_ok());
+    }
+}
