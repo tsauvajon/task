@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use super::runner::{run_git_capture, run_git_status};
+use super::{
+    gitdir::GitDir,
+    run::{capture, status},
+};
+use crate::error::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeEntry {
@@ -9,187 +13,115 @@ pub struct WorktreeEntry {
     pub is_bare: bool,
 }
 
-pub fn worktree_list(gitdir: &Path) -> Result<String, String> {
-    run_git_capture(
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "list",
-        ],
-        None,
-    )
+pub fn list(gitdir: &Path) -> Result<String> {
+    GitDir::new(gitdir).capture(&["worktree", "list"])
 }
 
-pub fn worktree_list_porcelain(gitdir: &Path) -> Result<String, String> {
-    run_git_capture(
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "list",
-            "--porcelain",
-        ],
-        None,
-    )
+pub fn list_porcelain(gitdir: &Path) -> Result<String> {
+    GitDir::new(gitdir).capture(&["worktree", "list", "--porcelain"])
 }
 
-pub fn worktree_add_existing_branch(
-    gitdir: &Path,
-    worktree: &Path,
-    branch: &str,
-) -> Result<(), String> {
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "add",
-            worktree.to_string_lossy().as_ref(),
-            branch,
-        ],
-        None,
-    )
+pub fn add_existing_branch(gitdir: &Path, worktree: &Path, branch: &str) -> Result<()> {
+    let worktree_str = worktree.to_string_lossy();
+    GitDir::new(gitdir).status(&["worktree", "add", worktree_str.as_ref(), branch])
 }
 
-pub fn worktree_add_tracking_remote_branch(
-    gitdir: &Path,
-    worktree: &Path,
-    branch: &str,
-) -> Result<(), String> {
+pub fn add_tracking_remote_branch(gitdir: &Path, worktree: &Path, branch: &str) -> Result<()> {
+    let worktree_str = worktree.to_string_lossy();
     let remote = format!("origin/{branch}");
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "add",
-            "--track",
-            "-b",
-            branch,
-            worktree.to_string_lossy().as_ref(),
-            &remote,
-        ],
-        None,
-    )
+    GitDir::new(gitdir).status(&[
+        "worktree",
+        "add",
+        "--track",
+        "-b",
+        branch,
+        worktree_str.as_ref(),
+        &remote,
+    ])
 }
 
-pub fn worktree_add_from_base(
-    gitdir: &Path,
-    worktree: &Path,
-    branch: &str,
-    base_ref: &str,
-) -> Result<(), String> {
-    run_git_status(
-        &[
-            "--git-dir",
-            gitdir.to_string_lossy().as_ref(),
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            worktree.to_string_lossy().as_ref(),
-            base_ref,
-        ],
-        None,
-    )
+pub fn add_from_base(gitdir: &Path, worktree: &Path, branch: &str, base_ref: &str) -> Result<()> {
+    let worktree_str = worktree.to_string_lossy();
+    GitDir::new(gitdir).status(&[
+        "worktree",
+        "add",
+        "-b",
+        branch,
+        worktree_str.as_ref(),
+        base_ref,
+    ])
 }
 
-pub fn worktree_prune(gitdir: &Path) -> Result<(), String> {
-    let args = worktree_prune_args(gitdir);
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_git_status(&arg_refs, None)
+pub fn prune(gitdir: &Path) -> Result<()> {
+    GitDir::new(gitdir).status(&["worktree", "prune", "--verbose", "--expire", "now"])
 }
 
-pub fn worktree_remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<(), String> {
-    let mut args = vec![
-        "--git-dir".to_string(),
-        gitdir.to_string_lossy().to_string(),
-        "worktree".to_string(),
-        "remove".to_string(),
-    ];
+pub fn remove(gitdir: &Path, worktree: &Path, force: bool) -> Result<()> {
+    let worktree_str = worktree.to_string_lossy();
+    let mut args = vec!["worktree", "remove"];
     if force {
-        args.push("--force".to_string());
+        args.push("--force");
     }
-    args.push(worktree.to_string_lossy().to_string());
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let cwd = worktree_remove_cwd(gitdir);
-    run_git_status(&arg_refs, cwd.as_deref())
+    args.push(worktree_str.as_ref());
+    let cwd = gitdir.parent().unwrap_or(gitdir);
+    GitDir::new(gitdir).status_in(&args, cwd)
 }
 
-pub fn status_porcelain(worktree: &Path) -> Result<String, String> {
-    run_git_capture(
-        &[
-            "-C",
-            worktree.to_string_lossy().as_ref(),
-            "status",
-            "--porcelain",
-        ],
+pub fn status_porcelain(worktree: &Path) -> Result<String> {
+    let worktree_str = worktree.to_string_lossy();
+    // This uses `-C` rather than `--git-dir`, so call run directly.
+    capture(
+        &["-C", worktree_str.as_ref(), "status", "--porcelain"],
         None,
     )
 }
 
-pub fn rebase(worktree: &Path, base_ref: &str) -> Result<(), String> {
-    run_git_status(
-        &[
-            "-C",
-            worktree.to_string_lossy().as_ref(),
-            "rebase",
-            base_ref,
-        ],
-        None,
-    )
+pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {
+    let worktree_str = worktree.to_string_lossy();
+    status(&["-C", worktree_str.as_ref(), "rebase", base_ref], None)
 }
 
 pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
-    let mut entries = Vec::new();
-    let mut current_path: Option<PathBuf> = None;
-    let mut current_branch: Option<String> = None;
-    let mut current_is_bare = false;
+    #[derive(Default)]
+    struct Builder {
+        path: Option<PathBuf>,
+        branch_ref: Option<String>,
+        is_bare: bool,
+    }
 
-    for line in text.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            if let Some(path) = current_path.take() {
-                entries.push(WorktreeEntry {
-                    path,
-                    branch_ref: current_branch.take(),
-                    is_bare: current_is_bare,
-                });
-            }
-            current_path = Some(PathBuf::from(path));
-            current_branch = None;
-            current_is_bare = false;
-            continue;
-        }
-
-        if let Some(branch_ref) = line.strip_prefix("branch ") {
-            current_branch = Some(branch_ref.to_string());
-            continue;
-        }
-
-        if line == "bare" {
-            current_is_bare = true;
-            continue;
-        }
-
-        if line.is_empty()
-            && let Some(path) = current_path.take()
-        {
-            entries.push(WorktreeEntry {
+    impl Builder {
+        fn flush(&mut self) -> Option<WorktreeEntry> {
+            let path = self.path.take()?;
+            Some(WorktreeEntry {
                 path,
-                branch_ref: current_branch.take(),
-                is_bare: current_is_bare,
-            });
-            current_is_bare = false;
+                branch_ref: self.branch_ref.take(),
+                is_bare: std::mem::replace(&mut self.is_bare, false),
+            })
         }
     }
 
-    if let Some(path) = current_path {
-        entries.push(WorktreeEntry {
-            path,
-            branch_ref: current_branch,
-            is_bare: current_is_bare,
-        });
+    let mut entries = Vec::new();
+    let mut builder = Builder::default();
+
+    for line in text.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(entry) = builder.flush() {
+                entries.push(entry);
+            }
+            builder.path = Some(PathBuf::from(path));
+        } else if let Some(branch_ref) = line.strip_prefix("branch ") {
+            builder.branch_ref = Some(branch_ref.to_string());
+        } else if line == "bare" {
+            builder.is_bare = true;
+        } else if line.is_empty()
+            && let Some(entry) = builder.flush()
+        {
+            entries.push(entry);
+        }
+    }
+
+    if let Some(entry) = builder.flush() {
+        entries.push(entry);
     }
 
     entries
@@ -204,8 +136,7 @@ pub fn branch_from_worktree_path(
     if relative.as_os_str().is_empty() {
         return None;
     }
-
-    Some(relative.to_string_lossy().to_string())
+    Some(relative.to_string_lossy().into_owned())
 }
 
 pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
@@ -218,94 +149,162 @@ pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
     )
 }
 
-fn worktree_prune_args(gitdir: &Path) -> Vec<String> {
-    vec![
-        "--git-dir".to_string(),
-        gitdir.to_string_lossy().to_string(),
-        "worktree".to_string(),
-        "prune".to_string(),
-        "--verbose".to_string(),
-        "--expire".to_string(),
-        "now".to_string(),
-    ]
-}
-
-fn worktree_remove_cwd(gitdir: &Path) -> Option<PathBuf> {
-    gitdir.parent().map(Path::to_path_buf)
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use super::{
         WorktreeEntry, branch_from_ref, branch_from_worktree_path, parse_worktree_porcelain,
-        worktree_prune_args, worktree_remove_cwd,
     };
 
-    #[test]
-    fn parse_worktree_porcelain_collects_entries() {
-        let text = "worktree /tmp/dev/repos/github.com/tsauvajon/task.git\n\
+    mod parse_worktree_porcelain {
+        use super::*;
+
+        #[test]
+        fn collects_entries() {
+            let text = "worktree /tmp/dev/repos/github.com/tsauvajon/task.git\n\
 bare\n\
 \n\
 worktree /tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust\n\
 HEAD 0123456789abcdef\n\
 branch refs/heads/rewrite-in-rust\n\n";
 
-        let entries = parse_worktree_porcelain(text);
-        assert_eq!(entries.len(), 2);
-        assert!(entries[0].is_bare);
-        assert_eq!(
-            entries[1],
-            WorktreeEntry {
-                path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
-                branch_ref: Some("refs/heads/rewrite-in-rust".to_string()),
-                is_bare: false,
-            }
-        );
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 2);
+            assert!(entries[0].is_bare);
+            assert_eq!(
+                entries[1],
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
+                    branch_ref: Some("refs/heads/rewrite-in-rust".to_string()),
+                    is_bare: false,
+                }
+            );
+        }
+
+        #[test]
+        fn handles_missing_trailing_blank_line() {
+            // If the porcelain output ends without a trailing blank line the last
+            // entry should still be flushed by the end-of-input flush path.
+            let text = "worktree /tmp/dev/wt/github.com/tsauvajon/task/bump\n\
+branch refs/heads/bump";
+
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                entries[0],
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/bump".into(),
+                    branch_ref: Some("refs/heads/bump".to_string()),
+                    is_bare: false,
+                }
+            );
+        }
+
+        #[test]
+        fn preserves_bare_flag() {
+            let text = "worktree /tmp/dev/repos/task.git\n\
+bare\n\
+\n\
+worktree /tmp/dev/wt/task/main\n\
+branch refs/heads/main\n\
+\n";
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 2);
+            assert!(entries[0].is_bare);
+            assert!(!entries[1].is_bare);
+        }
+
+        #[test]
+        fn empty_input_returns_empty_vec() {
+            let entries = parse_worktree_porcelain("");
+            assert!(entries.is_empty());
+        }
+
+        #[test]
+        fn entry_without_branch_has_none() {
+            // A detached HEAD worktree has no `branch` line.
+            let text = "worktree /tmp/dev/wt/task/detached\nHEAD abc123\n\n";
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].branch_ref, None);
+            assert!(!entries[0].is_bare);
+        }
+
+        #[test]
+        fn single_entry_with_trailing_newline() {
+            let text = "worktree /tmp/dev/wt/task/feat\nbranch refs/heads/feat\n\n";
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].branch_ref.as_deref(), Some("refs/heads/feat"));
+        }
     }
 
-    #[test]
-    fn branch_from_worktree_path_supports_nested_branch_names() {
-        let branch = branch_from_worktree_path(
-            Path::new("/tmp/custom/wt"),
-            "github.com/tsauvajon/task",
-            Path::new("/tmp/custom/wt/github.com/tsauvajon/task/feat/rewrite/rust"),
-        );
-        assert_eq!(branch, Some("feat/rewrite/rust".to_string()));
+    mod branch_from_ref {
+        use super::*;
+
+        #[test]
+        fn strips_heads_prefix() {
+            assert_eq!(
+                branch_from_ref(Some("refs/heads/rewrite-in-rust")),
+                Some("rewrite-in-rust".to_string())
+            );
+        }
+
+        #[test]
+        fn returns_none_for_none_input() {
+            assert_eq!(branch_from_ref(None), None);
+        }
+
+        #[test]
+        fn returns_raw_ref_when_no_prefix() {
+            // A ref that does NOT start with "refs/heads/" is returned as-is.
+            assert_eq!(branch_from_ref(Some("HEAD")), Some("HEAD".to_string()));
+        }
     }
 
-    #[test]
-    fn branch_from_ref_strips_prefix() {
-        assert_eq!(
-            branch_from_ref(Some("refs/heads/rewrite-in-rust")),
-            Some("rewrite-in-rust".to_string())
-        );
-    }
+    mod branch_from_worktree_path {
+        use super::*;
 
-    #[test]
-    fn worktree_prune_uses_immediate_expiry() {
-        let args = worktree_prune_args(Path::new("/tmp/repos/github.com/acme/tool.git"));
-        assert_eq!(
-            args,
-            vec![
-                "--git-dir",
-                "/tmp/repos/github.com/acme/tool.git",
-                "worktree",
-                "prune",
-                "--verbose",
-                "--expire",
-                "now",
-            ]
-        );
-    }
+        #[test]
+        fn supports_nested_branch_names() {
+            let branch = branch_from_worktree_path(
+                Path::new("/tmp/custom/wt"),
+                "github.com/tsauvajon/task",
+                Path::new("/tmp/custom/wt/github.com/tsauvajon/task/feat/rewrite/rust"),
+            );
+            assert_eq!(branch, Some("feat/rewrite/rust".to_string()));
+        }
 
-    #[test]
-    fn worktree_remove_uses_repo_parent_as_cwd() {
-        let cwd = worktree_remove_cwd(Path::new("/tmp/repos/github.com/acme/tool.git"));
-        assert_eq!(
-            cwd,
-            Some(Path::new("/tmp/repos/github.com/acme").to_path_buf())
-        );
+        #[test]
+        fn handles_single_component_branch() {
+            let branch = branch_from_worktree_path(
+                Path::new("/tmp/wt"),
+                "github.com/acme/repo",
+                Path::new("/tmp/wt/github.com/acme/repo/main"),
+            );
+            assert_eq!(branch, Some("main".to_string()));
+        }
+
+        #[test]
+        fn returns_none_when_path_equals_repo_root() {
+            // The path IS the repo root (no trailing component) → None
+            let branch = branch_from_worktree_path(
+                Path::new("/tmp/wt"),
+                "github.com/tsauvajon/task",
+                Path::new("/tmp/wt/github.com/tsauvajon/task"),
+            );
+            assert_eq!(branch, None);
+        }
+
+        #[test]
+        fn returns_none_for_unrelated_path() {
+            let branch = branch_from_worktree_path(
+                Path::new("/tmp/wt"),
+                "github.com/tsauvajon/task",
+                Path::new("/other/path/feat/something"),
+            );
+            assert_eq!(branch, None);
+        }
     }
 }

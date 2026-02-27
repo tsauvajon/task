@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 use crate::{
     error::{Error, Result},
     runtime::{environment::RuntimeEnvironment, process},
-    tools::{nodejs, rust},
+    tools::rust,
 };
 
 pub fn run(_env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()> {
@@ -15,28 +15,16 @@ pub fn run(_env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()>
         )));
     }
 
-    let mut checked = false;
-
-    if path.join("Cargo.toml").exists() {
-        checked = true;
-        process::log("Running Rust checks");
-        ensure_nix_available(process::nix_available())?;
-        rust::run_checks(&path)?;
+    if !path.join("Cargo.toml").exists() {
+        return Err(Error::not_found(format!(
+            "Cargo.toml not found in {}",
+            path.display()
+        )));
     }
 
-    if path.join("package.json").exists() {
-        checked = true;
-        process::log("Running JS checks");
-        if !nodejs::checks::run_project_checks(&path)? {
-            process::warn("pnpm/corepack not found. Skipping JS checks.");
-        }
-    }
-
-    if !checked {
-        process::warn("No Cargo.toml or package.json found. Nothing to run.");
-    }
-
-    Ok(())
+    ensure_nix_available(process::nix_available())?;
+    process::log("Running Rust test coverage with cargo-llvm-cov");
+    rust::run_coverage(&path)
 }
 
 fn resolve_check_path(worktree_path: Option<&str>) -> PathBuf {
@@ -50,7 +38,7 @@ fn ensure_nix_available(nix_available: bool) -> Result<()> {
         return Ok(());
     }
     Err(Error::failed(
-        "nix is required for Rust checks. Install nix and retry 'task check'.",
+        "nix is required for Rust coverage. Install nix and retry 'task coverage'.",
     ))
 }
 
@@ -64,7 +52,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn allows_checks_when_present() {
+        fn allows_coverage_when_present() {
             ensure_nix_available(true).expect("nix should be available");
         }
 
@@ -86,8 +74,6 @@ mod tests {
 
         #[test]
         fn uses_cwd_when_none() {
-            // When no path is given, it should return *something* (current dir or ".")
-            // without panicking.
             let path = resolve_check_path(None);
             let s = path.to_string_lossy();
             assert!(!s.is_empty(), "resolved path must not be empty");

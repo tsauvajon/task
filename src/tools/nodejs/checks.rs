@@ -1,71 +1,150 @@
 use std::path::Path;
 
-use super::runtime::{Runner, corepack_available, enable_corepack, resolve_runner};
-use crate::runtime::process::ProcessRunner;
+use super::runtime::{
+    Runner, corepack_available, corepack_status, enable_corepack, pnpm_status, resolve_runner,
+};
+use crate::error::Result;
 
-pub fn run_project_checks(process: ProcessRunner, path: &Path) -> Result<bool, String> {
-    if corepack_available(process) {
-        let _ = enable_corepack(process);
+type RunFn = fn(&[&str], Option<&Path>) -> Result<()>;
+
+pub fn run_project_checks(path: &Path) -> Result<bool> {
+    if corepack_available() {
+        let _ = enable_corepack();
     }
 
-    let Some(runner) = resolve_runner(process) else {
+    let Some(runner) = resolve_runner() else {
         return Ok(false);
     };
 
-    install_dependencies(process, runner, path)?;
-    run_quality_commands(process, runner, path)?;
+    install_dependencies(runner, path)?;
+    run_quality_commands(runner, path)?;
     Ok(true)
 }
 
-fn install_dependencies(process: ProcessRunner, runner: Runner, path: &Path) -> Result<(), String> {
-    let (program, frozen_args, fallback_args) = match runner {
-        Runner::Pnpm => (
-            "pnpm",
-            &["install", "--frozen-lockfile"][..],
-            &["install"][..],
-        ),
-        Runner::Corepack => (
-            "corepack",
-            &["pnpm", "install", "--frozen-lockfile"][..],
-            &["pnpm", "install"][..],
-        ),
-    };
-
-    if process
-        .run_status(program, frozen_args, Some(path))
-        .is_err()
-    {
-        process.run_status(program, fallback_args, Some(path))?;
+fn install_dependencies(runner: Runner, path: &Path) -> Result<()> {
+    match runner {
+        Runner::Pnpm => {
+            if pnpm_status(&["install", "--frozen-lockfile"], Some(path)).is_err() {
+                pnpm_status(&["install"], Some(path))?;
+            }
+        }
+        Runner::Corepack => {
+            if corepack_status(&["pnpm", "install", "--frozen-lockfile"], Some(path)).is_err() {
+                corepack_status(&["pnpm", "install"], Some(path))?;
+            }
+        }
     }
-
     Ok(())
 }
 
-fn run_quality_commands(process: ProcessRunner, runner: Runner, path: &Path) -> Result<(), String> {
-    let (program, commands): (&str, &[&[&str]]) = match runner {
+fn quality_commands(runner: Runner) -> (&'static RunFn, Vec<Vec<&'static str>>) {
+    match runner {
         Runner::Pnpm => (
-            "pnpm",
-            &[
-                &["run", "lint", "--if-present"],
-                &["run", "check", "--if-present"],
-                &["run", "test", "--if-present"],
-                &["run", "build", "--if-present"],
+            &(pnpm_status as RunFn),
+            vec![
+                vec!["run", "lint", "--if-present"],
+                vec!["run", "check", "--if-present"],
+                vec!["run", "test", "--if-present"],
+                vec!["run", "build", "--if-present"],
             ],
         ),
         Runner::Corepack => (
-            "corepack",
-            &[
-                &["pnpm", "run", "lint", "--if-present"],
-                &["pnpm", "run", "check", "--if-present"],
-                &["pnpm", "run", "test", "--if-present"],
-                &["pnpm", "run", "build", "--if-present"],
+            &(corepack_status as RunFn),
+            vec![
+                vec!["pnpm", "run", "lint", "--if-present"],
+                vec!["pnpm", "run", "check", "--if-present"],
+                vec!["pnpm", "run", "test", "--if-present"],
+                vec!["pnpm", "run", "build", "--if-present"],
             ],
         ),
-    };
-
-    for args in commands {
-        process.run_status(program, args, Some(path))?;
     }
+}
 
+fn run_quality_commands(runner: Runner, path: &Path) -> Result<()> {
+    let (run_cmd, commands) = quality_commands(runner);
+    for args in &commands {
+        run_cmd(args, Some(path))?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Runner, quality_commands};
+
+    mod quality_commands {
+        use super::*;
+
+        #[test]
+        fn pnpm_has_four_entries() {
+            let (_, commands) = quality_commands(Runner::Pnpm);
+            assert_eq!(commands.len(), 4);
+        }
+
+        #[test]
+        fn corepack_has_four_entries() {
+            let (_, commands) = quality_commands(Runner::Corepack);
+            assert_eq!(commands.len(), 4);
+        }
+
+        #[test]
+        fn pnpm_all_use_run_subcommand() {
+            let (_, commands) = quality_commands(Runner::Pnpm);
+            for cmd in &commands {
+                assert_eq!(cmd[0], "run", "pnpm commands should start with 'run'");
+            }
+        }
+
+        #[test]
+        fn corepack_all_start_with_pnpm() {
+            let (_, commands) = quality_commands(Runner::Corepack);
+            for cmd in &commands {
+                assert_eq!(cmd[0], "pnpm", "corepack commands should start with 'pnpm'");
+            }
+        }
+
+        #[test]
+        fn pnpm_all_end_with_if_present() {
+            let (_, commands) = quality_commands(Runner::Pnpm);
+            for cmd in &commands {
+                assert_eq!(
+                    cmd.last(),
+                    Some(&"--if-present"),
+                    "all pnpm quality commands should end with --if-present"
+                );
+            }
+        }
+
+        #[test]
+        fn corepack_all_end_with_if_present() {
+            let (_, commands) = quality_commands(Runner::Corepack);
+            for cmd in &commands {
+                assert_eq!(
+                    cmd.last(),
+                    Some(&"--if-present"),
+                    "all corepack quality commands should end with --if-present"
+                );
+            }
+        }
+
+        #[test]
+        fn pnpm_includes_lint_check_test_build() {
+            let (_, commands) = quality_commands(Runner::Pnpm);
+            let scripts: Vec<&str> = commands.iter().map(|c| c[1]).collect();
+            assert!(scripts.contains(&"lint"));
+            assert!(scripts.contains(&"check"));
+            assert!(scripts.contains(&"test"));
+            assert!(scripts.contains(&"build"));
+        }
+
+        #[test]
+        fn corepack_includes_lint_check_test_build() {
+            let (_, commands) = quality_commands(Runner::Corepack);
+            let scripts: Vec<&str> = commands.iter().map(|c| c[2]).collect();
+            assert!(scripts.contains(&"lint"));
+            assert!(scripts.contains(&"check"));
+            assert!(scripts.contains(&"test"));
+            assert!(scripts.contains(&"build"));
+        }
+    }
 }

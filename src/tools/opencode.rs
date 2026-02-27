@@ -2,18 +2,13 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use crate::runtime::process::{CommandPlan, ManagedTool, ProcessRunner};
+use crate::{
+    error::Result,
+    runtime::process::{CommandPlan, ManagedTool},
+};
 
-pub fn auth_storage_reachable(process: ProcessRunner) -> bool {
-    process
-        .run_status("opencode", &["auth", "list"], None)
-        .is_ok()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum OpencodeLaunch {
-    Fresh,
-    Resume { session_id: String },
+pub fn auth_storage_reachable() -> bool {
+    crate::runtime::process::run_status("opencode", &["auth", "list"], None).is_ok()
 }
 
 /// Returns the full command plan for launching opencode for a worktree.
@@ -21,25 +16,18 @@ enum OpencodeLaunch {
 /// If a previous opencode session exists for that exact directory, the command
 /// includes `--session <id>` so the TUI resumes it.
 pub fn launch_command(directory: &Path) -> CommandPlan {
-    let launch = match last_session_id(directory) {
-        Some(id) => OpencodeLaunch::Resume { session_id: id },
-        None => OpencodeLaunch::Fresh,
-    };
-
-    match launch {
-        OpencodeLaunch::Fresh => CommandPlan::for_managed_tool(ManagedTool::Opencode, Vec::new()),
-        OpencodeLaunch::Resume { session_id } => CommandPlan::for_managed_tool(
-            ManagedTool::Opencode,
-            vec!["--session".to_string(), session_id],
-        ),
+    match last_session_id(directory) {
+        Some(id) => {
+            CommandPlan::for_managed_tool(ManagedTool::Opencode, vec!["--session".to_string(), id])
+        }
+        None => CommandPlan::for_managed_tool(ManagedTool::Opencode, Vec::new()),
     }
 }
 
-pub fn rename_latest_session_title(directory: &Path, title: &str) -> Result<bool, String> {
+pub fn rename_latest_session_title(directory: &Path, title: &str) -> Result<bool> {
     let Some(db_path) = opencode_db_path() else {
         return Ok(false);
     };
-
     rename_latest_session_title_at_db(&db_path, directory, title)
 }
 
@@ -48,20 +36,19 @@ pub fn rename_latest_session_title(directory: &Path, title: &str) -> Result<bool
 /// database is not accessible.
 fn last_session_id(directory: &Path) -> Option<String> {
     let db_path = opencode_db_path()?;
-    let connection = Connection::open_with_flags(
+    let conn = Connection::open_with_flags(
         &db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;
 
-    let directory_str = directory.to_string_lossy();
-    connection
-        .query_row(
-            "SELECT id FROM session WHERE directory = ?1 ORDER BY time_updated DESC LIMIT 1",
-            rusqlite::params![directory_str],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
+    let dir_str = directory.to_string_lossy();
+    conn.query_row(
+        "SELECT id FROM session WHERE directory = ?1 ORDER BY time_updated DESC LIMIT 1",
+        rusqlite::params![dir_str],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
 }
 
 fn opencode_db_path() -> Option<PathBuf> {
@@ -80,20 +67,17 @@ fn rename_latest_session_title_at_db(
     db_path: &Path,
     directory: &Path,
     title: &str,
-) -> Result<bool, String> {
-    let connection = Connection::open_with_flags(
+) -> Result<bool> {
+    let conn = Connection::open_with_flags(
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
 
-    let directory_str = directory.to_string_lossy();
-    let updated = connection
-        .execute(
-            "UPDATE session SET title = ?1 WHERE id = (SELECT id FROM session WHERE directory = ?2 ORDER BY time_updated DESC LIMIT 1)",
-            rusqlite::params![title, directory_str.as_ref()],
-        )
-        .map_err(|error| error.to_string())?;
+    let dir_str = directory.to_string_lossy();
+    let updated = conn.execute(
+        "UPDATE session SET title = ?1 WHERE id = (SELECT id FROM session WHERE directory = ?2 ORDER BY time_updated DESC LIMIT 1)",
+        rusqlite::params![title, dir_str.as_ref()],
+    )?;
 
     Ok(updated > 0)
 }
@@ -148,90 +132,143 @@ mod tests {
         .expect("title")
     }
 
-    #[test]
-    fn last_session_id_returns_most_recent_for_directory() {
-        let dir = std::env::temp_dir().join("task-test-opencode-recent");
-        std::fs::create_dir_all(&dir).unwrap();
-        let db_path = create_test_db(
-            &dir,
-            &[
-                ("ses_old", "/wt/repo/branch", 100),
-                ("ses_new", "/wt/repo/branch", 200),
-                ("ses_other", "/wt/repo/other", 300),
-            ],
-        );
+    mod last_session_id {
+        use super::*;
 
-        let id = query_last_session(&db_path, "/wt/repo/branch");
-        assert_eq!(id, Some("ses_new".to_string()));
+        #[test]
+        fn returns_most_recent_for_directory() {
+            let dir = std::env::temp_dir().join("task-test-opencode-recent");
+            std::fs::create_dir_all(&dir).unwrap();
+            let db_path = create_test_db(
+                &dir,
+                &[
+                    ("ses_old", "/wt/repo/branch", 100),
+                    ("ses_new", "/wt/repo/branch", 200),
+                    ("ses_other", "/wt/repo/other", 300),
+                ],
+            );
 
-        std::fs::remove_dir_all(&dir).ok();
+            let id = query_last_session(&db_path, "/wt/repo/branch");
+            assert_eq!(id, Some("ses_new".to_string()));
+
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        #[test]
+        fn returns_none_for_unknown_directory() {
+            let dir = std::env::temp_dir().join("task-test-opencode-unknown");
+            std::fs::create_dir_all(&dir).unwrap();
+            let db_path = create_test_db(&dir, &[("ses_abc", "/wt/repo/branch", 100)]);
+
+            let id = query_last_session(&db_path, "/wt/other/branch");
+            assert_eq!(id, None);
+
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        #[test]
+        fn returns_single_session_for_directory() {
+            let dir = std::env::temp_dir().join("task-test-opencode-single");
+            std::fs::create_dir_all(&dir).unwrap();
+            let db_path = create_test_db(&dir, &[("only_session", "/wt/repo/branch", 1)]);
+
+            let id = query_last_session(&db_path, "/wt/repo/branch");
+            assert_eq!(id, Some("only_session".to_string()));
+
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 
-    #[test]
-    fn last_session_id_returns_none_for_unknown_directory() {
-        let dir = std::env::temp_dir().join("task-test-opencode-unknown");
-        std::fs::create_dir_all(&dir).unwrap();
-        let db_path = create_test_db(&dir, &[("ses_abc", "/wt/repo/branch", 100)]);
+    mod launch_command {
+        use super::*;
 
-        let id = query_last_session(&db_path, "/wt/other/branch");
-        assert_eq!(id, None);
+        #[test]
+        fn uses_nix_wrapped_opencode_when_no_db() {
+            let plan = launch_command(Path::new("/nonexistent/worktree"));
+            assert_eq!(plan.program(), "nix");
+            assert_eq!(plan.args(), vec!["run", "nixpkgs#opencode", "--"]);
+        }
 
-        std::fs::remove_dir_all(&dir).ok();
+        #[test]
+        fn program_is_nix() {
+            let plan = launch_command(Path::new("/nonexistent/wt/repo"));
+            assert_eq!(plan.program(), "nix");
+        }
     }
 
-    #[test]
-    fn launch_command_uses_nix_wrapped_opencode_when_no_db() {
-        // Point at a non-existent path — opencode_db_path() returns None.
-        let plan = launch_command(Path::new("/nonexistent/worktree"));
-        assert_eq!(plan.program(), "nix");
-        assert_eq!(plan.args(), vec!["run", "nixpkgs#opencode", "--"]);
-    }
+    mod rename_latest_session_title {
+        use super::*;
 
-    #[test]
-    fn rename_latest_session_title_updates_most_recent_matching_directory() {
-        let dir = std::env::temp_dir().join("task-test-opencode-rename-latest");
-        std::fs::create_dir_all(&dir).unwrap();
-        let db_path = create_test_db(
-            &dir,
-            &[
-                ("ses_old", "/wt/repo/branch", 100),
-                ("ses_new", "/wt/repo/branch", 200),
-                ("ses_other", "/wt/repo/other", 300),
-            ],
-        );
+        #[test]
+        fn updates_most_recent_matching_directory() {
+            let dir = std::env::temp_dir().join("task-test-opencode-rename-latest");
+            std::fs::create_dir_all(&dir).unwrap();
+            let db_path = create_test_db(
+                &dir,
+                &[
+                    ("ses_old", "/wt/repo/branch", 100),
+                    ("ses_new", "/wt/repo/branch", 200),
+                    ("ses_other", "/wt/repo/other", 300),
+                ],
+            );
 
-        let updated = rename_latest_session_title_at_db(
-            &db_path,
-            Path::new("/wt/repo/branch"),
-            "github.com/acme/repo feat/branch",
-        )
-        .expect("rename title");
-        assert!(updated);
-        assert_eq!(query_title(&db_path, "ses_old"), "");
-        assert_eq!(
-            query_title(&db_path, "ses_new"),
-            "github.com/acme/repo feat/branch"
-        );
-        assert_eq!(query_title(&db_path, "ses_other"), "");
+            let updated = rename_latest_session_title_at_db(
+                &db_path,
+                Path::new("/wt/repo/branch"),
+                "github.com/acme/repo feat/branch",
+            )
+            .expect("rename title");
+            assert!(updated);
+            assert_eq!(query_title(&db_path, "ses_old"), "");
+            assert_eq!(
+                query_title(&db_path, "ses_new"),
+                "github.com/acme/repo feat/branch"
+            );
+            assert_eq!(query_title(&db_path, "ses_other"), "");
 
-        std::fs::remove_dir_all(&dir).ok();
-    }
+            std::fs::remove_dir_all(&dir).ok();
+        }
 
-    #[test]
-    fn rename_latest_session_title_returns_false_when_no_matching_directory() {
-        let dir = std::env::temp_dir().join("task-test-opencode-rename-missing");
-        std::fs::create_dir_all(&dir).unwrap();
-        let db_path = create_test_db(&dir, &[("ses_abc", "/wt/repo/branch", 100)]);
+        #[test]
+        fn returns_false_when_no_matching_directory() {
+            let dir = std::env::temp_dir().join("task-test-opencode-rename-missing");
+            std::fs::create_dir_all(&dir).unwrap();
+            let db_path = create_test_db(&dir, &[("ses_abc", "/wt/repo/branch", 100)]);
 
-        let updated = rename_latest_session_title_at_db(
-            &db_path,
-            Path::new("/wt/repo/other"),
-            "github.com/acme/repo feat/other",
-        )
-        .expect("rename title");
-        assert!(!updated);
-        assert_eq!(query_title(&db_path, "ses_abc"), "");
+            let updated = rename_latest_session_title_at_db(
+                &db_path,
+                Path::new("/wt/repo/other"),
+                "github.com/acme/repo feat/other",
+            )
+            .expect("rename title");
+            assert!(!updated);
+            assert_eq!(query_title(&db_path, "ses_abc"), "");
 
-        std::fs::remove_dir_all(&dir).ok();
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        #[test]
+        fn only_touches_most_recent_session_when_multiple_exist() {
+            let dir = std::env::temp_dir().join("task-test-opencode-rename-only-recent");
+            std::fs::create_dir_all(&dir).unwrap();
+            let db_path = create_test_db(
+                &dir,
+                &[
+                    ("ses_1", "/wt/repo/branch", 10),
+                    ("ses_2", "/wt/repo/branch", 20),
+                    ("ses_3", "/wt/repo/branch", 30),
+                ],
+            );
+
+            rename_latest_session_title_at_db(&db_path, Path::new("/wt/repo/branch"), "new-title")
+                .expect("rename title");
+
+            // Only ses_3 (time_updated=30) should be renamed.
+            assert_eq!(query_title(&db_path, "ses_1"), "");
+            assert_eq!(query_title(&db_path, "ses_2"), "");
+            assert_eq!(query_title(&db_path, "ses_3"), "new-title");
+
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 }

@@ -4,21 +4,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::runner::run_git_capture;
+use super::run::capture;
+use crate::{
+    error::{Error, Result},
+    runtime::RepoKey,
+};
 
-pub fn current_root() -> Result<PathBuf, String> {
-    let root = run_git_capture(&["rev-parse", "--show-toplevel"], None)?;
+pub fn current_root() -> Result<PathBuf> {
+    let root = capture(&["rev-parse", "--show-toplevel"], None)?;
     Ok(PathBuf::from(root.trim()))
 }
 
-pub fn git_common_dir(root: &Path) -> Result<PathBuf, String> {
-    let common_dir_raw = run_git_capture(
-        &[
-            "-C",
-            root.to_string_lossy().as_ref(),
-            "rev-parse",
-            "--git-common-dir",
-        ],
+pub fn git_common_dir(root: &Path) -> Result<PathBuf> {
+    let root_str = root.to_string_lossy();
+    let common_dir_raw = capture(
+        &["-C", root_str.as_ref(), "rev-parse", "--git-common-dir"],
         None,
     )?;
 
@@ -26,36 +26,31 @@ pub fn git_common_dir(root: &Path) -> Result<PathBuf, String> {
     if common_dir.is_relative() {
         common_dir = root.join(common_dir);
     }
-    fs::canonicalize(common_dir).map_err(|e| e.to_string())
+    fs::canonicalize(common_dir).map_err(Error::from)
 }
 
-fn normalize_path(path: &Path) -> Result<PathBuf, String> {
+fn normalize_path(path: &Path) -> Result<PathBuf> {
     match fs::canonicalize(path) {
-        Ok(canonical_path) => Ok(canonical_path),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(path.to_path_buf()),
-        Err(error) => Err(error.to_string()),
+        Ok(p) => Ok(p),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(err) => Err(Error::from(err)),
     }
 }
 
-pub fn repo_key_from_common_dir(
-    common_dir: &Path,
-    repos_dir: &Path,
-) -> Result<Option<String>, String> {
+pub fn repo_key_from_common_dir(common_dir: &Path, repos_dir: &Path) -> Result<Option<RepoKey>> {
     let normalized_common_dir = normalize_path(common_dir)?;
     let normalized_repos_dir = normalize_path(repos_dir)?;
 
-    let relative = match normalized_common_dir.strip_prefix(&normalized_repos_dir) {
-        Ok(relative_path) => relative_path,
-        Err(_) => return Ok(None),
+    let Ok(relative) = normalized_common_dir.strip_prefix(&normalized_repos_dir) else {
+        return Ok(None);
     };
-    let mut key = relative.to_string_lossy().to_string();
-    if key.ends_with(".git") {
-        key.truncate(key.len() - 4);
-    }
+
+    let key = relative.to_string_lossy();
+    let key = key.strip_suffix(".git").unwrap_or(&key);
     if key.is_empty() {
         return Ok(None);
     }
-    Ok(Some(key))
+    Ok(Some(RepoKey::new(key)))
 }
 
 #[cfg(test)]
@@ -68,47 +63,104 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::repo_key_from_common_dir;
+    use super::{normalize_path, repo_key_from_common_dir};
 
-    #[test]
-    fn repo_key_from_common_dir_extracts_key() {
-        let key = repo_key_from_common_dir(
-            Path::new("/tmp/custom/repos/github.com/tsauvajon/task.git"),
-            Path::new("/tmp/custom/repos"),
-        )
-        .expect("resolve repo key");
-        assert_eq!(key, Some("github.com/tsauvajon/task".to_string()));
+    mod normalize_path {
+        use super::*;
+
+        #[test]
+        fn returns_path_when_not_found() {
+            let path = Path::new("/tmp/nonexistent-task-test-path-xyz-12345");
+            let result = normalize_path(path).expect("normalize should not error for NotFound");
+            assert_eq!(result, path);
+        }
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn repo_key_from_common_dir_resolves_symlinked_repos_dir() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time went backwards")
-            .as_nanos();
-        let base = std::env::temp_dir().join(format!("task-context-test-{unique}"));
+    mod repo_key_from_common_dir {
+        use super::*;
+        use crate::runtime::RepoKey;
 
-        let real_repos_dir = base.join("real").join("repos");
-        let repo_common_dir = real_repos_dir
-            .join("github.com")
-            .join("tsauvajon")
-            .join("task.git");
-        fs::create_dir_all(&repo_common_dir).expect("create real repos dir");
+        #[test]
+        fn extracts_key() {
+            let key = repo_key_from_common_dir(
+                Path::new("/tmp/custom/repos/github.com/tsauvajon/task.git"),
+                Path::new("/tmp/custom/repos"),
+            )
+            .expect("resolve repo key");
+            assert_eq!(key, Some(RepoKey::new("github.com/tsauvajon/task")));
+        }
 
-        let symlinked_repos_dir = base.join("linked").join("repos");
-        fs::create_dir_all(
-            symlinked_repos_dir
-                .parent()
-                .expect("symlinked repos has parent"),
-        )
-        .expect("create symlink parent dir");
-        symlink(&real_repos_dir, &symlinked_repos_dir).expect("create repos symlink");
+        #[test]
+        fn returns_none_when_outside_repos_dir() {
+            let key = repo_key_from_common_dir(
+                Path::new("/other/path/github.com/tsauvajon/task.git"),
+                Path::new("/tmp/custom/repos"),
+            )
+            .expect("resolve repo key");
+            assert_eq!(key, None);
+        }
 
-        let key = repo_key_from_common_dir(&repo_common_dir, &symlinked_repos_dir)
-            .expect("resolve repo key with symlink");
-        assert_eq!(key, Some("github.com/tsauvajon/task".to_string()));
+        #[test]
+        fn returns_none_when_paths_match_exactly() {
+            // If common_dir == repos_dir the relative part is empty → None.
+            let key = repo_key_from_common_dir(
+                Path::new("/tmp/custom/repos"),
+                Path::new("/tmp/custom/repos"),
+            )
+            .expect("resolve repo key");
+            assert_eq!(key, None);
+        }
 
-        fs::remove_dir_all(base).expect("cleanup temp dirs");
+        #[test]
+        fn strips_dot_git_suffix() {
+            let key = repo_key_from_common_dir(
+                Path::new("/repos/github.com/acme/proj.git"),
+                Path::new("/repos"),
+            )
+            .expect("resolve repo key");
+            assert_eq!(key, Some(RepoKey::new("github.com/acme/proj")));
+        }
+
+        #[test]
+        fn accepts_path_without_git_suffix() {
+            let key = repo_key_from_common_dir(
+                Path::new("/repos/github.com/acme/proj"),
+                Path::new("/repos"),
+            )
+            .expect("resolve repo key");
+            assert_eq!(key, Some(RepoKey::new("github.com/acme/proj")));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn resolves_symlinked_repos_dir() {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos();
+            let base = std::env::temp_dir().join(format!("task-context-test-{unique}"));
+
+            let real_repos_dir = base.join("real").join("repos");
+            let repo_common_dir = real_repos_dir
+                .join("github.com")
+                .join("tsauvajon")
+                .join("task.git");
+            fs::create_dir_all(&repo_common_dir).expect("create real repos dir");
+
+            let symlinked_repos_dir = base.join("linked").join("repos");
+            fs::create_dir_all(
+                symlinked_repos_dir
+                    .parent()
+                    .expect("symlinked repos has parent"),
+            )
+            .expect("create symlink parent dir");
+            symlink(&real_repos_dir, &symlinked_repos_dir).expect("create repos symlink");
+
+            let key = repo_key_from_common_dir(&repo_common_dir, &symlinked_repos_dir)
+                .expect("resolve repo key with symlink");
+            assert_eq!(key, Some(RepoKey::new("github.com/tsauvajon/task")));
+
+            fs::remove_dir_all(base).expect("cleanup temp dirs");
+        }
     }
 }

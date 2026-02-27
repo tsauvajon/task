@@ -21,6 +21,7 @@ task                Open interactive TUI
 task repo clone     Clone a bare repo into repos dir
 task start <name>   Create/open a task worktree
 task check          Run project checks for current task
+task coverage       Run Rust test coverage (cargo-llvm-cov)
 
 task park           Park current task
 task list           Show open and parked tasks
@@ -33,6 +34,7 @@ task finish <name>  Remove a finished task worktree
 ```bash
 nix develop -c cargo build
 nix develop -c cargo test
+nix develop -c cargo llvm-cov --workspace --all-features --summary-only
 ```
 
 ## Shell completions

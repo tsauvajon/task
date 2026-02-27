@@ -1,14 +1,15 @@
+use std::process::ExitCode;
+
 use clap::Parser;
 use task::commands::{self, Cli};
 
-fn main() {
+fn main() -> ExitCode {
     let cli = Cli::parse();
-    let code = match commands::run(cli) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("error: {error}");
-            1
+    match commands::run(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
         }
-    };
-    std::process::exit(code);
+    }
 }

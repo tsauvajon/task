@@ -5,49 +5,34 @@ use super::{
         resolve_create_repo,
     },
 };
-use crate::runtime::environment::RuntimeEnvironment;
+use crate::{error::Result, runtime::environment::RuntimeEnvironment};
 
-pub(super) fn refresh_task_rows(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<(), String> {
+pub(super) fn refresh_task_rows(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let rows = load_task_rows(context, state.task_repo_scope.as_deref())?;
     state.set_task_rows(rows);
     Ok(())
 }
 
-pub(super) fn refresh_repo_rows(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<(), String> {
+pub(super) fn refresh_repo_rows(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let rows = load_repo_rows(context)?;
     state.set_repo_rows(rows);
     Ok(())
 }
 
-pub(super) fn finish_and_refresh(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<(), String> {
+pub(super) fn finish_and_refresh(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     finish_selected(context, state)?;
     refresh_task_rows(context, state)
 }
 
-pub(super) fn park_and_refresh(
-    context: &RuntimeEnvironment,
-    state: &mut UiState,
-) -> Result<(), String> {
+pub(super) fn park_and_refresh(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     park_selected(context, state)?;
     refresh_task_rows(context, state)
 }
 
-pub(super) fn create_action(
-    context: &RuntimeEnvironment,
-    state: &UiState,
-) -> Result<UiAction, String> {
+pub(super) fn create_action(context: &RuntimeEnvironment, state: &UiState) -> Result<UiAction> {
     let branch = state.create_branch.trim();
     if branch.is_empty() {
-        return Err("Branch name cannot be empty".to_string());
+        return Err(crate::error::Error::failed("Branch name cannot be empty"));
     }
 
     let repo = resolve_create_repo(context, state, state.task_repo_scope.as_deref())?;
@@ -60,7 +45,7 @@ pub(super) fn create_action(
 pub(super) fn clone_and_refresh(
     context: &RuntimeEnvironment,
     state: &mut UiState,
-) -> Result<String, String> {
+) -> Result<String> {
     let cloned_repo = clone_from_input(context, &state.clone_input)?;
     refresh_repo_rows(context, state)?;
     if let Some(repo) = state.task_repo_scope.as_deref()
@@ -69,4 +54,115 @@ pub(super) fn clone_and_refresh(
         refresh_task_rows(context, state)?;
     }
     Ok(cloned_repo)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{env, fs};
+
+    use super::create_action;
+    use crate::{
+        runtime::environment::RuntimeEnvironment,
+        ui::state::{UiAction, UiState},
+    };
+
+    fn test_env() -> RuntimeEnvironment {
+        let base = env::temp_dir().join("task-rs-ui-effects-tests");
+        let repos = base.join("repos");
+        let wt = base.join("wt");
+        // create_dir_all is idempotent — safe across parallel test threads.
+        fs::create_dir_all(&repos).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        RuntimeEnvironment::from_paths(&repos, &wt)
+    }
+
+    fn empty_state() -> UiState {
+        UiState::new(vec![], vec![], None)
+    }
+
+    mod create_action_tests {
+        use super::*;
+
+        #[test]
+        fn empty_branch_returns_error() {
+            let ctx = test_env();
+            let mut state = empty_state();
+            state.create_branch = "".to_string();
+            let err = create_action(&ctx, &state).expect_err("expected error for empty branch");
+            assert!(
+                err.to_string().contains("empty") || err.to_string().contains("cannot"),
+                "error should mention empty branch: {err}"
+            );
+        }
+
+        #[test]
+        fn whitespace_only_branch_returns_error() {
+            let ctx = test_env();
+            let mut state = empty_state();
+            state.create_branch = "   ".to_string();
+            let err =
+                create_action(&ctx, &state).expect_err("expected error for whitespace-only branch");
+            assert!(
+                err.to_string().contains("empty") || err.to_string().contains("cannot"),
+                "error should mention empty branch: {err}"
+            );
+        }
+
+        #[test]
+        fn valid_branch_with_selected_task_returns_create_action() {
+            use std::path::PathBuf;
+
+            use crate::runtime::{
+                BranchName, RepoKey,
+                task_rows::{TaskRow, TaskStatus},
+            };
+
+            let ctx = test_env();
+            let row = TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new("github.com/acme/app"),
+                branch: BranchName::new("main"),
+                path: PathBuf::from("/tmp/a"),
+            };
+            let mut state = UiState::new(vec![row], vec![], None);
+            state.create_branch = "my-new-feature".to_string();
+
+            let action = create_action(&ctx, &state).expect("create_action should succeed");
+            match action {
+                UiAction::Create { repo, branch } => {
+                    assert_eq!(repo, "github.com/acme/app");
+                    assert_eq!(branch, "my-new-feature");
+                }
+                other => panic!("expected Create action, got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn branch_is_trimmed_before_use() {
+            use std::path::PathBuf;
+
+            use crate::runtime::{
+                BranchName, RepoKey,
+                task_rows::{TaskRow, TaskStatus},
+            };
+
+            let ctx = test_env();
+            let row = TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new("github.com/acme/app"),
+                branch: BranchName::new("main"),
+                path: PathBuf::from("/tmp/a"),
+            };
+            let mut state = UiState::new(vec![row], vec![], None);
+            state.create_branch = "  trimmed-branch  ".to_string();
+
+            let action = create_action(&ctx, &state).expect("create_action should succeed");
+            match action {
+                UiAction::Create { branch, .. } => {
+                    assert_eq!(branch, "trimmed-branch");
+                }
+                other => panic!("expected Create action, got {:?}", other),
+            }
+        }
+    }
 }

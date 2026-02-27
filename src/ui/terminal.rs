@@ -13,14 +13,14 @@ pub(super) struct TerminalGuard {
 }
 
 impl TerminalGuard {
-    pub(super) fn new() -> Result<Self, String> {
-        enable_raw_mode().map_err(|e| e.to_string())?;
+    pub(super) fn new() -> crate::error::Result<Self> {
+        enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen).map_err(|e| e.to_string())?;
-        execute!(stdout, crossterm::event::EnableMouseCapture).map_err(|e| e.to_string())?;
+        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, crossterm::event::EnableMouseCapture)?;
 
         let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend).map_err(|e| e.to_string())?;
+        let terminal = Terminal::new(backend)?;
         Ok(Self {
             terminal: Some(terminal),
         })
@@ -33,15 +33,14 @@ impl TerminalGuard {
     }
 }
 
-fn restore_terminal(terminal: &mut AppTerminal) -> Result<(), String> {
-    disable_raw_mode().map_err(|e| e.to_string())?;
+fn restore_terminal(terminal: &mut AppTerminal) -> crate::error::Result<()> {
+    disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
         crossterm::event::DisableMouseCapture
-    )
-    .map_err(|e| e.to_string())?;
-    terminal.show_cursor().map_err(|e| e.to_string())?;
+    )?;
+    terminal.show_cursor()?;
     Ok(())
 }
 
@@ -50,5 +49,22 @@ impl Drop for TerminalGuard {
         if let Some(terminal) = self.terminal.as_mut() {
             let _ = restore_terminal(terminal);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::TerminalGuard;
+
+    #[test]
+    fn drop_ignores_none_terminal() {
+        let drop_result = catch_unwind(AssertUnwindSafe(|| {
+            let guard = TerminalGuard { terminal: None };
+            drop(guard);
+        }));
+
+        assert!(drop_result.is_ok());
     }
 }

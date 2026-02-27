@@ -1,36 +1,37 @@
 use std::collections::HashSet;
 
-use crate::runtime::process::ProcessRunner;
+use super::run::{capture, status};
 
-pub fn is_available(process: ProcessRunner) -> bool {
-    process.command_exists("tmux")
+pub fn is_available() -> bool {
+    crate::runtime::process::command_exists("tmux")
 }
 
-pub fn list_sessions(process: ProcessRunner) -> HashSet<String> {
-    if !is_available(process) {
+pub fn list_sessions() -> HashSet<String> {
+    if !is_available() {
         return HashSet::new();
     }
 
-    let output = match process.run_capture("tmux", &["ls"], None) {
-        Ok(output) => output,
-        Err(_) => return HashSet::new(),
-    };
-
-    parse_sessions(&output)
+    match capture(&["ls"], None) {
+        Ok(output) => parse_sessions(&output),
+        Err(_) => HashSet::new(),
+    }
 }
 
-pub fn has_session(process: ProcessRunner, session: &str) -> bool {
-    process
-        .run_status("tmux", &["has-session", "-t", session], None)
-        .is_ok()
+pub fn has_session(session: &str) -> bool {
+    status(&["has-session", "-t", session], None).is_ok()
 }
 
 fn parse_sessions(output: &str) -> HashSet<String> {
     output
         .lines()
-        .filter_map(|line| line.split(':').next())
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
+        .filter_map(|line| {
+            let name = line.split(':').next()?.trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
         .collect()
 }
 
@@ -38,11 +39,62 @@ fn parse_sessions(output: &str) -> HashSet<String> {
 mod tests {
     use super::parse_sessions;
 
-    #[test]
-    fn parse_sessions_extracts_session_names() {
-        let text = "task_a: 1 windows\ndefault: 2 windows\n";
-        let sessions = parse_sessions(text);
-        assert!(sessions.contains("task_a"));
-        assert!(sessions.contains("default"));
+    mod parse_sessions {
+        use super::*;
+
+        #[test]
+        fn extracts_session_names() {
+            let text = "task_a: 1 windows\ndefault: 2 windows\n";
+            let sessions = parse_sessions(text);
+            assert!(sessions.contains("task_a"));
+            assert!(sessions.contains("default"));
+        }
+
+        #[test]
+        fn returns_empty_for_empty_input() {
+            let sessions = parse_sessions("");
+            assert!(sessions.is_empty());
+        }
+
+        #[test]
+        fn skips_blank_lines() {
+            let text = "\n\ntask_b: 1 windows\n\n";
+            let sessions = parse_sessions(text);
+            assert_eq!(sessions.len(), 1);
+            assert!(sessions.contains("task_b"));
+        }
+
+        #[test]
+        fn handles_session_with_no_colon() {
+            // A line with no colon → split(':').next() returns the whole line.
+            let text = "orphaned-session\n";
+            let sessions = parse_sessions(text);
+            assert!(sessions.contains("orphaned-session"));
+        }
+
+        #[test]
+        fn deduplicates_identical_names() {
+            let text = "main: 1 windows\nmain: 2 windows\n";
+            let sessions = parse_sessions(text);
+            assert_eq!(sessions.len(), 1);
+            assert!(sessions.contains("main"));
+        }
+
+        #[test]
+        fn trims_leading_space_from_name() {
+            let text = " padded-name: 1 windows\n";
+            let sessions = parse_sessions(text);
+            assert!(sessions.contains("padded-name"));
+        }
+
+        #[test]
+        fn collects_multiple_sessions() {
+            let text = "alpha: 1 windows\nbeta: 2 windows\ngamma: 1 windows\n";
+            let sessions = parse_sessions(text);
+            assert_eq!(sessions.len(), 3);
+            assert!(sessions.contains("alpha"));
+            assert!(sessions.contains("beta"));
+            assert!(sessions.contains("gamma"));
+        }
     }
 }

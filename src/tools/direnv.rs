@@ -1,11 +1,16 @@
 use std::path::Path;
 
-use crate::runtime::process::ProcessRunner;
+use crate::{
+    error::Result,
+    runtime::{nix_store::NixRunner, process::ManagedTool},
+};
 
-pub fn is_available(process: ProcessRunner) -> bool {
-    process.command_exists("direnv")
+static DIRENV: NixRunner = NixRunner::new(ManagedTool::Direnv);
+
+pub fn is_available() -> bool {
+    crate::runtime::process::command_exists("direnv")
 }
 
-pub fn allow(process: ProcessRunner, path: &Path) -> Result<(), String> {
-    process.run_status("direnv", &["allow"], Some(path))
+pub fn allow(path: &Path) -> Result<()> {
+    DIRENV.status(&["allow"], Some(path))
 }

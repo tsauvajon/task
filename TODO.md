@@ -1,3 +1,4 @@
-- Nix by default (like it's done for cargo, but as an abstraction)
 - (?) multi repo tasks?
-- task open (when parked) should reopen codium if it's closed
+- fix visual glitches
+- perf improvement with many repos (maybe some cache or gradual loading)
+- errors are shown instead of killing the tui
