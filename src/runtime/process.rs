@@ -223,7 +223,7 @@ pub fn warn(message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandPlan, ManagedTool};
+    use super::{CommandPlan, ManagedTool, command_exists};
 
     mod managed_tool {
         use super::*;
@@ -328,6 +328,88 @@ mod tests {
             assert_eq!(ManagedTool::Git.binary_name(), "git");
             assert_eq!(ManagedTool::Opencode.binary_name(), "opencode");
             assert_eq!(ManagedTool::Pnpm.binary_name(), "pnpm");
+        }
+
+        #[test]
+        fn all_tools_have_non_empty_nix_package() {
+            let tools = [
+                ManagedTool::Git,
+                ManagedTool::Tmux,
+                ManagedTool::Codium,
+                ManagedTool::Opencode,
+                ManagedTool::Direnv,
+                ManagedTool::Asdf,
+                ManagedTool::Pnpm,
+                ManagedTool::Corepack,
+                ManagedTool::Node,
+            ];
+            for tool in &tools {
+                assert!(
+                    !tool.nix_package().is_empty(),
+                    "{tool} has empty nix_package"
+                );
+                assert!(
+                    !tool.binary_name().is_empty(),
+                    "{tool} has empty binary_name"
+                );
+            }
+        }
+
+        #[test]
+        fn managed_tool_is_copy_and_eq() {
+            let a = ManagedTool::Git;
+            let b = a; // Copy
+            assert_eq!(a, b);
+        }
+
+        #[test]
+        fn direnv_nix_package() {
+            assert_eq!(ManagedTool::Direnv.nix_package(), "nixpkgs#direnv");
+            assert_eq!(ManagedTool::Direnv.binary_name(), "direnv");
+        }
+
+        #[test]
+        fn asdf_nix_package() {
+            assert_eq!(ManagedTool::Asdf.nix_package(), "nixpkgs#asdf-vm");
+            assert_eq!(ManagedTool::Asdf.binary_name(), "asdf");
+        }
+
+        #[test]
+        fn codium_nix_package() {
+            assert_eq!(ManagedTool::Codium.nix_package(), "nixpkgs#vscodium");
+            assert_eq!(ManagedTool::Codium.binary_name(), "codium");
+        }
+    }
+
+    mod command_exists {
+        use super::*;
+
+        #[test]
+        fn returns_true_for_known_system_binary() {
+            // `true` is universally available on POSIX systems
+            assert!(command_exists("true"));
+        }
+
+        #[test]
+        fn returns_false_for_unknown_binary() {
+            assert!(!command_exists("this-binary-should-not-exist-xyz-12345"));
+        }
+
+        #[test]
+        fn returns_true_for_existing_absolute_path() {
+            // /usr/bin/env is available on macOS and Linux
+            assert!(command_exists("/usr/bin/env"));
+        }
+
+        #[test]
+        fn returns_false_for_nonexistent_absolute_path() {
+            assert!(!command_exists("/this/path/does/not/exist/xyz"));
+        }
+
+        #[test]
+        fn slash_in_name_triggers_filesystem_check() {
+            // A relative path that contains a slash but doesn't exist
+            assert!(!command_exists("relative/path/to/nothing"));
         }
     }
 }

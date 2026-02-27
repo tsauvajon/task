@@ -44,16 +44,45 @@ fn ensure_nix_available(nix_available: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_nix_available;
+    use std::path::PathBuf;
 
-    #[test]
-    fn ensure_nix_available_allows_coverage_when_present() {
-        ensure_nix_available(true).expect("nix should be available");
+    use super::{ensure_nix_available, resolve_check_path};
+
+    mod ensure_nix_available {
+        use super::*;
+
+        #[test]
+        fn allows_coverage_when_present() {
+            ensure_nix_available(true).expect("nix should be available");
+        }
+
+        #[test]
+        fn rejects_when_missing() {
+            let err = ensure_nix_available(false).expect_err("error");
+            assert!(err.to_string().contains("nix is required"));
+        }
     }
 
-    #[test]
-    fn ensure_nix_available_rejects_when_missing() {
-        let err = ensure_nix_available(false).expect_err("error");
-        assert!(err.to_string().contains("nix is required"));
+    mod resolve_check_path {
+        use super::*;
+
+        #[test]
+        fn uses_explicit_arg() {
+            let path = resolve_check_path(Some("/some/explicit/path"));
+            assert_eq!(path, PathBuf::from("/some/explicit/path"));
+        }
+
+        #[test]
+        fn uses_cwd_when_none() {
+            let path = resolve_check_path(None);
+            let s = path.to_string_lossy();
+            assert!(!s.is_empty(), "resolved path must not be empty");
+        }
+
+        #[test]
+        fn converts_relative_arg() {
+            let path = resolve_check_path(Some("relative/path"));
+            assert_eq!(path, PathBuf::from("relative/path"));
+        }
     }
 }

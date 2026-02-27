@@ -199,4 +199,70 @@ mod tests {
             );
         }
     }
+
+    mod is_status_dirty_edge_cases {
+        use super::super::is_status_dirty;
+
+        #[test]
+        fn single_newline_is_clean() {
+            assert!(!is_status_dirty("\n"));
+        }
+
+        #[test]
+        fn tab_only_is_clean() {
+            assert!(!is_status_dirty("\t"));
+        }
+
+        #[test]
+        fn deleted_file_marker_is_dirty() {
+            assert!(is_status_dirty("D  deleted_file.rs\n"));
+        }
+
+        #[test]
+        fn added_file_marker_is_dirty() {
+            assert!(is_status_dirty("A  new_file.rs\n"));
+        }
+
+        #[test]
+        fn renamed_file_marker_is_dirty() {
+            assert!(is_status_dirty("R  old.rs -> new.rs\n"));
+        }
+    }
+
+    mod worktree_state_classification {
+        use std::{env, fs};
+
+        use super::super::{WorktreeState, classify_worktree_state};
+
+        struct TempDir(std::path::PathBuf);
+
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = env::temp_dir().join(format!("task-rs-finish-state-{name}"));
+                let _ = fs::remove_dir_all(&path);
+                fs::create_dir_all(&path).expect("create temp dir");
+                Self(path)
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[test]
+        fn dot_git_file_also_counts_as_live() {
+            // In a linked worktree, .git is a file, not a directory.
+            // Our classify function just checks `.git` exists — file or dir.
+            let dir = TempDir::new("git-file");
+            fs::write(dir.0.join(".git"), "gitdir: ../main/.git/worktrees/feat")
+                .expect("write .git file");
+            assert_eq!(
+                classify_worktree_state(&dir.0),
+                WorktreeState::Live,
+                ".git file should count as live worktree"
+            );
+        }
+    }
 }

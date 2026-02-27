@@ -104,39 +104,43 @@ fn apply_fixes(env: &RuntimeEnvironment, approval: SetupApproval<'_>) -> Result<
 mod tests {
     use super::{DoctorAction, decide_action};
 
-    #[test]
-    fn fix_flag_always_triggers_fix_and_recheck() {
-        assert_eq!(
-            decide_action(true, false, false),
-            DoctorAction::FixAndRecheck
-        );
-        assert_eq!(
-            decide_action(true, true, false),
-            DoctorAction::FixAndRecheck
-        );
-        assert_eq!(
-            decide_action(true, false, true),
-            DoctorAction::FixAndRecheck
-        );
-        assert_eq!(decide_action(true, true, true), DoctorAction::FixAndRecheck);
-    }
+    mod decide_action {
+        use super::*;
 
-    #[test]
-    fn prompts_when_missing_and_interactive() {
-        assert_eq!(
-            decide_action(false, true, true),
-            DoctorAction::PromptAndMaybeRecheck
-        );
-    }
+        #[test]
+        fn fix_flag_always_triggers_fix_and_recheck() {
+            assert_eq!(
+                decide_action(true, false, false),
+                DoctorAction::FixAndRecheck
+            );
+            assert_eq!(
+                decide_action(true, true, false),
+                DoctorAction::FixAndRecheck
+            );
+            assert_eq!(
+                decide_action(true, false, true),
+                DoctorAction::FixAndRecheck
+            );
+            assert_eq!(decide_action(true, true, true), DoctorAction::FixAndRecheck);
+        }
 
-    #[test]
-    fn reports_only_when_nothing_missing() {
-        assert_eq!(decide_action(false, false, true), DoctorAction::ReportOnly);
-        assert_eq!(decide_action(false, false, false), DoctorAction::ReportOnly);
-    }
+        #[test]
+        fn prompts_when_missing_and_interactive() {
+            assert_eq!(
+                decide_action(false, true, true),
+                DoctorAction::PromptAndMaybeRecheck
+            );
+        }
 
-    #[test]
-    fn reports_only_when_missing_but_not_interactive() {
-        assert_eq!(decide_action(false, true, false), DoctorAction::ReportOnly);
+        #[test]
+        fn reports_only_when_nothing_missing() {
+            assert_eq!(decide_action(false, false, true), DoctorAction::ReportOnly);
+            assert_eq!(decide_action(false, false, false), DoctorAction::ReportOnly);
+        }
+
+        #[test]
+        fn reports_only_when_missing_but_not_interactive() {
+            assert_eq!(decide_action(false, true, false), DoctorAction::ReportOnly);
+        }
     }
 }

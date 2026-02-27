@@ -371,5 +371,211 @@ mod tests {
                 base_ref: None,
             })));
         }
+
+        #[test]
+        fn requires_onboard_for_none_command() {
+            assert!(should_auto_onboard(None));
+        }
+
+        #[test]
+        fn requires_onboard_for_list() {
+            assert!(should_auto_onboard(Some(&Command::List { repo: None })));
+        }
+
+        #[test]
+        fn requires_onboard_for_park() {
+            assert!(should_auto_onboard(Some(&Command::Park)));
+        }
+
+        #[test]
+        fn requires_onboard_for_finish() {
+            assert!(should_auto_onboard(Some(&Command::Finish {
+                repo: None,
+                branch: None,
+                force: false,
+            })));
+        }
+
+        #[test]
+        fn requires_onboard_for_check() {
+            assert!(should_auto_onboard(Some(&Command::Check {
+                worktree_path: None,
+            })));
+        }
+
+        #[test]
+        fn requires_onboard_for_open() {
+            assert!(should_auto_onboard(Some(&Command::Open {
+                repo: None,
+                branch: None,
+            })));
+        }
+
+        #[test]
+        fn requires_onboard_for_prune() {
+            assert!(should_auto_onboard(Some(&Command::Prune { repo: None })));
+        }
+
+        #[test]
+        fn requires_onboard_for_rebase() {
+            assert!(should_auto_onboard(Some(&Command::Rebase { args: vec![] })));
+        }
+
+        #[test]
+        fn skips_doctor_with_fix_true() {
+            assert!(!should_auto_onboard(Some(&Command::Doctor { fix: true })));
+        }
+    }
+
+    mod cli_parsing_extra {
+        use super::*;
+
+        #[test]
+        fn parses_start_with_base_ref() {
+            let cli = Cli::parse_from(["task", "start", "goto", "bump-deps", "origin/main"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Start {
+                    repo: "goto".to_string(),
+                    branch: "bump-deps".to_string(),
+                    base_ref: Some("origin/main".to_string()),
+                })
+            );
+        }
+
+        #[test]
+        fn parses_list_with_repo() {
+            let cli = Cli::parse_from(["task", "list", "goto"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::List {
+                    repo: Some("goto".to_string()),
+                })
+            );
+        }
+
+        #[test]
+        fn parses_list_without_repo() {
+            let cli = Cli::parse_from(["task", "list"]);
+            assert_eq!(cli.command, Some(Command::List { repo: None }));
+        }
+
+        #[test]
+        fn parses_worktrees_with_repo() {
+            let cli = Cli::parse_from(["task", "worktrees", "goto"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Worktrees {
+                    repo: Some("goto".to_string()),
+                })
+            );
+        }
+
+        #[test]
+        fn parses_path_with_repo_and_branch() {
+            let cli = Cli::parse_from(["task", "path", "goto", "bump-deps"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Path {
+                    repo: Some("goto".to_string()),
+                    branch: Some("bump-deps".to_string()),
+                })
+            );
+        }
+
+        #[test]
+        fn parses_finish_with_all_args() {
+            let cli = Cli::parse_from(["task", "finish", "goto", "bump-deps", "--force"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Finish {
+                    repo: Some("goto".to_string()),
+                    branch: Some("bump-deps".to_string()),
+                    force: true,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_prune_with_repo() {
+            let cli = Cli::parse_from(["task", "prune", "goto"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Prune {
+                    repo: Some("goto".to_string()),
+                })
+            );
+        }
+
+        #[test]
+        fn parses_coverage_with_path() {
+            let cli = Cli::parse_from(["task", "coverage", "/tmp/some/path"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Coverage {
+                    worktree_path: Some("/tmp/some/path".to_string()),
+                })
+            );
+        }
+
+        #[test]
+        fn parses_check_with_path() {
+            let cli = Cli::parse_from(["task", "check", "/tmp/some/path"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Check {
+                    worktree_path: Some("/tmp/some/path".to_string()),
+                })
+            );
+        }
+
+        #[test]
+        fn parses_completions_bash() {
+            let cli = Cli::parse_from(["task", "completions", "bash"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Completions {
+                    shell: CompletionShell::Bash,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_completions_zsh() {
+            let cli = Cli::parse_from(["task", "completions", "zsh"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Completions {
+                    shell: CompletionShell::Zsh,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_repo_clone_without_explicit_key() {
+            let cli = Cli::parse_from(["task", "repo", "clone", "git@github.com:me/app.git"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Repo {
+                    command: RepoCommand::Clone {
+                        repo_url: "git@github.com:me/app.git".to_string(),
+                        repo_key: None,
+                    },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_ui_without_repo() {
+            let cli = Cli::parse_from(["task", "ui"]);
+            assert_eq!(cli.command, Some(Command::Ui { repo: None }));
+        }
+
+        #[test]
+        fn completion_shell_values_are_distinct() {
+            assert_ne!(CompletionShell::Bash, CompletionShell::Fish);
+            assert_ne!(CompletionShell::Bash, CompletionShell::Zsh);
+            assert_ne!(CompletionShell::Fish, CompletionShell::Zsh);
+        }
     }
 }

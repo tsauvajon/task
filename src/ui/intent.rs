@@ -140,6 +140,54 @@ mod tests {
                 UiIntent::SwitchView
             );
         }
+
+        #[test]
+        fn maps_all_normal_keys() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('q'))),
+                UiIntent::Quit
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Up)),
+                UiIntent::MovePrev
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('j'))),
+                UiIntent::MoveNext
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('/'))),
+                UiIntent::EnterFilterMode
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('?'))),
+                UiIntent::ToggleHelp
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('c'))),
+                UiIntent::EnterCreateTaskMode
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('f'))),
+                UiIntent::FinishSelected
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('r'))),
+                UiIntent::RefreshCurrentView
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('p'))),
+                UiIntent::ParkSelected
+            );
+        }
+
+        #[test]
+        fn unrecognised_key_maps_to_noop() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::F(1))),
+                UiIntent::Noop
+            );
+        }
     }
 
     mod filter_mode {
@@ -164,6 +212,28 @@ mod tests {
                 UiIntent::FilterAppend('a')
             );
         }
+
+        #[test]
+        fn enter_maps_to_filter_apply() {
+            assert_eq!(
+                from_key(InputMode::Filter, key(KeyCode::Enter)),
+                UiIntent::FilterApply
+            );
+        }
+
+        #[test]
+        fn ctrl_u_maps_to_filter_clear() {
+            let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::Filter, ctrl_u), UiIntent::FilterClear);
+        }
+
+        #[test]
+        fn unrecognised_key_maps_to_noop() {
+            assert_eq!(
+                from_key(InputMode::Filter, key(KeyCode::F(1))),
+                UiIntent::Noop
+            );
+        }
     }
 
     mod create_mode {
@@ -184,6 +254,20 @@ mod tests {
                 UiIntent::CreateAppend('b')
             );
         }
+
+        #[test]
+        fn backspace_maps_to_create_backspace() {
+            assert_eq!(
+                from_key(InputMode::CreateTask, key(KeyCode::Backspace)),
+                UiIntent::CreateBackspace
+            );
+        }
+
+        #[test]
+        fn ctrl_char_maps_to_noop_not_append() {
+            let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::CreateTask, ctrl_a), UiIntent::Noop);
+        }
     }
 
     mod clone_mode {
@@ -202,6 +286,28 @@ mod tests {
             assert_eq!(
                 from_key(InputMode::CloneRepo, key(KeyCode::Char('g'))),
                 UiIntent::CloneAppend('g')
+            );
+        }
+
+        #[test]
+        fn backspace_maps_to_clone_backspace() {
+            assert_eq!(
+                from_key(InputMode::CloneRepo, key(KeyCode::Backspace)),
+                UiIntent::CloneBackspace
+            );
+        }
+
+        #[test]
+        fn ctrl_u_maps_to_clone_clear() {
+            let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::CloneRepo, ctrl_u), UiIntent::CloneClear);
+        }
+
+        #[test]
+        fn unrecognised_key_maps_to_noop() {
+            assert_eq!(
+                from_key(InputMode::CloneRepo, key(KeyCode::F(5))),
+                UiIntent::Noop
             );
         }
     }

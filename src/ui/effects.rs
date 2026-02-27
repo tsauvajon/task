@@ -55,3 +55,114 @@ pub(super) fn clone_and_refresh(
     }
     Ok(cloned_repo)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{env, fs};
+
+    use super::create_action;
+    use crate::{
+        runtime::environment::RuntimeEnvironment,
+        ui::state::{UiAction, UiState},
+    };
+
+    fn test_env() -> RuntimeEnvironment {
+        let base = env::temp_dir().join("task-rs-ui-effects-tests");
+        let repos = base.join("repos");
+        let wt = base.join("wt");
+        // create_dir_all is idempotent — safe across parallel test threads.
+        fs::create_dir_all(&repos).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        RuntimeEnvironment::from_paths(&repos, &wt)
+    }
+
+    fn empty_state() -> UiState {
+        UiState::new(vec![], vec![], None)
+    }
+
+    mod create_action_tests {
+        use super::*;
+
+        #[test]
+        fn empty_branch_returns_error() {
+            let ctx = test_env();
+            let mut state = empty_state();
+            state.create_branch = "".to_string();
+            let err = create_action(&ctx, &state).expect_err("expected error for empty branch");
+            assert!(
+                err.to_string().contains("empty") || err.to_string().contains("cannot"),
+                "error should mention empty branch: {err}"
+            );
+        }
+
+        #[test]
+        fn whitespace_only_branch_returns_error() {
+            let ctx = test_env();
+            let mut state = empty_state();
+            state.create_branch = "   ".to_string();
+            let err =
+                create_action(&ctx, &state).expect_err("expected error for whitespace-only branch");
+            assert!(
+                err.to_string().contains("empty") || err.to_string().contains("cannot"),
+                "error should mention empty branch: {err}"
+            );
+        }
+
+        #[test]
+        fn valid_branch_with_selected_task_returns_create_action() {
+            use std::path::PathBuf;
+
+            use crate::runtime::{
+                BranchName, RepoKey,
+                task_rows::{TaskRow, TaskStatus},
+            };
+
+            let ctx = test_env();
+            let row = TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new("github.com/acme/app"),
+                branch: BranchName::new("main"),
+                path: PathBuf::from("/tmp/a"),
+            };
+            let mut state = UiState::new(vec![row], vec![], None);
+            state.create_branch = "my-new-feature".to_string();
+
+            let action = create_action(&ctx, &state).expect("create_action should succeed");
+            match action {
+                UiAction::Create { repo, branch } => {
+                    assert_eq!(repo, "github.com/acme/app");
+                    assert_eq!(branch, "my-new-feature");
+                }
+                other => panic!("expected Create action, got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn branch_is_trimmed_before_use() {
+            use std::path::PathBuf;
+
+            use crate::runtime::{
+                BranchName, RepoKey,
+                task_rows::{TaskRow, TaskStatus},
+            };
+
+            let ctx = test_env();
+            let row = TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new("github.com/acme/app"),
+                branch: BranchName::new("main"),
+                path: PathBuf::from("/tmp/a"),
+            };
+            let mut state = UiState::new(vec![row], vec![], None);
+            state.create_branch = "  trimmed-branch  ".to_string();
+
+            let action = create_action(&ctx, &state).expect("create_action should succeed");
+            match action {
+                UiAction::Create { branch, .. } => {
+                    assert_eq!(branch, "trimmed-branch");
+                }
+                other => panic!("expected Create action, got {:?}", other),
+            }
+        }
+    }
+}

@@ -168,5 +168,74 @@ mod tests {
                 "Usage: task rebase [query] | [repo branch [base-ref]]"
             );
         }
+
+        #[test]
+        fn repo_branch_captures_correct_fields() {
+            let args = vec!["myrepo".to_string(), "feat/xyz".to_string()];
+            let input = parse_rebase_input(&args).unwrap();
+            assert_eq!(
+                input,
+                RebaseInput::RepoBranch {
+                    repo_arg: "myrepo".to_string(),
+                    branch: "feat/xyz".to_string(),
+                }
+            );
+        }
+
+        #[test]
+        fn repo_branch_base_captures_correct_fields() {
+            let args = vec![
+                "myrepo".to_string(),
+                "feat/xyz".to_string(),
+                "origin/develop".to_string(),
+            ];
+            let input = parse_rebase_input(&args).unwrap();
+            assert_eq!(
+                input,
+                RebaseInput::RepoBranchBase {
+                    repo_arg: "myrepo".to_string(),
+                    branch: "feat/xyz".to_string(),
+                    base_ref: "origin/develop".to_string(),
+                }
+            );
+        }
+
+        #[test]
+        fn query_captures_slash_in_branch_name() {
+            let args = vec!["feat/my-feature".to_string()];
+            let input = parse_rebase_input(&args).unwrap();
+            assert_eq!(input, RebaseInput::Query("feat/my-feature".to_string()));
+        }
+
+        #[test]
+        fn rejects_five_args() {
+            let args = vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+                "e".to_string(),
+            ];
+            assert!(
+                parse_rebase_input(&args).is_err(),
+                "5 args should be rejected"
+            );
+        }
+
+        #[test]
+        fn error_message_contains_usage() {
+            let args = vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+            ];
+            let err = parse_rebase_input(&args).unwrap_err();
+            assert!(
+                err.to_string().contains("Usage:"),
+                "error should contain usage hint: {}",
+                err
+            );
+        }
     }
 }

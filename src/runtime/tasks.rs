@@ -871,6 +871,120 @@ mod tests {
         }
     }
 
+    mod resolve_task_from_query {
+        use super::*;
+
+        /// Creates a bare repo with a single worktree at the expected wt path.
+        fn setup_worktree(
+            repos_dir: &std::path::Path,
+            wt_dir: &std::path::Path,
+            repo_slug: &str,
+            branch: &str,
+        ) {
+            let gitdir = repos_dir.join(format!("{repo_slug}.git"));
+            init_bare_repo(&gitdir);
+            let wt_path = wt_dir.join(repo_slug).join(branch);
+            fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+            let status = std::process::Command::new("git")
+                .args([
+                    "--git-dir",
+                    gitdir.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "--orphan",
+                    "-b",
+                    branch,
+                    wt_path.to_str().unwrap(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("git worktree add");
+            assert!(status.success(), "git worktree add --orphan failed");
+        }
+
+        #[test]
+        fn errors_when_no_tasks_exist() {
+            let dir = TempDir::new("resolve-query-empty");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver.resolve_task_from_query("anything").unwrap_err();
+            assert!(
+                err.to_string().contains("No task matched"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn resolves_exact_branch_name_match() {
+            let dir = TempDir::new("resolve-query-exact");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            setup_worktree(&repos_dir, &wt_dir, "github.com/me/app", "feat-login");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let (repo, branch) = resolver
+                .resolve_task_from_query("feat-login")
+                .expect("exact match");
+            assert_eq!(repo.to_string(), "github.com/me/app");
+            assert_eq!(branch.to_string(), "feat-login");
+        }
+
+        #[test]
+        fn resolves_partial_branch_name_match() {
+            let dir = TempDir::new("resolve-query-partial");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            setup_worktree(
+                &repos_dir,
+                &wt_dir,
+                "github.com/me/app",
+                "feature-pagination",
+            );
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let (repo, branch) = resolver
+                .resolve_task_from_query("pagination")
+                .expect("partial branch match");
+            assert_eq!(branch.to_string(), "feature-pagination");
+            assert_eq!(repo.to_string(), "github.com/me/app");
+        }
+
+        #[test]
+        fn resolves_by_repo_when_branch_query_has_no_match() {
+            let dir = TempDir::new("resolve-query-repo");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            setup_worktree(&repos_dir, &wt_dir, "github.com/me/myservice", "main");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let (repo, _branch) = resolver
+                .resolve_task_from_query("myservice")
+                .expect("repo match");
+            assert_eq!(repo.to_string(), "github.com/me/myservice");
+        }
+
+        #[test]
+        fn errors_when_nothing_matches() {
+            let dir = TempDir::new("resolve-query-nomatch");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            setup_worktree(&repos_dir, &wt_dir, "github.com/me/app", "main");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver
+                .resolve_task_from_query("completely-unknown-xyz-999")
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("No task matched"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
     mod repo_task_rows {
         use std::collections::HashSet;
 

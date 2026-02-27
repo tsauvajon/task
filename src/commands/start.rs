@@ -248,5 +248,95 @@ mod tests {
             .unwrap();
             assert_eq!(result, BranchStrategy::ExistingLocal);
         }
+
+        #[test]
+        fn create_from_base_uses_supplied_base_ref() {
+            let result =
+                resolve_branch_strategy("new-branch", "origin/develop", |_| false, |_| true)
+                    .unwrap();
+            assert_eq!(
+                result,
+                BranchStrategy::CreateFromBase {
+                    base: "origin/develop".to_string()
+                }
+            );
+        }
+
+        #[test]
+        fn error_message_includes_base_ref_name() {
+            let result =
+                resolve_branch_strategy("new-branch", "origin/nonexistent", |_| false, |_| false);
+            let err = result.unwrap_err();
+            assert!(
+                err.to_string().contains("origin/nonexistent"),
+                "error should name the missing base: {}",
+                err
+            );
+        }
+
+        #[test]
+        fn local_branch_check_activates_on_correct_ref_format() {
+            use std::cell::Cell;
+            let matched = Cell::new(false);
+            let result = resolve_branch_strategy(
+                "mybranch",
+                "origin/main",
+                |r| {
+                    if r == "refs/heads/mybranch" {
+                        matched.set(true);
+                        true
+                    } else {
+                        false
+                    }
+                },
+                |_| false,
+            );
+            assert!(matched.get(), "should have checked refs/heads/mybranch");
+            assert_eq!(result.unwrap(), BranchStrategy::ExistingLocal);
+        }
+
+        #[test]
+        fn remote_branch_check_activates_on_correct_ref_format() {
+            use std::cell::Cell;
+            let matched = Cell::new(false);
+            let result = resolve_branch_strategy(
+                "mybranch",
+                "origin/main",
+                |r| {
+                    if r == "refs/remotes/origin/mybranch" {
+                        matched.set(true);
+                        true
+                    } else {
+                        false
+                    }
+                },
+                |_| false,
+            );
+            assert!(
+                matched.get(),
+                "should have checked refs/remotes/origin/mybranch"
+            );
+            assert_eq!(result.unwrap(), BranchStrategy::TrackRemote);
+        }
+    }
+
+    mod classify_worktree_path_extra {
+        use super::*;
+
+        #[test]
+        fn dot_git_file_counts_as_existing_worktree() {
+            // In linked worktrees `.git` is a file, not a directory —
+            // classify_worktree_path only checks existence.
+            let dir = TempDir::new("wt-git-file");
+            fs::write(
+                dir.path().join(".git"),
+                "gitdir: ../../main/.git/worktrees/x",
+            )
+            .unwrap();
+            assert_eq!(
+                classify_worktree_path(dir.path()),
+                WorktreePathState::Existing
+            );
+        }
     }
 }

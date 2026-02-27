@@ -47,6 +47,25 @@ mod tests {
             let parsed = parse_cmdline_bytes(b"codium\0--new-window\0/tmp/wt/repo\0");
             assert_eq!(parsed, vec!["codium", "--new-window", "/tmp/wt/repo"]);
         }
+
+        #[test]
+        fn returns_empty_for_empty_input() {
+            let parsed = parse_cmdline_bytes(b"");
+            assert!(parsed.is_empty());
+        }
+
+        #[test]
+        fn skips_empty_segments() {
+            // Consecutive nul bytes produce empty segments that are filtered.
+            let parsed = parse_cmdline_bytes(b"codium\0\0--flag\0");
+            assert_eq!(parsed, vec!["codium", "--flag"]);
+        }
+
+        #[test]
+        fn single_arg_no_trailing_nul() {
+            let parsed = parse_cmdline_bytes(b"codium");
+            assert_eq!(parsed, vec!["codium"]);
+        }
     }
 
     mod cmdline_matches_user_data_dir {
@@ -98,6 +117,40 @@ mod tests {
                 "bash".to_string(),
                 "--user-data-dir".to_string(),
                 "/tmp/task/codium/a".to_string(),
+            ];
+            assert!(!cmdline_matches_user_data_dir(
+                &args,
+                Path::new("/tmp/task/codium/a")
+            ));
+        }
+
+        #[test]
+        fn rejects_empty_args() {
+            assert!(!cmdline_matches_user_data_dir(
+                &[],
+                Path::new("/tmp/task/codium/a")
+            ));
+        }
+
+        #[test]
+        fn matches_path_binary_prefix() {
+            // Binary with an absolute path containing "codium"
+            let args = vec![
+                "/usr/lib/vscodium-bin/codium".to_string(),
+                "--user-data-dir".to_string(),
+                "/tmp/task/codium/a".to_string(),
+            ];
+            assert!(cmdline_matches_user_data_dir(
+                &args,
+                Path::new("/tmp/task/codium/a")
+            ));
+        }
+
+        #[test]
+        fn rejects_equals_form_with_wrong_value() {
+            let args = vec![
+                "codium".to_string(),
+                "--user-data-dir=/tmp/task/codium/wrong".to_string(),
             ];
             assert!(!cmdline_matches_user_data_dir(
                 &args,

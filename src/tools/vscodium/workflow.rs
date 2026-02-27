@@ -160,6 +160,36 @@ mod tests {
                 ]
             );
         }
+
+        #[test]
+        fn has_four_arguments() {
+            let args = codium_args(Path::new("/u/d/dir"), Path::new("/wt/path"));
+            assert_eq!(args.len(), 4);
+        }
+
+        #[test]
+        fn first_arg_is_new_window() {
+            let args = codium_args(Path::new("/u"), Path::new("/w"));
+            assert_eq!(args[0], "--new-window");
+        }
+
+        #[test]
+        fn second_arg_is_user_data_dir_flag() {
+            let args = codium_args(Path::new("/u"), Path::new("/w"));
+            assert_eq!(args[1], "--user-data-dir");
+        }
+
+        #[test]
+        fn third_arg_is_user_data_dir_value() {
+            let args = codium_args(Path::new("/custom/user/data"), Path::new("/w"));
+            assert_eq!(args[2], "/custom/user/data");
+        }
+
+        #[test]
+        fn fourth_arg_is_worktree_path() {
+            let args = codium_args(Path::new("/u"), Path::new("/my/worktree"));
+            assert_eq!(args[3], "/my/worktree");
+        }
     }
 
     mod codium_state {

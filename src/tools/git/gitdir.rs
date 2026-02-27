@@ -132,4 +132,28 @@ mod tests {
         let result = gd.status(&["rev-parse", "--git-dir"]);
         assert!(result.is_err(), "should fail for a nonexistent git dir");
     }
+
+    #[test]
+    fn status_in_succeeds_on_valid_bare_repo_with_cwd() {
+        let dir = make_bare_repo("status-in-test");
+        let gd = GitDir::new(&dir);
+        let parent = env::temp_dir();
+        gd.status_in(&["rev-parse", "--git-dir"], &parent)
+            .expect("status_in should succeed on a valid bare repo");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capture_output_is_non_empty_for_bare_repo() {
+        let dir = make_bare_repo("capture-nonempty");
+        let gd = GitDir::new(&dir);
+        let out = gd
+            .capture(&["rev-parse", "--git-dir"])
+            .expect("should succeed");
+        assert!(
+            !out.trim().is_empty(),
+            "git rev-parse --git-dir should produce output"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

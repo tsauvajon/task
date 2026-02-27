@@ -157,109 +157,154 @@ mod tests {
         WorktreeEntry, branch_from_ref, branch_from_worktree_path, parse_worktree_porcelain,
     };
 
-    #[test]
-    fn parse_worktree_porcelain_collects_entries() {
-        let text = "worktree /tmp/dev/repos/github.com/tsauvajon/task.git\n\
+    mod parse_worktree_porcelain {
+        use super::*;
+
+        #[test]
+        fn collects_entries() {
+            let text = "worktree /tmp/dev/repos/github.com/tsauvajon/task.git\n\
 bare\n\
 \n\
 worktree /tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust\n\
 HEAD 0123456789abcdef\n\
 branch refs/heads/rewrite-in-rust\n\n";
 
-        let entries = parse_worktree_porcelain(text);
-        assert_eq!(entries.len(), 2);
-        assert!(entries[0].is_bare);
-        assert_eq!(
-            entries[1],
-            WorktreeEntry {
-                path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
-                branch_ref: Some("refs/heads/rewrite-in-rust".to_string()),
-                is_bare: false,
-            }
-        );
-    }
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 2);
+            assert!(entries[0].is_bare);
+            assert_eq!(
+                entries[1],
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
+                    branch_ref: Some("refs/heads/rewrite-in-rust".to_string()),
+                    is_bare: false,
+                }
+            );
+        }
 
-    #[test]
-    fn branch_from_worktree_path_supports_nested_branch_names() {
-        let branch = branch_from_worktree_path(
-            Path::new("/tmp/custom/wt"),
-            "github.com/tsauvajon/task",
-            Path::new("/tmp/custom/wt/github.com/tsauvajon/task/feat/rewrite/rust"),
-        );
-        assert_eq!(branch, Some("feat/rewrite/rust".to_string()));
-    }
-
-    #[test]
-    fn branch_from_ref_strips_prefix() {
-        assert_eq!(
-            branch_from_ref(Some("refs/heads/rewrite-in-rust")),
-            Some("rewrite-in-rust".to_string())
-        );
-    }
-
-    #[test]
-    fn branch_from_worktree_path_returns_none_when_path_equals_repo_root() {
-        // The path IS the repo root (no trailing component) → None
-        let branch = branch_from_worktree_path(
-            Path::new("/tmp/wt"),
-            "github.com/tsauvajon/task",
-            Path::new("/tmp/wt/github.com/tsauvajon/task"),
-        );
-        assert_eq!(branch, None);
-    }
-
-    #[test]
-    fn branch_from_worktree_path_returns_none_for_unrelated_path() {
-        // Path that does not start with wt_dir/repo_key → None
-        let branch = branch_from_worktree_path(
-            Path::new("/tmp/wt"),
-            "github.com/tsauvajon/task",
-            Path::new("/other/path/feat/something"),
-        );
-        assert_eq!(branch, None);
-    }
-
-    #[test]
-    fn branch_from_ref_returns_none_for_none_input() {
-        assert_eq!(branch_from_ref(None), None);
-    }
-
-    #[test]
-    fn branch_from_ref_returns_raw_ref_when_no_prefix() {
-        // A ref that does NOT start with "refs/heads/" is returned as-is.
-        assert_eq!(branch_from_ref(Some("HEAD")), Some("HEAD".to_string()));
-    }
-
-    #[test]
-    fn parse_worktree_porcelain_handles_missing_trailing_blank_line() {
-        // If the porcelain output ends without a trailing blank line the last
-        // entry should still be flushed by the end-of-input flush path.
-        let text = "worktree /tmp/dev/wt/github.com/tsauvajon/task/bump\n\
+        #[test]
+        fn handles_missing_trailing_blank_line() {
+            // If the porcelain output ends without a trailing blank line the last
+            // entry should still be flushed by the end-of-input flush path.
+            let text = "worktree /tmp/dev/wt/github.com/tsauvajon/task/bump\n\
 branch refs/heads/bump";
 
-        let entries = parse_worktree_porcelain(text);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0],
-            WorktreeEntry {
-                path: "/tmp/dev/wt/github.com/tsauvajon/task/bump".into(),
-                branch_ref: Some("refs/heads/bump".to_string()),
-                is_bare: false,
-            }
-        );
-    }
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                entries[0],
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/bump".into(),
+                    branch_ref: Some("refs/heads/bump".to_string()),
+                    is_bare: false,
+                }
+            );
+        }
 
-    #[test]
-    fn parse_worktree_porcelain_skips_bare_entries_from_non_bare_list() {
-        let text = "worktree /tmp/dev/repos/task.git\n\
+        #[test]
+        fn preserves_bare_flag() {
+            let text = "worktree /tmp/dev/repos/task.git\n\
 bare\n\
 \n\
 worktree /tmp/dev/wt/task/main\n\
 branch refs/heads/main\n\
 \n";
-        let entries = parse_worktree_porcelain(text);
-        assert_eq!(entries.len(), 2);
-        assert!(entries[0].is_bare);
-        assert!(!entries[1].is_bare);
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 2);
+            assert!(entries[0].is_bare);
+            assert!(!entries[1].is_bare);
+        }
+
+        #[test]
+        fn empty_input_returns_empty_vec() {
+            let entries = parse_worktree_porcelain("");
+            assert!(entries.is_empty());
+        }
+
+        #[test]
+        fn entry_without_branch_has_none() {
+            // A detached HEAD worktree has no `branch` line.
+            let text = "worktree /tmp/dev/wt/task/detached\nHEAD abc123\n\n";
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].branch_ref, None);
+            assert!(!entries[0].is_bare);
+        }
+
+        #[test]
+        fn single_entry_with_trailing_newline() {
+            let text = "worktree /tmp/dev/wt/task/feat\nbranch refs/heads/feat\n\n";
+            let entries = parse_worktree_porcelain(text);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].branch_ref.as_deref(), Some("refs/heads/feat"));
+        }
+    }
+
+    mod branch_from_ref {
+        use super::*;
+
+        #[test]
+        fn strips_heads_prefix() {
+            assert_eq!(
+                branch_from_ref(Some("refs/heads/rewrite-in-rust")),
+                Some("rewrite-in-rust".to_string())
+            );
+        }
+
+        #[test]
+        fn returns_none_for_none_input() {
+            assert_eq!(branch_from_ref(None), None);
+        }
+
+        #[test]
+        fn returns_raw_ref_when_no_prefix() {
+            // A ref that does NOT start with "refs/heads/" is returned as-is.
+            assert_eq!(branch_from_ref(Some("HEAD")), Some("HEAD".to_string()));
+        }
+    }
+
+    mod branch_from_worktree_path {
+        use super::*;
+
+        #[test]
+        fn supports_nested_branch_names() {
+            let branch = branch_from_worktree_path(
+                Path::new("/tmp/custom/wt"),
+                "github.com/tsauvajon/task",
+                Path::new("/tmp/custom/wt/github.com/tsauvajon/task/feat/rewrite/rust"),
+            );
+            assert_eq!(branch, Some("feat/rewrite/rust".to_string()));
+        }
+
+        #[test]
+        fn handles_single_component_branch() {
+            let branch = branch_from_worktree_path(
+                Path::new("/tmp/wt"),
+                "github.com/acme/repo",
+                Path::new("/tmp/wt/github.com/acme/repo/main"),
+            );
+            assert_eq!(branch, Some("main".to_string()));
+        }
+
+        #[test]
+        fn returns_none_when_path_equals_repo_root() {
+            // The path IS the repo root (no trailing component) → None
+            let branch = branch_from_worktree_path(
+                Path::new("/tmp/wt"),
+                "github.com/tsauvajon/task",
+                Path::new("/tmp/wt/github.com/tsauvajon/task"),
+            );
+            assert_eq!(branch, None);
+        }
+
+        #[test]
+        fn returns_none_for_unrelated_path() {
+            let branch = branch_from_worktree_path(
+                Path::new("/tmp/wt"),
+                "github.com/tsauvajon/task",
+                Path::new("/other/path/feat/something"),
+            );
+            assert_eq!(branch, None);
+        }
     }
 }

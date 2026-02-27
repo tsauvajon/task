@@ -50,3 +50,38 @@ impl Default for RuntimeEnvironment {
         Self::new().expect("runtime environment")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeEnvironment;
+
+    mod from_paths {
+        use super::*;
+
+        #[test]
+        fn exposes_layout() {
+            let env = RuntimeEnvironment::from_paths("/tmp/repos", "/tmp/wt");
+            assert_eq!(env.layout().repos_dir(), std::path::Path::new("/tmp/repos"));
+            assert_eq!(env.layout().wt_dir(), std::path::Path::new("/tmp/wt"));
+        }
+
+        #[test]
+        fn exposes_tasks() {
+            let env = RuntimeEnvironment::from_paths("/tmp/repos", "/tmp/wt");
+            // TaskResolver is accessible – we exercise the accessor without
+            // calling any I/O methods.
+            let tasks = env.tasks();
+            // layout() on the resolver should agree with the env layout.
+            assert_eq!(tasks.layout().repos_dir(), env.layout().repos_dir());
+        }
+
+        #[test]
+        fn accepts_pathbuf_input() {
+            let repos = std::path::PathBuf::from("/srv/repos");
+            let wt = std::path::PathBuf::from("/srv/wt");
+            let env = RuntimeEnvironment::from_paths(&repos, &wt);
+            assert_eq!(env.layout().repos_dir(), repos.as_path());
+            assert_eq!(env.layout().wt_dir(), wt.as_path());
+        }
+    }
+}

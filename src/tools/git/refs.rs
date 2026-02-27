@@ -156,6 +156,15 @@ mod tests {
             let exists = ref_exists(&dir, "refs/heads/main");
             assert!(!exists, "nonexistent gitdir should return false");
         }
+
+        #[test]
+        fn returns_true_for_existing_branch_in_regular_repo() {
+            let repo = make_regular_repo_with_commit("ref-exists-true");
+            let gitdir = repo.join(".git");
+            let exists = ref_exists(&gitdir, "refs/heads/main");
+            assert!(exists, "main branch should exist after initial commit");
+            let _ = fs::remove_dir_all(&repo);
+        }
     }
 
     mod rev_exists_tests {
@@ -175,6 +184,28 @@ mod tests {
             let _ = fs::remove_dir_all(&dir);
             let exists = rev_exists(&dir, "HEAD");
             assert!(!exists, "nonexistent gitdir should return false");
+        }
+
+        #[test]
+        fn returns_true_for_head_in_repo_with_commit() {
+            let repo = make_regular_repo_with_commit("rev-exists-head");
+            let gitdir = repo.join(".git");
+            assert!(
+                rev_exists(&gitdir, "HEAD"),
+                "HEAD should exist after commit"
+            );
+            let _ = fs::remove_dir_all(&repo);
+        }
+
+        #[test]
+        fn returns_true_for_branch_name_in_repo_with_commit() {
+            let repo = make_regular_repo_with_commit("rev-exists-branch");
+            let gitdir = repo.join(".git");
+            assert!(
+                rev_exists(&gitdir, "main"),
+                "main should resolve to a commit"
+            );
+            let _ = fs::remove_dir_all(&repo);
         }
     }
 

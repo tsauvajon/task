@@ -48,61 +48,65 @@ mod tests {
     use super::script_for;
     use crate::commands::CompletionShell;
 
-    #[test]
-    fn bash_script_registers_completion_function() {
-        let script = script_for(CompletionShell::Bash);
-        assert!(script.contains("_task_complete"), "missing function name");
-        assert!(
-            script.contains("complete -o nosort -F _task_complete task"),
-            "missing complete directive"
-        );
-        assert!(
-            script.contains("task __complete"),
-            "missing task __complete invocation"
-        );
-    }
+    mod script_for {
+        use super::*;
 
-    #[test]
-    fn fish_script_defines_helper_function() {
-        let script = script_for(CompletionShell::Fish);
-        assert!(
-            script.contains("function __task_complete"),
-            "missing function definition"
-        );
-        assert!(
-            script.contains("complete -c task"),
-            "missing complete directive"
-        );
-        assert!(
-            script.contains("task __complete"),
-            "missing task __complete invocation"
-        );
-    }
+        #[test]
+        fn bash_registers_completion_function() {
+            let script = script_for(CompletionShell::Bash);
+            assert!(script.contains("_task_complete"), "missing function name");
+            assert!(
+                script.contains("complete -o nosort -F _task_complete task"),
+                "missing complete directive"
+            );
+            assert!(
+                script.contains("task __complete"),
+                "missing task __complete invocation"
+            );
+        }
 
-    #[test]
-    fn zsh_script_has_compdef_header() {
-        let script = script_for(CompletionShell::Zsh);
-        assert!(
-            script.starts_with("#compdef task"),
-            "missing #compdef header"
-        );
-        assert!(
-            script.contains("_task_complete"),
-            "missing completion function"
-        );
-        assert!(
-            script.contains("task __complete"),
-            "missing task __complete invocation"
-        );
-    }
+        #[test]
+        fn fish_defines_helper_function() {
+            let script = script_for(CompletionShell::Fish);
+            assert!(
+                script.contains("function __task_complete"),
+                "missing function definition"
+            );
+            assert!(
+                script.contains("complete -c task"),
+                "missing complete directive"
+            );
+            assert!(
+                script.contains("task __complete"),
+                "missing task __complete invocation"
+            );
+        }
 
-    #[test]
-    fn shells_produce_distinct_scripts() {
-        let bash = script_for(CompletionShell::Bash);
-        let fish = script_for(CompletionShell::Fish);
-        let zsh = script_for(CompletionShell::Zsh);
-        assert_ne!(bash, fish);
-        assert_ne!(bash, zsh);
-        assert_ne!(fish, zsh);
+        #[test]
+        fn zsh_has_compdef_header() {
+            let script = script_for(CompletionShell::Zsh);
+            assert!(
+                script.starts_with("#compdef task"),
+                "missing #compdef header"
+            );
+            assert!(
+                script.contains("_task_complete"),
+                "missing completion function"
+            );
+            assert!(
+                script.contains("task __complete"),
+                "missing task __complete invocation"
+            );
+        }
+
+        #[test]
+        fn shells_produce_distinct_scripts() {
+            let bash = script_for(CompletionShell::Bash);
+            let fish = script_for(CompletionShell::Fish);
+            let zsh = script_for(CompletionShell::Zsh);
+            assert_ne!(bash, fish);
+            assert_ne!(bash, zsh);
+            assert_ne!(fish, zsh);
+        }
     }
 }

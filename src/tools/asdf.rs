@@ -174,5 +174,29 @@ mod tests {
                 "filename should be import-release-team-keyring"
             );
         }
+
+        #[test]
+        fn path_contains_plugins_nodejs_bin() {
+            let Some(path) = nodejs_release_keyring_script_path() else {
+                return; // HOME not set — skip
+            };
+            let path_str = path.to_string_lossy();
+            assert!(
+                path_str.contains("plugins/nodejs/bin"),
+                "path should contain plugins/nodejs/bin, got: {path_str}"
+            );
+        }
+    }
+
+    mod user_tool_versions_path_extra {
+        use super::*;
+
+        #[test]
+        fn path_is_absolute() {
+            let Some(path) = user_tool_versions_path() else {
+                return; // HOME not set — skip
+            };
+            assert!(path.is_absolute(), "path should be absolute, got: {path:?}");
+        }
     }
 }

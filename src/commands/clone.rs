@@ -47,42 +47,46 @@ mod tests {
         RuntimeEnvironment::from_paths(repos_dir, wt_dir)
     }
 
-    #[test]
-    fn run_propagates_error_for_unreachable_url() {
-        let dir = TempDir::new("bad-url");
-        let repos_dir = dir.path().join("repos");
-        let wt_dir = dir.path().join("wt");
-        fs::create_dir_all(&repos_dir).unwrap();
-        fs::create_dir_all(&wt_dir).unwrap();
+    mod run {
+        use super::*;
 
-        let env = env_for(&repos_dir, &wt_dir);
-        // Use a URL that git can parse but will never resolve — clone must fail
-        // and run() must propagate the error.
-        let result = super::run(
-            &env,
-            "https://invalid.example.invalid/nonexistent/repo.git",
-            None,
-        );
-        assert!(result.is_err(), "should fail for an unreachable URL");
-    }
+        #[test]
+        fn propagates_error_for_unreachable_url() {
+            let dir = TempDir::new("bad-url");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
 
-    #[test]
-    fn run_propagates_error_for_explicit_key_with_unreachable_url() {
-        let dir = TempDir::new("bad-url-with-key");
-        let repos_dir = dir.path().join("repos");
-        let wt_dir = dir.path().join("wt");
-        fs::create_dir_all(&repos_dir).unwrap();
-        fs::create_dir_all(&wt_dir).unwrap();
+            let env = env_for(&repos_dir, &wt_dir);
+            // Use a URL that git can parse but will never resolve — clone must fail
+            // and run() must propagate the error.
+            let result = super::super::run(
+                &env,
+                "https://invalid.example.invalid/nonexistent/repo.git",
+                None,
+            );
+            assert!(result.is_err(), "should fail for an unreachable URL");
+        }
 
-        let env = env_for(&repos_dir, &wt_dir);
-        let result = super::run(
-            &env,
-            "https://invalid.example.invalid/nonexistent/repo.git",
-            Some("example.invalid/nonexistent/repo".to_string()),
-        );
-        assert!(
-            result.is_err(),
-            "should fail for an unreachable URL with explicit key"
-        );
+        #[test]
+        fn propagates_error_for_explicit_key_with_unreachable_url() {
+            let dir = TempDir::new("bad-url-with-key");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            let env = env_for(&repos_dir, &wt_dir);
+            let result = super::super::run(
+                &env,
+                "https://invalid.example.invalid/nonexistent/repo.git",
+                Some("example.invalid/nonexistent/repo".to_string()),
+            );
+            assert!(
+                result.is_err(),
+                "should fail for an unreachable URL with explicit key"
+            );
+        }
     }
 }

@@ -178,228 +178,290 @@ fn task_candidates(
 mod tests {
     use super::{completion_values, filter_prefix, top_level_commands};
 
-    #[test]
-    fn doctor_completion_includes_fix_flag() {
-        let values = completion_values(None, &["doctor".to_string(), "".to_string()])
-            .expect("doctor completion values");
-        assert_eq!(values, vec!["--fix".to_string()]);
-    }
+    mod filter_prefix {
+        use super::*;
 
-    #[test]
-    fn top_level_completion_available_without_configured_context() {
-        let values = completion_values(None, &[]).expect("top-level completion values");
-        assert!(values.contains(&"doctor".to_string()));
-        assert!(values.contains(&"bootstrap".to_string()));
-    }
+        #[test]
+        fn returns_all_when_empty_prefix() {
+            let values = vec!["alpha".to_string(), "beta".to_string()];
+            assert_eq!(filter_prefix(values.clone(), ""), values);
+        }
 
-    #[test]
-    fn top_level_commands_includes_all_expected() {
-        let cmds = top_level_commands();
-        for expected in [
-            "bootstrap",
-            "doctor",
-            "clone",
-            "start",
-            "open",
-            "park",
-            "path",
-            "list",
-            "ui",
-            "worktrees",
-            "finish",
-            "prune",
-            "check",
-            "rebase",
-            "completions",
-        ] {
-            assert!(
-                cmds.contains(&expected.to_string()),
-                "missing command: {expected}"
-            );
+        #[test]
+        fn filters_case_insensitive() {
+            let values = vec!["alpha".to_string(), "beta".to_string(), "Aleph".to_string()];
+            let filtered = filter_prefix(values, "al");
+            assert_eq!(filtered, vec!["alpha", "Aleph"]);
+        }
+
+        #[test]
+        fn returns_empty_when_nothing_matches() {
+            let values = vec!["alpha".to_string(), "beta".to_string()];
+            let filtered = filter_prefix(values, "zzz");
+            assert!(filtered.is_empty(), "no values should match 'zzz'");
+        }
+
+        #[test]
+        fn empty_input_returns_empty() {
+            let filtered = filter_prefix(vec![], "al");
+            assert!(filtered.is_empty());
         }
     }
 
-    #[test]
-    fn start_returns_empty_without_context() {
-        let values = completion_values(None, &["start".to_string(), "".to_string()])
-            .expect("start completions");
-        assert!(values.is_empty());
+    mod top_level_commands {
+        use super::*;
+
+        #[test]
+        fn includes_all_expected() {
+            let cmds = top_level_commands();
+            for expected in [
+                "bootstrap",
+                "doctor",
+                "clone",
+                "start",
+                "open",
+                "park",
+                "path",
+                "list",
+                "ui",
+                "worktrees",
+                "finish",
+                "prune",
+                "check",
+                "rebase",
+                "completions",
+            ] {
+                assert!(
+                    cmds.contains(&expected.to_string()),
+                    "missing command: {expected}"
+                );
+            }
+        }
+
+        #[test]
+        fn has_no_duplicates() {
+            let cmds = top_level_commands();
+            let mut seen = std::collections::HashSet::new();
+            for cmd in &cmds {
+                assert!(seen.insert(cmd.clone()), "duplicate command: {cmd}");
+            }
+        }
     }
 
-    #[test]
-    fn start_returns_empty_for_second_arg() {
-        let values = completion_values(
-            None,
-            &["start".to_string(), "some-repo".to_string(), "".to_string()],
-        )
-        .expect("start completions 2nd arg");
-        assert!(values.is_empty());
-    }
+    mod completion_values {
+        use super::*;
 
-    #[test]
-    fn open_returns_empty_without_context() {
-        let values = completion_values(None, &["open".to_string(), "".to_string()])
-            .expect("open completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn top_level_available_without_configured_context() {
+            let values = completion_values(None, &[]).expect("top-level completion values");
+            assert!(values.contains(&"doctor".to_string()));
+            assert!(values.contains(&"bootstrap".to_string()));
+        }
 
-    #[test]
-    fn path_returns_empty_without_context() {
-        let values = completion_values(None, &["path".to_string(), "".to_string()])
-            .expect("path completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn unknown_command_returns_empty() {
+            let values = completion_values(None, &["nonexistent".to_string(), "".to_string()])
+                .expect("unknown command completions");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn finish_suggests_force_flag_on_dash_prefix() {
-        let values = completion_values(None, &["finish".to_string(), "-".to_string()])
-            .expect("finish flag completions");
-        assert_eq!(values, vec!["--force"]);
-    }
+        #[test]
+        fn doctor_includes_fix_flag() {
+            let values = completion_values(None, &["doctor".to_string(), "".to_string()])
+                .expect("doctor completion values");
+            assert_eq!(values, vec!["--fix".to_string()]);
+        }
 
-    #[test]
-    fn finish_returns_empty_repos_without_context() {
-        let values = completion_values(None, &["finish".to_string(), "".to_string()])
-            .expect("finish completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn doctor_returns_empty_after_fix_flag() {
+            let values = completion_values(
+                None,
+                &["doctor".to_string(), "--fix".to_string(), "".to_string()],
+            )
+            .expect("doctor extra arg");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn finish_suggests_force_on_third_arg_dash() {
-        let values = completion_values(
-            None,
-            &[
-                "finish".to_string(),
-                "repo".to_string(),
-                "branch".to_string(),
-                "-".to_string(),
-            ],
-        )
-        .expect("finish 3rd arg flag");
-        assert_eq!(values, vec!["--force"]);
-    }
+        #[test]
+        fn doctor_with_fix_prefix_returns_fix_flag() {
+            let values = completion_values(None, &["doctor".to_string(), "--f".to_string()])
+                .expect("doctor --fix prefix");
+            assert_eq!(values, vec!["--fix"]);
+        }
 
-    #[test]
-    fn rebase_returns_empty_without_context() {
-        let values = completion_values(None, &["rebase".to_string(), "".to_string()])
-            .expect("rebase completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn doctor_with_non_matching_prefix_returns_empty() {
+            let values = completion_values(None, &["doctor".to_string(), "--xyz".to_string()])
+                .expect("doctor non-matching prefix");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn prune_returns_empty_without_context() {
-        let values = completion_values(None, &["prune".to_string(), "".to_string()])
-            .expect("prune completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn start_returns_empty_without_context() {
+            let values = completion_values(None, &["start".to_string(), "".to_string()])
+                .expect("start completions");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn list_returns_empty_without_context() {
-        let values = completion_values(None, &["list".to_string(), "".to_string()])
-            .expect("list completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn start_returns_empty_for_second_arg() {
+            let values = completion_values(
+                None,
+                &["start".to_string(), "some-repo".to_string(), "".to_string()],
+            )
+            .expect("start completions 2nd arg");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn ui_returns_empty_without_context() {
-        let values =
-            completion_values(None, &["ui".to_string(), "".to_string()]).expect("ui completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn open_returns_empty_without_context() {
+            let values = completion_values(None, &["open".to_string(), "".to_string()])
+                .expect("open completions");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn worktrees_returns_empty_without_context() {
-        let values = completion_values(None, &["worktrees".to_string(), "".to_string()])
-            .expect("worktrees completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn open_second_arg_returns_empty_without_context() {
+            let values = completion_values(
+                None,
+                &["open".to_string(), "some-repo".to_string(), "".to_string()],
+            )
+            .expect("open 2nd arg");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn completions_suggests_all_shells() {
-        let values =
-            completion_values(None, &["completions".to_string()]).expect("shell completions");
-        assert!(values.contains(&"bash".to_string()));
-        assert!(values.contains(&"fish".to_string()));
-        assert!(values.contains(&"zsh".to_string()));
-    }
+        #[test]
+        fn open_third_arg_returns_empty() {
+            let values = completion_values(
+                None,
+                &[
+                    "open".to_string(),
+                    "repo".to_string(),
+                    "branch".to_string(),
+                    "".to_string(),
+                ],
+            )
+            .expect("open 3rd arg");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn unknown_command_returns_empty() {
-        let values = completion_values(None, &["nonexistent".to_string(), "".to_string()])
-            .expect("unknown command completions");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn path_returns_empty_without_context() {
+            let values = completion_values(None, &["path".to_string(), "".to_string()])
+                .expect("path completions");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn doctor_returns_empty_after_fix_flag() {
-        let values = completion_values(
-            None,
-            &["doctor".to_string(), "--fix".to_string(), "".to_string()],
-        )
-        .expect("doctor extra arg");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn finish_suggests_force_flag_on_dash_prefix() {
+            let values = completion_values(None, &["finish".to_string(), "-".to_string()])
+                .expect("finish flag completions");
+            assert_eq!(values, vec!["--force"]);
+        }
 
-    #[test]
-    fn filter_prefix_returns_all_when_empty() {
-        let values = vec!["alpha".to_string(), "beta".to_string()];
-        assert_eq!(filter_prefix(values.clone(), ""), values);
-    }
+        #[test]
+        fn finish_returns_empty_repos_without_context() {
+            let values = completion_values(None, &["finish".to_string(), "".to_string()])
+                .expect("finish completions");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn filter_prefix_filters_case_insensitive() {
-        let values = vec!["alpha".to_string(), "beta".to_string(), "Aleph".to_string()];
-        let filtered = filter_prefix(values, "al");
-        assert_eq!(filtered, vec!["alpha", "Aleph"]);
-    }
+        #[test]
+        fn finish_suggests_force_on_third_arg_dash() {
+            let values = completion_values(
+                None,
+                &[
+                    "finish".to_string(),
+                    "repo".to_string(),
+                    "branch".to_string(),
+                    "-".to_string(),
+                ],
+            )
+            .expect("finish 3rd arg flag");
+            assert_eq!(values, vec!["--force"]);
+        }
 
-    #[test]
-    fn open_second_arg_returns_empty_without_context() {
-        let values = completion_values(
-            None,
-            &["open".to_string(), "some-repo".to_string(), "".to_string()],
-        )
-        .expect("open 2nd arg");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn rebase_returns_empty_without_context() {
+            let values = completion_values(None, &["rebase".to_string(), "".to_string()])
+                .expect("rebase completions");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn open_third_arg_returns_empty() {
-        let values = completion_values(
-            None,
-            &[
-                "open".to_string(),
-                "repo".to_string(),
-                "branch".to_string(),
-                "".to_string(),
-            ],
-        )
-        .expect("open 3rd arg");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn rebase_third_arg_returns_empty() {
+            let values = completion_values(
+                None,
+                &[
+                    "rebase".to_string(),
+                    "repo".to_string(),
+                    "branch".to_string(),
+                    "".to_string(),
+                ],
+            )
+            .expect("rebase 3rd arg");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn prune_second_arg_returns_empty() {
-        let values = completion_values(
-            None,
-            &["prune".to_string(), "repo".to_string(), "".to_string()],
-        )
-        .expect("prune 2nd arg");
-        assert!(values.is_empty());
-    }
+        #[test]
+        fn prune_returns_empty_without_context() {
+            let values = completion_values(None, &["prune".to_string(), "".to_string()])
+                .expect("prune completions");
+            assert!(values.is_empty());
+        }
 
-    #[test]
-    fn rebase_third_arg_returns_empty() {
-        let values = completion_values(
-            None,
-            &[
-                "rebase".to_string(),
-                "repo".to_string(),
-                "branch".to_string(),
-                "".to_string(),
-            ],
-        )
-        .expect("rebase 3rd arg");
-        assert!(values.is_empty());
+        #[test]
+        fn prune_second_arg_returns_empty() {
+            let values = completion_values(
+                None,
+                &["prune".to_string(), "repo".to_string(), "".to_string()],
+            )
+            .expect("prune 2nd arg");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn list_returns_empty_without_context() {
+            let values = completion_values(None, &["list".to_string(), "".to_string()])
+                .expect("list completions");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn ui_returns_empty_without_context() {
+            let values = completion_values(None, &["ui".to_string(), "".to_string()])
+                .expect("ui completions");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn worktrees_returns_empty_without_context() {
+            let values = completion_values(None, &["worktrees".to_string(), "".to_string()])
+                .expect("worktrees completions");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn completions_suggests_all_shells() {
+            let values =
+                completion_values(None, &["completions".to_string()]).expect("shell completions");
+            assert!(values.contains(&"bash".to_string()));
+            assert!(values.contains(&"fish".to_string()));
+            assert!(values.contains(&"zsh".to_string()));
+        }
+
+        #[test]
+        fn completions_with_partial_shell_prefix_filters_correctly() {
+            let values = completion_values(None, &["completions".to_string(), "b".to_string()])
+                .expect("shell prefix completions");
+            assert_eq!(values, vec!["bash"]);
+        }
+
+        #[test]
+        fn completions_with_fish_prefix_returns_fish() {
+            let values = completion_values(None, &["completions".to_string(), "f".to_string()])
+                .expect("fish prefix completions");
+            assert_eq!(values, vec!["fish"]);
+        }
     }
 }

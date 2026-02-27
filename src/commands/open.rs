@@ -343,5 +343,123 @@ mod tests {
                 "error should suggest how to fix it: {msg}"
             );
         }
+
+        #[test]
+        fn multiple_partial_matches_without_exact_errors_when_prompt_disallowed() {
+            let a = make_row("github.com/acme/tool", "feature-login");
+            let b = make_row("github.com/acme/other", "admin-login");
+
+            let result = resolve_match_impl(
+                "login",
+                &[(a, MatchKind::Partial), (b, MatchKind::Partial)],
+                "task name",
+                false,
+            );
+            assert!(result.is_err(), "two partial matches must yield an error");
+            let msg = result.unwrap_err().to_string();
+            assert!(msg.contains("Multiple tasks match"), "{msg}");
+        }
+
+        #[test]
+        fn error_message_contains_query() {
+            let a = make_row("github.com/acme/tool", "login-alpha");
+            let b = make_row("github.com/acme/other", "login-beta");
+
+            let result = resolve_match_impl(
+                "myquery",
+                &[(a, MatchKind::Partial), (b, MatchKind::Partial)],
+                "task name",
+                false,
+            );
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("myquery"),
+                "error should contain the query: {msg}"
+            );
+        }
+
+        #[test]
+        fn error_message_contains_context() {
+            let a = make_row("github.com/acme/tool", "login-alpha");
+            let b = make_row("github.com/acme/other", "login-beta");
+
+            let result = resolve_match_impl(
+                "login",
+                &[(a, MatchKind::Partial), (b, MatchKind::Partial)],
+                "repository",
+                false,
+            );
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("repository"),
+                "error should name the context: {msg}"
+            );
+        }
+    }
+
+    mod match_task_name_extra {
+        use super::*;
+
+        fn row(branch: &str) -> TaskRow {
+            TaskRow {
+                status: TaskStatus::Parked,
+                repo: RepoKey::new("github.com/acme/tool"),
+                branch: BranchName::new(branch),
+                path: PathBuf::from("/tmp/wt/tool/feat"),
+            }
+        }
+
+        #[test]
+        fn empty_branch_does_not_match_non_empty_query() {
+            let r = row("");
+            assert_eq!(match_task_name(&r, "login"), None);
+        }
+
+        #[test]
+        fn empty_query_matches_any_branch_as_partial() {
+            // An empty query string is a prefix of everything.
+            let r = row("feat/login");
+            assert_eq!(match_task_name(&r, ""), Some(MatchKind::Partial));
+        }
+
+        #[test]
+        fn slash_in_branch_matches_via_contains() {
+            let r = row("feat/JIRA-123");
+            assert_eq!(match_task_name(&r, "JIRA"), Some(MatchKind::Partial));
+        }
+    }
+
+    mod match_repo_name_extra {
+        use super::*;
+
+        fn row(repo: &str) -> TaskRow {
+            TaskRow {
+                status: TaskStatus::Parked,
+                repo: RepoKey::new(repo),
+                branch: BranchName::new("feat/login"),
+                path: PathBuf::from("/tmp/wt/tool/feat/login"),
+            }
+        }
+
+        #[test]
+        fn short_name_partial_match_is_partial() {
+            let r = row("github.com/acme/toolbox");
+            assert_eq!(match_repo_name(&r, "tool"), Some(MatchKind::Partial));
+        }
+
+        #[test]
+        fn short_name_exact_match_is_exact() {
+            let r = row("github.com/acme/tool");
+            assert_eq!(match_repo_name(&r, "tool"), Some(MatchKind::Exact));
+        }
+
+        #[test]
+        fn case_insensitive_short_name_exact_becomes_partial() {
+            // "Tool" != "tool" so it won't be exact, but partial via lowercase
+            let r = row("github.com/acme/Tool");
+            // short is "Tool", query is "tool"; "Tool" != "tool" so not exact,
+            // but "tool".to_lowercase().contains("tool") is true → Partial
+            assert_eq!(match_repo_name(&r, "tool"), Some(MatchKind::Partial));
+        }
     }
 }

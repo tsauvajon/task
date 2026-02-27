@@ -116,15 +116,54 @@ fn parse_nix_store_path<'a>(stdout: &'a str, package: &str) -> Result<&'a str> {
 mod tests {
     use super::parse_nix_store_path;
 
-    #[test]
-    fn parse_nix_store_path_returns_first_non_empty_line() {
-        let output = "\n  /nix/store/abc-tmux \n/nix/store/other\n";
-        let result = parse_nix_store_path(output, "nixpkgs#tmux").expect("store path");
-        assert_eq!(result, "/nix/store/abc-tmux");
-    }
+    mod parse_nix_store_path {
+        use super::*;
 
-    #[test]
-    fn parse_nix_store_path_rejects_empty_output() {
-        assert!(parse_nix_store_path("\n\n", "nixpkgs#tmux").is_err());
+        #[test]
+        fn returns_first_non_empty_line() {
+            let output = "\n  /nix/store/abc-tmux \n/nix/store/other\n";
+            let result = parse_nix_store_path(output, "nixpkgs#tmux").expect("store path");
+            assert_eq!(result, "/nix/store/abc-tmux");
+        }
+
+        #[test]
+        fn rejects_empty_output() {
+            assert!(parse_nix_store_path("\n\n", "nixpkgs#tmux").is_err());
+        }
+
+        #[test]
+        fn rejects_completely_empty_string() {
+            assert!(parse_nix_store_path("", "nixpkgs#git").is_err());
+        }
+
+        #[test]
+        fn returns_single_line_output() {
+            let output = "/nix/store/xyz123-git-2.44.0\n";
+            let result = parse_nix_store_path(output, "nixpkgs#git").expect("store path");
+            assert_eq!(result, "/nix/store/xyz123-git-2.44.0");
+        }
+
+        #[test]
+        fn skips_leading_blank_lines() {
+            let output = "\n\n\n/nix/store/abc-tmux\n";
+            let result = parse_nix_store_path(output, "nixpkgs#tmux").expect("store path");
+            assert_eq!(result, "/nix/store/abc-tmux");
+        }
+
+        #[test]
+        fn trims_whitespace_from_first_line() {
+            let output = "   /nix/store/abc-direnv   \n";
+            let result = parse_nix_store_path(output, "nixpkgs#direnv").expect("store path");
+            assert_eq!(result, "/nix/store/abc-direnv");
+        }
+
+        #[test]
+        fn error_message_mentions_package() {
+            let err = parse_nix_store_path("", "nixpkgs#mypackage").unwrap_err();
+            assert!(
+                err.to_string().contains("nixpkgs#mypackage"),
+                "error should name the package: {err}"
+            );
+        }
     }
 }

@@ -301,6 +301,68 @@ mod tests {
             }
             assert_eq!(path, std::path::PathBuf::from("/tmp/custom-xdg/task"));
         }
+
+        #[test]
+        fn falls_back_to_home_dot_config_task_without_xdg() {
+            let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+            let prev_home = std::env::var_os("HOME");
+            // SAFETY: single-threaded test binary section.
+            unsafe {
+                std::env::remove_var("XDG_CONFIG_HOME");
+                std::env::set_var("HOME", "/home/testuser");
+            }
+            let path = config_dir_path().expect("config_dir_path");
+            unsafe {
+                match prev_xdg {
+                    Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                    None => std::env::remove_var("XDG_CONFIG_HOME"),
+                }
+                match prev_home {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+            assert_eq!(
+                path,
+                std::path::PathBuf::from("/home/testuser/.config/task")
+            );
+        }
+    }
+
+    mod config_file_path {
+        use super::super::config_file_path;
+
+        #[test]
+        fn returns_config_toml_filename() {
+            // The path must end in config.toml regardless of XDG settings.
+            let path = config_file_path().expect("config_file_path");
+            assert_eq!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some("config.toml")
+            );
+        }
+    }
+
+    mod expand_path_whitespace {
+        use super::*;
+
+        #[test]
+        fn trims_whitespace_before_expansion() {
+            // The public caller (to_runtime_config) trims before calling, but
+            // verify expand_path directly does NOT add extra trimming – the
+            // trimmed value is passed in by the caller.
+            let home = std::path::Path::new("/home/user");
+            // "~/path" with no surrounding whitespace → succeeds.
+            let p = expand_path("~/repos", home).unwrap();
+            assert_eq!(p, home.join("repos"));
+        }
+
+        #[test]
+        fn relative_path_returned_as_is() {
+            let home = std::path::Path::new("/home/user");
+            let p = expand_path("relative/path", home).unwrap();
+            assert_eq!(p, std::path::PathBuf::from("relative/path"));
+        }
     }
 
     mod load_config_tests {

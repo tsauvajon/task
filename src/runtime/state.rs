@@ -79,65 +79,103 @@ mod tests {
 
     use super::{mark_onboarding_complete_at, onboarding_complete_at};
 
-    #[test]
-    fn onboarding_state_defaults_to_false_without_file() {
-        let path = env::temp_dir().join("task-rs-state-missing.toml");
-        let _ = fs::remove_file(&path);
+    mod onboarding_state {
+        use super::*;
 
-        assert!(!onboarding_complete_at(&path).expect("load onboarding state"));
-    }
+        #[test]
+        fn defaults_to_false_without_file() {
+            let path = env::temp_dir().join("task-rs-state-missing.toml");
+            let _ = fs::remove_file(&path);
 
-    #[test]
-    fn onboarding_state_round_trip() {
-        let dir = env::temp_dir().join("task-rs-state-round-trip");
-        let path = dir.join("state.toml");
-        let _ = fs::remove_dir_all(&dir);
+            assert!(!onboarding_complete_at(&path).expect("load onboarding state"));
+        }
 
-        mark_onboarding_complete_at(&path).expect("mark onboarding complete");
-        assert!(onboarding_complete_at(&path).expect("load onboarding state"));
+        #[test]
+        fn round_trip() {
+            let dir = env::temp_dir().join("task-rs-state-round-trip");
+            let path = dir.join("state.toml");
+            let _ = fs::remove_dir_all(&dir);
 
-        let _ = fs::remove_dir_all(&dir);
-    }
+            mark_onboarding_complete_at(&path).expect("mark onboarding complete");
+            assert!(onboarding_complete_at(&path).expect("load onboarding state"));
 
-    #[test]
-    fn onboarding_state_errors_on_invalid_toml() {
-        let path = env::temp_dir().join("task-rs-state-invalid.toml");
-        fs::write(&path, b"this is not valid toml ][").expect("write bad toml");
+            let _ = fs::remove_dir_all(&dir);
+        }
 
-        let err = onboarding_complete_at(&path).expect_err("should fail on bad toml");
-        assert!(
-            err.to_string().contains("Could not parse state file"),
-            "unexpected error: {err}"
-        );
+        #[test]
+        fn errors_on_invalid_toml() {
+            let path = env::temp_dir().join("task-rs-state-invalid.toml");
+            fs::write(&path, b"this is not valid toml ][").expect("write bad toml");
 
-        let _ = fs::remove_file(&path);
-    }
+            let err = onboarding_complete_at(&path).expect_err("should fail on bad toml");
+            assert!(
+                err.to_string().contains("Could not parse state file"),
+                "unexpected error: {err}"
+            );
 
-    #[test]
-    fn mark_onboarding_complete_creates_parent_directories() {
-        let dir = env::temp_dir().join("task-rs-state-new-parent");
-        let nested = dir.join("a").join("b").join("state.toml");
-        let _ = fs::remove_dir_all(&dir);
+            let _ = fs::remove_file(&path);
+        }
 
-        mark_onboarding_complete_at(&nested).expect("should create parents and write");
-        assert!(
-            onboarding_complete_at(&nested).expect("should read back"),
-            "onboarding should be true after marking"
-        );
+        #[test]
+        fn creates_parent_directories() {
+            let dir = env::temp_dir().join("task-rs-state-new-parent");
+            let nested = dir.join("a").join("b").join("state.toml");
+            let _ = fs::remove_dir_all(&dir);
 
-        let _ = fs::remove_dir_all(&dir);
-    }
+            mark_onboarding_complete_at(&nested).expect("should create parents and write");
+            assert!(
+                onboarding_complete_at(&nested).expect("should read back"),
+                "onboarding should be true after marking"
+            );
 
-    #[test]
-    fn onboarding_state_is_false_when_field_is_false() {
-        let path = env::temp_dir().join("task-rs-state-explicit-false.toml");
-        fs::write(&path, b"onboarding_complete = false").expect("write toml");
+            let _ = fs::remove_dir_all(&dir);
+        }
 
-        assert!(
-            !onboarding_complete_at(&path).expect("should parse"),
-            "should return false when field is false"
-        );
+        #[test]
+        fn is_false_when_field_is_false() {
+            let path = env::temp_dir().join("task-rs-state-explicit-false.toml");
+            fs::write(&path, b"onboarding_complete = false").expect("write toml");
 
-        let _ = fs::remove_file(&path);
+            assert!(
+                !onboarding_complete_at(&path).expect("should parse"),
+                "should return false when field is false"
+            );
+
+            let _ = fs::remove_file(&path);
+        }
+
+        #[test]
+        fn overwrites_existing_state() {
+            let path = env::temp_dir().join("task-rs-state-overwrite.toml");
+            // Write an initial "false" state.
+            fs::write(&path, b"onboarding_complete = false").expect("write initial state");
+            assert!(!onboarding_complete_at(&path).expect("initial read"));
+
+            // Now overwrite it to true.
+            mark_onboarding_complete_at(&path).expect("mark complete");
+            assert!(
+                onboarding_complete_at(&path).expect("read after overwrite"),
+                "should be true after marking complete"
+            );
+
+            let _ = fs::remove_file(&path);
+        }
+
+        #[test]
+        fn written_file_is_valid_toml() {
+            let dir = env::temp_dir().join("task-rs-state-valid-toml");
+            let path = dir.join("state.toml");
+            let _ = fs::remove_dir_all(&dir);
+
+            mark_onboarding_complete_at(&path).expect("mark complete");
+            let text = fs::read_to_string(&path).expect("read state file");
+            let parsed = toml::from_str::<crate::runtime::state::TaskStateFile>(&text);
+            assert!(
+                parsed.is_ok(),
+                "written state file must be valid TOML: {text}"
+            );
+
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 }

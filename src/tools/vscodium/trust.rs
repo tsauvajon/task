@@ -111,11 +111,11 @@ fn normalize_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs};
+    use std::{env, fs, path::Path};
 
     use rusqlite::Connection;
 
-    use super::seed_trusted_roots;
+    use super::{merge_trust_model, normalize_path, seed_trusted_roots};
 
     fn read_trust_model(path: &std::path::Path) -> String {
         let db_path = path.join("User/globalStorage/state.vscdb");
@@ -127,6 +127,90 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("read trust model")
+    }
+
+    mod normalize_path_tests {
+        use super::*;
+
+        #[test]
+        fn strips_trailing_slash() {
+            assert_eq!(normalize_path(Path::new("/home/user/")), "/home/user");
+        }
+
+        #[test]
+        fn preserves_root_slash() {
+            assert_eq!(normalize_path(Path::new("/")), "/");
+        }
+
+        #[test]
+        fn leaves_path_without_trailing_slash_unchanged() {
+            assert_eq!(normalize_path(Path::new("/home/user")), "/home/user");
+        }
+    }
+
+    mod merge_trust_model_tests {
+        use super::*;
+
+        #[test]
+        fn creates_new_model_when_existing_is_none() {
+            let result = merge_trust_model(None, &["/home/user/dev".to_string()])
+                .expect("merge trust model");
+            let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+            let entries = parsed["uriTrustInfo"].as_array().expect("array");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0]["uri"]["path"], "/home/user/dev");
+        }
+
+        #[test]
+        fn does_not_duplicate_existing_entry() {
+            let first = merge_trust_model(None, &["/home/user/dev".to_string()]).unwrap();
+            let second = merge_trust_model(Some(&first), &["/home/user/dev".to_string()]).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&second).expect("valid json");
+            let entries = parsed["uriTrustInfo"].as_array().expect("array");
+            assert_eq!(entries.len(), 1, "duplicate should not be inserted");
+        }
+
+        #[test]
+        fn adds_new_root_without_removing_existing() {
+            let first = merge_trust_model(None, &["/home/user/dev".to_string()]).unwrap();
+            let second = merge_trust_model(
+                Some(&first),
+                &["/home/user/dev".to_string(), "/mnt/repos".to_string()],
+            )
+            .unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&second).expect("valid json");
+            let entries = parsed["uriTrustInfo"].as_array().expect("array");
+            assert_eq!(entries.len(), 2);
+        }
+
+        #[test]
+        fn handles_invalid_existing_json_as_empty() {
+            let result = merge_trust_model(Some("not valid json"), &["/home/user".to_string()])
+                .expect("merge trust model");
+            let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+            let entries = parsed["uriTrustInfo"].as_array().expect("array");
+            assert_eq!(entries.len(), 1);
+        }
+
+        #[test]
+        fn empty_roots_list_leaves_uri_trust_info_empty() {
+            let result = merge_trust_model(None, &[]).expect("merge trust model");
+            let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+            let entries = parsed["uriTrustInfo"].as_array().expect("array");
+            assert!(entries.is_empty());
+        }
+
+        #[test]
+        fn trusted_entry_has_expected_fields() {
+            let result = merge_trust_model(None, &["/mnt/work".to_string()]).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+            let entry = &parsed["uriTrustInfo"][0];
+            assert_eq!(entry["trusted"], true);
+            assert_eq!(entry["uri"]["scheme"], "file");
+            assert_eq!(entry["uri"]["path"], "/mnt/work");
+            assert_eq!(entry["uri"]["fsPath"], "/mnt/work");
+            assert_eq!(entry["uri"]["external"], "file:///mnt/work");
+        }
     }
 
     #[test]

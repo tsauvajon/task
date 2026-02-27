@@ -544,5 +544,248 @@ mod tests {
             let state = UiState::new(vec![], vec![], None);
             assert!(state.selected_repo_row().is_none());
         }
+
+        #[test]
+        fn selected_task_row_returns_first_by_default() {
+            let state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/a"),
+                    task_row_for_repo("github.com/acme/b"),
+                ],
+                vec![],
+                None,
+            );
+            assert_eq!(
+                state.selected_task_row().map(|r| r.repo.to_string()),
+                Some("github.com/acme/a".to_string())
+            );
+        }
+
+        #[test]
+        fn selected_repo_row_returns_first_by_default() {
+            let state = UiState::new(
+                vec![],
+                vec![
+                    repo_row("github.com/acme/a", 1, 0),
+                    repo_row("github.com/acme/b", 2, 0),
+                ],
+                None,
+            );
+            assert_eq!(
+                state.selected_repo_row().map(|r| r.repo.as_str()),
+                Some("github.com/acme/a")
+            );
+        }
+    }
+
+    mod select_repo_for_tasks {
+        use super::*;
+
+        #[test]
+        fn sets_scope_and_switches_to_tasks_view() {
+            use super::super::{InputMode, ViewMode};
+            let mut state = UiState::new(vec![], vec![], None);
+            state.view = ViewMode::Repos;
+            state.mode = InputMode::Filter;
+            state.select_repo_for_tasks("github.com/acme/app".to_string());
+            assert_eq!(
+                state.task_repo_scope,
+                Some("github.com/acme/app".to_string())
+            );
+            assert_eq!(state.view, ViewMode::Tasks);
+            assert_eq!(state.mode, InputMode::Normal);
+        }
+    }
+
+    mod task_filter_matching {
+        use super::*;
+
+        #[test]
+        fn matches_by_branch_name() {
+            use std::path::PathBuf;
+
+            use crate::runtime::{BranchName, RepoKey, task_rows::TaskStatus};
+
+            let mut state = UiState::new(
+                vec![
+                    crate::runtime::task_rows::TaskRow {
+                        status: TaskStatus::Open,
+                        repo: RepoKey::new("github.com/acme/app"),
+                        branch: BranchName::new("feature-x"),
+                        path: PathBuf::from("/tmp/a"),
+                    },
+                    crate::runtime::task_rows::TaskRow {
+                        status: TaskStatus::Open,
+                        repo: RepoKey::new("github.com/acme/app"),
+                        branch: BranchName::new("main"),
+                        path: PathBuf::from("/tmp/b"),
+                    },
+                ],
+                vec![],
+                None,
+            );
+            state.filter_text = "feature".to_string();
+            state.apply_task_filter();
+            assert_eq!(state.task_filtered_indices, vec![0]);
+        }
+
+        #[test]
+        fn matches_by_path() {
+            use std::path::PathBuf;
+
+            use crate::runtime::{BranchName, RepoKey, task_rows::TaskStatus};
+
+            let mut state = UiState::new(
+                vec![
+                    crate::runtime::task_rows::TaskRow {
+                        status: TaskStatus::Open,
+                        repo: RepoKey::new("github.com/acme/app"),
+                        branch: BranchName::new("main"),
+                        path: PathBuf::from("/projects/special/path"),
+                    },
+                    crate::runtime::task_rows::TaskRow {
+                        status: TaskStatus::Open,
+                        repo: RepoKey::new("github.com/acme/app"),
+                        branch: BranchName::new("main"),
+                        path: PathBuf::from("/other/path"),
+                    },
+                ],
+                vec![],
+                None,
+            );
+            state.filter_text = "special".to_string();
+            state.apply_task_filter();
+            assert_eq!(state.task_filtered_indices, vec![0]);
+        }
+
+        #[test]
+        fn empty_filter_shows_all_tasks() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/a"),
+                    task_row_for_repo("github.com/acme/b"),
+                    task_row_for_repo("github.com/acme/c"),
+                ],
+                vec![],
+                None,
+            );
+            state.filter_text = String::new();
+            state.apply_task_filter();
+            assert_eq!(state.task_filtered_indices.len(), 3);
+        }
+
+        #[test]
+        fn filter_is_case_insensitive() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/ACME/App"),
+                    task_row_for_repo("github.com/other/repo"),
+                ],
+                vec![],
+                None,
+            );
+            state.filter_text = "acme".to_string();
+            state.apply_task_filter();
+            assert_eq!(state.task_filtered_indices, vec![0]);
+        }
+    }
+
+    mod repo_navigation {
+        use super::*;
+
+        #[test]
+        fn move_next_advances_repo_selection() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(
+                vec![],
+                vec![
+                    repo_row("github.com/acme/a", 1, 0),
+                    repo_row("github.com/acme/b", 2, 0),
+                ],
+                None,
+            );
+            state.view = ViewMode::Repos;
+            assert_eq!(state.repo_selected, 0);
+            state.move_next();
+            assert_eq!(state.repo_selected, 1);
+        }
+
+        #[test]
+        fn move_next_clamps_at_last_repo() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], vec![repo_row("github.com/acme/a", 1, 0)], None);
+            state.view = ViewMode::Repos;
+            state.move_next();
+            state.move_next();
+            assert_eq!(state.repo_selected, 0);
+        }
+
+        #[test]
+        fn move_prev_decrements_repo_selection() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(
+                vec![],
+                vec![
+                    repo_row("github.com/acme/a", 1, 0),
+                    repo_row("github.com/acme/b", 2, 0),
+                ],
+                None,
+            );
+            state.view = ViewMode::Repos;
+            state.repo_selected = 1;
+            state.move_prev();
+            assert_eq!(state.repo_selected, 0);
+        }
+
+        #[test]
+        fn move_prev_saturates_at_zero_for_repos() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], vec![repo_row("github.com/acme/a", 1, 0)], None);
+            state.view = ViewMode::Repos;
+            state.move_prev();
+            assert_eq!(state.repo_selected, 0);
+        }
+
+        #[test]
+        fn move_next_does_nothing_on_empty_repo_list() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], vec![], None);
+            state.view = ViewMode::Repos;
+            state.move_next(); // must not panic
+            assert_eq!(state.repo_selected, 0);
+        }
+    }
+
+    mod initial_state {
+        use super::*;
+
+        #[test]
+        fn new_state_has_ready_message() {
+            let state = UiState::new(vec![], vec![], None);
+            assert_eq!(state.message, "Ready");
+        }
+
+        #[test]
+        fn new_state_starts_in_tasks_view_normal_mode() {
+            use super::super::{InputMode, ViewMode};
+            let state = UiState::new(vec![], vec![], None);
+            assert_eq!(state.view, ViewMode::Tasks);
+            assert_eq!(state.mode, InputMode::Normal);
+        }
+
+        #[test]
+        fn new_state_show_help_is_false() {
+            let state = UiState::new(vec![], vec![], None);
+            assert!(!state.show_help);
+        }
+
+        #[test]
+        fn task_repo_scope_is_stored() {
+            let state = UiState::new(vec![], vec![], Some("github.com/acme/app".to_string()));
+            assert_eq!(
+                state.task_repo_scope,
+                Some("github.com/acme/app".to_string())
+            );
+        }
     }
 }

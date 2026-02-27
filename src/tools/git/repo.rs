@@ -158,6 +158,69 @@ fn looks_like_host_path(input: &str) -> bool {
 }
 
 #[cfg(test)]
+mod private_tests {
+    use super::{is_git_url, looks_like_host_path};
+
+    mod is_git_url {
+        use super::*;
+
+        #[test]
+        fn recognizes_http() {
+            assert!(is_git_url("http://github.com/acme/repo.git"));
+        }
+
+        #[test]
+        fn recognizes_https() {
+            assert!(is_git_url("https://github.com/acme/repo.git"));
+        }
+
+        #[test]
+        fn recognizes_ssh_scheme() {
+            assert!(is_git_url("ssh://git@github.com/acme/repo.git"));
+        }
+
+        #[test]
+        fn recognizes_git_at() {
+            assert!(is_git_url("git@github.com:acme/repo.git"));
+        }
+
+        #[test]
+        fn rejects_plain_host_path() {
+            assert!(!is_git_url("github.com/acme/repo"));
+        }
+
+        #[test]
+        fn rejects_short_name() {
+            assert!(!is_git_url("myrepo"));
+        }
+    }
+
+    mod looks_like_host_path {
+        use super::*;
+
+        #[test]
+        fn matches_host_with_dot_and_path() {
+            assert!(looks_like_host_path("github.com/acme/repo"));
+        }
+
+        #[test]
+        fn rejects_host_without_path() {
+            assert!(!looks_like_host_path("github.com"));
+        }
+
+        #[test]
+        fn rejects_plain_name_without_dot() {
+            assert!(!looks_like_host_path("myrepo/something"));
+        }
+
+        #[test]
+        fn rejects_empty_string() {
+            assert!(!looks_like_host_path(""));
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::{env, fs};
 
