@@ -67,8 +67,11 @@ mod tests {
 
         #[test]
         fn failed_accepts_string_and_str() {
-            let _ = Error::failed("from &str");
-            let _ = Error::failed(String::from("from String"));
+            let from_str = Error::failed("from &str");
+            let from_string = Error::failed(String::from("from String"));
+
+            assert_eq!(from_str.to_string(), "from &str");
+            assert_eq!(from_string.to_string(), "from String");
         }
     }
 

@@ -255,11 +255,13 @@ mod tests {
 
         #[test]
         fn returns_false_when_tmux_var_absent() {
-            // We cannot mutate the live env safely in a parallel test runner, so
-            // we test the helper via a thin wrapper that takes the env value.
-            // The function itself is trivially verified: if TMUX is unset the
-            // call should not panic and should return a bool.
-            let _ = is_inside_tmux(); // smoke-test: must not panic
+            // We cannot mutate global env safely in parallel tests, so assert
+            // this helper matches the predicate computed from current env.
+            let expected = std::env::var("TMUX")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .is_some();
+            assert_eq!(is_inside_tmux(), expected);
         }
 
         #[test]

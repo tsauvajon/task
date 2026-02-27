@@ -229,9 +229,14 @@ mod tests {
             // Bare repos have no working tree and HEAD is symbolic, but
             // `git symbolic-ref --quiet --short HEAD` returns a non-zero exit
             // in a bare repo when there are no commits (detached or unborn).
-            // Either way the function must not panic.
+            // Depending on git defaults, an unborn bare repo can report
+            // "master", "main", or nothing; all are acceptable.
             let dir = make_bare_repo("current-branch-bare");
-            let _branch = current_branch(&dir); // must not panic
+            let branch = current_branch(&dir);
+            assert!(matches!(
+                branch.as_deref(),
+                None | Some("main") | Some("master")
+            ));
             let _ = fs::remove_dir_all(&dir);
         }
     }
