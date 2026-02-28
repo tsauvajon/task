@@ -1589,8 +1589,8 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "sysinfo",
+ "thiserror 2.0.18",
  "toml",
 ]
 

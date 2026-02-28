@@ -1,12 +1,5 @@
 use std::path::Path;
 
-pub fn parse_cmdline_bytes(bytes: &[u8]) -> Vec<String> {
-    bytes
-        .split(|&b| b == b'\0')
-        .filter(|part| !part.is_empty())
-        .map(|part| String::from_utf8_lossy(part).into_owned())
-        .collect()
-}
 pub fn cmdline_matches_user_data_dir(args: &[String], user_data_dir: &Path) -> bool {
     let Some(arg0) = args.first() else {
         return false;

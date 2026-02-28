@@ -11,7 +11,7 @@ use crate::{
     tools::{
         opencode,
         vscodium::workflow::{
-            close_windows, codium_state, open_window, seed_task_trusted_roots, CodiumState,
+            CodiumState, close_windows, codium_state, open_window, seed_task_trusted_roots,
         },
     },
 };
@@ -209,8 +209,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        finish_teardown_actions, is_inside_tmux, new_session_args, park_teardown_actions,
-        SessionStartup, TeardownAction,
+        SessionStartup, TeardownAction, finish_teardown_actions, is_inside_tmux, new_session_args,
+        park_teardown_actions,
     };
     use crate::runtime::process::{CommandPlan, ManagedTool};
 
