@@ -10,7 +10,9 @@ use crate::{
     runtime::process::{self, CommandPlan},
     tools::{
         opencode,
-        vscodium::workflow::{CodiumState, close_windows, codium_state, open_window},
+        vscodium::workflow::{
+            CodiumState, close_windows, codium_state, open_window, seed_task_trusted_roots,
+        },
     },
 };
 
@@ -72,14 +74,20 @@ fn new_session_args(session: &str, path: &Path, startup: SessionStartup) -> Vec<
     args
 }
 
-/// Reopens VSCodium for the given task if it is not already running.
-/// On failure to detect state, warns and attempts to reopen (best effort).
+/// Ensures VSCodium trusted roots are seeded and codium is running for the given task.
+///
+/// Trusted roots are always seeded unconditionally so that config changes take
+/// effect on the next codium restart, even when codium is already running.
+/// If codium is not running, a new window is opened.
 fn ensure_codium_running(
     repo_key: &str,
     branch: &str,
     path: &Path,
     codium_trusted_roots: &[PathBuf],
 ) {
+    // Always seed trusted roots so they're ready for the current or next launch.
+    seed_task_trusted_roots(repo_key, branch, codium_trusted_roots);
+
     match codium_state(repo_key, branch) {
         Ok(CodiumState::Running) => {}
         Ok(CodiumState::NotRunning) | Err(_) => {
