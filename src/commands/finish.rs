@@ -107,7 +107,7 @@ fn is_status_dirty(status: &str) -> bool {
 mod tests {
     use std::{env, fs, path::PathBuf};
 
-    use super::{WorktreeState, classify_worktree_state, is_status_dirty};
+    use super::{classify_worktree_state, is_status_dirty, WorktreeState};
 
     struct TempDir(PathBuf);
 
@@ -232,7 +232,7 @@ mod tests {
     mod worktree_state_classification {
         use std::{env, fs};
 
-        use super::super::{WorktreeState, classify_worktree_state};
+        use super::super::{classify_worktree_state, WorktreeState};
 
         struct TempDir(std::path::PathBuf);
 

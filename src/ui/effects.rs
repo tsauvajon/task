@@ -70,10 +70,11 @@ mod tests {
         let base = env::temp_dir().join("task-rs-ui-effects-tests");
         let repos = base.join("repos");
         let wt = base.join("wt");
+        let detached = base.join("detached");
         // create_dir_all is idempotent — safe across parallel test threads.
         fs::create_dir_all(&repos).unwrap();
         fs::create_dir_all(&wt).unwrap();
-        RuntimeEnvironment::from_paths(&repos, &wt)
+        RuntimeEnvironment::from_paths(&repos, &wt, &detached)
     }
 
     fn empty_state() -> UiState {

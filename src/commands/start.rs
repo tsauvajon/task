@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::{
     error::{Error, Result},
-    runtime::{BranchName, environment::RuntimeEnvironment, process},
+    runtime::{environment::RuntimeEnvironment, process, BranchName},
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs, ref_exists, rev_exists},
         worktrees::{add_existing_branch, add_from_base, add_tracking_remote_branch},
@@ -136,7 +136,7 @@ mod tests {
     use std::{env, fs, path::PathBuf};
 
     use super::{
-        BranchStrategy, WorktreePathState, classify_worktree_path, resolve_branch_strategy,
+        classify_worktree_path, resolve_branch_strategy, BranchStrategy, WorktreePathState,
     };
 
     struct TempDir(PathBuf);

@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dialoguer::{Input, theme::ColorfulTheme};
+use dialoguer::{theme::ColorfulTheme, Input};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 pub struct TaskConfig {
     pub repos_dir: PathBuf,
     pub wt_dir: PathBuf,
+    pub detached_dir: PathBuf,
     pub codium_trusted_roots: Vec<PathBuf>,
 }
 
@@ -20,6 +21,7 @@ pub struct TaskConfig {
 struct TaskConfigFile {
     repos_dir: String,
     wt_dir: String,
+    detached_dir: String,
     #[serde(default)]
     vscodium: Option<VscodiumConfigFile>,
 }
@@ -76,6 +78,7 @@ fn bootstrap_config(config_path: &Path) -> Result<TaskConfig> {
     let home = home_dir()?;
     let default_repos = home.join("dev/repos");
     let default_wt = home.join("dev/wt");
+    let default_detached = home.join("dev/detached");
 
     let repos_dir: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("repos_dir")
@@ -87,9 +90,15 @@ fn bootstrap_config(config_path: &Path) -> Result<TaskConfig> {
         .default(default_wt.display().to_string())
         .interact_text()?;
 
+    let detached_dir: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("detached_dir")
+        .default(default_detached.display().to_string())
+        .interact_text()?;
+
     let config = to_runtime_config(TaskConfigFile {
         repos_dir,
         wt_dir,
+        detached_dir,
         vscodium: None,
     })?;
     write_config(config_path, &config)?;
@@ -109,6 +118,7 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<()> {
     let file = TaskConfigFile {
         repos_dir: config.repos_dir.display().to_string(),
         wt_dir: config.wt_dir.display().to_string(),
+        detached_dir: config.detached_dir.display().to_string(),
         vscodium: if config.codium_trusted_roots.is_empty() {
             None
         } else {
@@ -132,6 +142,7 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig> {
     let home = home_dir()?;
     let repos_dir = expand_path(file.repos_dir.trim(), &home)?;
     let wt_dir = expand_path(file.wt_dir.trim(), &home)?;
+    let detached_dir = expand_path(file.detached_dir.trim(), &home)?;
     let codium_trusted_roots = file
         .vscodium
         .map(|config| {
@@ -146,6 +157,7 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig> {
     Ok(TaskConfig {
         repos_dir,
         wt_dir,
+        detached_dir,
         codium_trusted_roots,
     })
 }
@@ -191,7 +203,7 @@ pub fn is_interactive_terminal() -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
+    use super::{expand_path, to_runtime_config, TaskConfigFile, VscodiumConfigFile};
 
     mod expand_path {
         use super::*;
@@ -240,10 +252,11 @@ mod tests {
         use super::*;
 
         #[test]
-        fn supports_legacy_file_without_vscodium_section() {
+        fn supports_file_without_vscodium_section() {
             let config = to_runtime_config(TaskConfigFile {
                 repos_dir: "~/dev/repos".to_string(),
                 wt_dir: "~/dev/wt".to_string(),
+                detached_dir: "~/dev/detached".to_string(),
                 vscodium: None,
             })
             .expect("runtime config");
@@ -256,6 +269,7 @@ mod tests {
             let config = to_runtime_config(TaskConfigFile {
                 repos_dir: "~/dev/repos".to_string(),
                 wt_dir: "~/dev/wt".to_string(),
+                detached_dir: "~/dev/detached".to_string(),
                 vscodium: Some(VscodiumConfigFile {
                     trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_string()],
                 }),
@@ -267,16 +281,18 @@ mod tests {
         }
 
         #[test]
-        fn expands_repos_and_wt_dirs() {
+        fn expands_repos_wt_and_detached_dirs() {
             let config = to_runtime_config(TaskConfigFile {
                 repos_dir: "~/repos".to_string(),
                 wt_dir: "~/wt".to_string(),
+                detached_dir: "~/detached".to_string(),
                 vscodium: None,
             })
             .expect("runtime config");
 
             assert!(config.repos_dir.ends_with("repos"));
             assert!(config.wt_dir.ends_with("wt"));
+            assert!(config.detached_dir.ends_with("detached"));
         }
     }
 
@@ -397,13 +413,14 @@ mod tests {
             let config_path = dir.path().join("config.toml");
             fs::write(
                 &config_path,
-                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\n",
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n",
             )
             .unwrap();
 
             let config = load_config(&config_path).expect("load minimal config");
             assert_eq!(config.repos_dir, PathBuf::from("/tmp/repos"));
             assert_eq!(config.wt_dir, PathBuf::from("/tmp/wt"));
+            assert_eq!(config.detached_dir, PathBuf::from("/tmp/detached"));
             assert!(config.codium_trusted_roots.is_empty());
         }
 
@@ -413,7 +430,7 @@ mod tests {
             let config_path = dir.path().join("config.toml");
             fs::write(
                 &config_path,
-                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\n\n[vscodium]\ntrusted_roots = [\"/tmp/wt/github.com/me\"]\n",
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n\n[vscodium]\ntrusted_roots = [\"/tmp/wt/github.com/me\"]\n",
             )
             .unwrap();
 
@@ -451,14 +468,18 @@ mod tests {
             fs::write(&config_path, "repos_dir = \"/tmp/repos\"\n").unwrap();
 
             let err = load_config(&config_path).unwrap_err();
-            assert!(err.to_string().contains("parse") || err.to_string().contains("wt_dir"));
+            assert!(
+                err.to_string().contains("parse")
+                    || err.to_string().contains("wt_dir")
+                    || err.to_string().contains("detached_dir")
+            );
         }
     }
 
     mod write_config_tests {
         use std::{env, fs, path::PathBuf};
 
-        use super::super::{TaskConfig, load_config, write_config};
+        use super::super::{load_config, write_config, TaskConfig};
 
         struct TempDir(PathBuf);
 
@@ -488,6 +509,7 @@ mod tests {
             let config = TaskConfig {
                 repos_dir: PathBuf::from("/tmp/repos"),
                 wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: vec![PathBuf::from("/tmp/trusted")],
             };
 
@@ -496,6 +518,7 @@ mod tests {
 
             assert_eq!(loaded.repos_dir, config.repos_dir);
             assert_eq!(loaded.wt_dir, config.wt_dir);
+            assert_eq!(loaded.detached_dir, config.detached_dir);
             assert_eq!(loaded.codium_trusted_roots, config.codium_trusted_roots);
         }
 
@@ -506,6 +529,7 @@ mod tests {
             let config = TaskConfig {
                 repos_dir: PathBuf::from("/tmp/repos"),
                 wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
             };
 
@@ -520,6 +544,7 @@ mod tests {
             let config = TaskConfig {
                 repos_dir: PathBuf::from("/tmp/repos"),
                 wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
             };
 

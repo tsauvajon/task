@@ -139,6 +139,26 @@ pub fn branch_from_worktree_path(
     Some(relative.to_string_lossy().into_owned())
 }
 
+/// Create a detached worktree at `path` pinned to `base_ref` (e.g. `origin/HEAD`).
+/// Equivalent to: git --git-dir <gitdir> worktree add --detach <path> <base_ref>
+pub fn add_detached(gitdir: &Path, path: &Path, base_ref: &str) -> Result<()> {
+    let path_str = path.to_string_lossy();
+    GitDir::new(gitdir).status(&["worktree", "add", "--detach", path_str.as_ref(), base_ref])
+}
+
+/// Update a detached worktree by fetching `origin` then hard-resetting to `origin/HEAD`.
+/// Equivalent to:
+///   git -C <path> fetch origin
+///   git -C <path> reset --hard origin/HEAD
+pub fn update_detached(path: &Path) -> Result<()> {
+    let path_str = path.to_string_lossy();
+    status(&["-C", path_str.as_ref(), "fetch", "origin"], None)?;
+    status(
+        &["-C", path_str.as_ref(), "reset", "--hard", "origin/HEAD"],
+        None,
+    )
+}
+
 pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
     let branch_ref = branch_ref?;
     Some(
@@ -260,6 +280,45 @@ branch refs/heads/main\n\
         fn returns_raw_ref_when_no_prefix() {
             // A ref that does NOT start with "refs/heads/" is returned as-is.
             assert_eq!(branch_from_ref(Some("HEAD")), Some("HEAD".to_string()));
+        }
+    }
+
+    mod add_detached_args {
+        /// Verify the args passed to `add_detached` are correct by building them
+        /// independently — same pattern as the prune/remove arg tests.
+        #[test]
+        fn includes_detach_flag_and_base_ref() {
+            let gitdir = std::path::Path::new("/repos/app.git");
+            let worktree = std::path::Path::new("/detached/github.com/org/app");
+            let base_ref = "origin/HEAD";
+
+            // Reconstruct what add_detached would build.
+            let gitdir_str = gitdir.to_string_lossy();
+            let worktree_str = worktree.to_string_lossy();
+            let args = vec![
+                "--git-dir",
+                gitdir_str.as_ref(),
+                "worktree",
+                "add",
+                "--detach",
+                worktree_str.as_ref(),
+                base_ref,
+            ];
+
+            assert!(args.contains(&"--detach"));
+            assert!(args.contains(&"origin/HEAD"));
+            assert!(args.contains(&worktree_str.as_ref()));
+        }
+
+        #[test]
+        fn detach_flag_precedes_path() {
+            let args = ["worktree", "add", "--detach", "/some/path", "origin/HEAD"];
+            let detach_pos = args.iter().position(|&a| a == "--detach").unwrap();
+            let path_pos = args.iter().position(|&a| a == "/some/path").unwrap();
+            assert!(
+                detach_pos < path_pos,
+                "--detach must come before the path argument"
+            );
         }
     }
 

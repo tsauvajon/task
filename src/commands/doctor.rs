@@ -69,6 +69,7 @@ fn check(env: &RuntimeEnvironment) -> DoctorReport {
 
     println!("repos_dir: {}", layout.repos_dir().display());
     println!("wt_dir: {}", layout.wt_dir().display());
+    println!("detached_dir: {}", layout.detached_dir().display());
 
     if process::nix_available() {
         println!("[ok]      nix");
@@ -79,7 +80,7 @@ fn check(env: &RuntimeEnvironment) -> DoctorReport {
         missing_required = true;
     }
 
-    if layout.repos_dir().is_dir() && layout.wt_dir().is_dir() {
+    if layout.repos_dir().is_dir() && layout.wt_dir().is_dir() && layout.detached_dir().is_dir() {
         println!("[ok]      configured layout exists");
     } else {
         println!("[missing] configured layout does not exist");
@@ -102,7 +103,7 @@ fn apply_fixes(env: &RuntimeEnvironment, approval: SetupApproval<'_>) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{DoctorAction, decide_action};
+    use super::{decide_action, DoctorAction};
 
     mod decide_action {
         use super::*;
