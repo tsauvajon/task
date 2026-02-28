@@ -1,4 +1,4 @@
-use dialoguer::{Confirm, theme::ColorfulTheme};
+use dialoguer::{theme::ColorfulTheme, Confirm};
 
 use crate::{
     error::{Error, Result},
@@ -57,6 +57,10 @@ pub fn run_full_setup(env: &RuntimeEnvironment) -> Result<()> {
     env.tasks().ensure_layout()?;
     process::log(&format!("Repos dir: {}", layout.repos_dir().display()));
     process::log(&format!("Worktrees dir: {}", layout.wt_dir().display()));
+    process::log(&format!(
+        "Detached dir: {}",
+        layout.detached_dir().display()
+    ));
 
     if !process::nix_available() {
         return Err(Error::failed(
@@ -128,8 +132,8 @@ fn should_enable_corepack(node_installed: bool, corepack_installed: bool) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        SetupApproval, ensure_interactive_terminal, resolve_setup_approval_with,
-        should_enable_corepack,
+        ensure_interactive_terminal, resolve_setup_approval_with, should_enable_corepack,
+        SetupApproval,
     };
 
     mod ensure_interactive_terminal {

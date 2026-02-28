@@ -58,6 +58,7 @@ impl TaskResolver {
     pub fn ensure_layout(&self) -> Result<()> {
         fs::create_dir_all(self.layout.repos_dir())?;
         fs::create_dir_all(self.layout.wt_dir())?;
+        fs::create_dir_all(self.layout.detached_dir())?;
         Ok(())
     }
 
@@ -471,9 +472,9 @@ mod tests {
         assert!(status.success(), "git init --bare failed");
     }
 
-    /// Build a `TaskResolver` from temp repos and wt dirs.
+    /// Build a `TaskResolver` from temp repos, wt, and detached dirs.
     fn resolver_for(repos_dir: &std::path::Path, wt_dir: &std::path::Path) -> TaskResolver {
-        let layout = WorkspacePaths::new(repos_dir, wt_dir);
+        let layout = WorkspacePaths::new(repos_dir, wt_dir, std::path::Path::new("/tmp/detached"));
         TaskResolver::new(layout, Vec::new())
     }
 

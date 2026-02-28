@@ -1,5 +1,5 @@
 use crate::{
-    commands::{RepoCommand, clone},
+    commands::{clone, RepoCommand},
     error::Result,
     runtime::{environment::RuntimeEnvironment, process},
 };
@@ -70,7 +70,8 @@ mod tests {
     }
 
     fn env_for(repos_dir: &std::path::Path, wt_dir: &std::path::Path) -> RuntimeEnvironment {
-        RuntimeEnvironment::from_paths(repos_dir, wt_dir)
+        let detached_dir = repos_dir.parent().unwrap().join("detached");
+        RuntimeEnvironment::from_paths(repos_dir, wt_dir, &detached_dir)
     }
 
     #[test]

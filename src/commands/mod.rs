@@ -6,6 +6,7 @@ pub mod clone;
 pub mod complete;
 pub mod completions;
 pub mod coverage;
+pub mod detach;
 pub mod doctor;
 pub mod finish;
 pub mod list;
@@ -23,6 +24,8 @@ use crate::{
     error::Result,
     runtime::{environment::RuntimeEnvironment, setup},
 };
+
+use detach::DetachCommand;
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper")]
@@ -84,6 +87,11 @@ pub enum Command {
     Coverage { worktree_path: Option<String> },
     #[command(about = "Rebase task branch onto a base ref")]
     Rebase { args: Vec<String> },
+    #[command(about = "Manage detached default-branch worktrees")]
+    Detach {
+        #[command(subcommand)]
+        command: DetachCommand,
+    },
     #[command(about = "Generate shell completion scripts")]
     Completions { shell: CompletionShell },
     #[command(name = "__complete", hide = true, trailing_var_arg = true)]
@@ -157,6 +165,7 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
             coverage::run(&context, worktree_path.as_deref())
         }
         Some(Command::Rebase { args }) => rebase::run(&context, &args),
+        Some(Command::Detach { command }) => detach::run(&context, command),
         Some(Command::Completions { .. }) | Some(Command::Complete { .. }) => {
             unreachable!("completion commands are handled before runtime initialization")
         }
@@ -166,7 +175,7 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
 fn should_auto_onboard(command: Option<&Command>) -> bool {
     !matches!(
         command,
-        Some(Command::Bootstrap) | Some(Command::Doctor { .. })
+        Some(Command::Bootstrap) | Some(Command::Doctor { .. }) | Some(Command::Detach { .. })
     )
 }
 
@@ -174,7 +183,7 @@ fn should_auto_onboard(command: Option<&Command>) -> bool {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command, CompletionShell, RepoCommand, should_auto_onboard};
+    use super::{should_auto_onboard, Cli, Command, CompletionShell, DetachCommand, RepoCommand};
 
     mod cli_parsing {
         use super::*;
@@ -356,6 +365,100 @@ mod tests {
             let cli = Cli::parse_from(["task"]);
             assert_eq!(cli.command, None);
         }
+
+        #[test]
+        fn parses_detach_add() {
+            let cli = Cli::parse_from(["task", "detach", "add", "myrepo"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::Add {
+                        repo: "myrepo".to_string(),
+                    },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_detach_update_with_repo() {
+            let cli = Cli::parse_from(["task", "detach", "update", "myrepo"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::Update {
+                        repo: Some("myrepo".to_string()),
+                        all: false,
+                    },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_detach_update_without_repo() {
+            let cli = Cli::parse_from(["task", "detach", "update"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::Update {
+                        repo: None,
+                        all: false,
+                    },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_detach_update_all_flag() {
+            let cli = Cli::parse_from(["task", "detach", "update", "--all"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::Update {
+                        repo: None,
+                        all: true,
+                    },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_detach_remove() {
+            let cli = Cli::parse_from(["task", "detach", "remove", "myrepo"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::Remove {
+                        repo: "myrepo".to_string(),
+                        force: false,
+                    },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_detach_remove_force() {
+            let cli = Cli::parse_from(["task", "detach", "remove", "myrepo", "--force"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::Remove {
+                        repo: "myrepo".to_string(),
+                        force: true,
+                    },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_detach_list() {
+            let cli = Cli::parse_from(["task", "detach", "list"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::List,
+                })
+            );
+        }
     }
 
     mod auto_onboarding {
@@ -369,6 +472,13 @@ mod tests {
                 repo: "goto".to_string(),
                 branch: "feature".to_string(),
                 base_ref: None,
+            })));
+        }
+
+        #[test]
+        fn skips_detach() {
+            assert!(!should_auto_onboard(Some(&Command::Detach {
+                command: DetachCommand::List,
             })));
         }
 

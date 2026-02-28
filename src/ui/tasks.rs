@@ -9,7 +9,7 @@ use crate::{
         git::repo::{default_clone_url, parse_repo_input},
         tmux::{
             sessions::is_available,
-            workflow::{ParkResult, park},
+            workflow::{park, ParkResult},
         },
     },
 };
@@ -215,9 +215,9 @@ mod tests {
         use std::path::PathBuf;
 
         use crate::runtime::{
-            RepoKey,
             branch_name::BranchName,
             task_rows::{TaskRow, TaskStatus},
+            RepoKey,
         };
 
         fn row(status: TaskStatus, repo: &str, branch: &str) -> TaskRow {
@@ -331,10 +331,11 @@ mod tests {
             let base = env::temp_dir().join("task-rs-ui-tasks-scope-no-ctx");
             let repos_dir = base.join("repos");
             let wt_dir = base.join("wt");
+            let detached_dir = base.join("detached");
             let _ = fs::remove_dir_all(&base);
             fs::create_dir_all(&repos_dir).unwrap();
             fs::create_dir_all(&wt_dir).unwrap();
-            RuntimeEnvironment::from_paths(&repos_dir, &wt_dir)
+            RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir)
         }
 
         #[test]
@@ -375,10 +376,11 @@ mod tests {
             let base_dir = env::temp_dir().join(format!("task-rs-ui-tasks-load-{base}"));
             let repos_dir = base_dir.join("repos");
             let wt_dir = base_dir.join("wt");
+            let detached_dir = base_dir.join("detached");
             let _ = fs::remove_dir_all(&base_dir);
             fs::create_dir_all(&repos_dir).unwrap();
             fs::create_dir_all(&wt_dir).unwrap();
-            let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir);
+            let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir);
             (base_dir, env)
         }
 

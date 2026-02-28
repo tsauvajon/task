@@ -1,6 +1,6 @@
 use crate::{
     error::Result,
-    runtime::{RepoKey, environment::RuntimeEnvironment, process},
+    runtime::{environment::RuntimeEnvironment, process, RepoKey},
     tools::git::repo::{default_clone_url, parse_repo_input},
 };
 
@@ -44,7 +44,8 @@ mod tests {
     }
 
     fn env_for(repos_dir: &std::path::Path, wt_dir: &std::path::Path) -> RuntimeEnvironment {
-        RuntimeEnvironment::from_paths(repos_dir, wt_dir)
+        let detached_dir = repos_dir.parent().unwrap().join("detached");
+        RuntimeEnvironment::from_paths(repos_dir, wt_dir, &detached_dir)
     }
 
     mod run {
