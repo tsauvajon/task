@@ -53,7 +53,7 @@ pub fn run(env: &RuntimeEnvironment, command: DetachCommand) -> Result<()> {
 
 pub(crate) fn add(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
     let layout = env.layout();
-    let repo_key = env.tasks().resolve_repo_key_input(repo_arg)?;
+    let repo_key = env.tasks().resolve_existing_repo_key(repo_arg)?;
     let gitdir = layout.repo_gitdir_path(&repo_key);
     let path = layout.detached_path(&repo_key);
 
@@ -84,7 +84,7 @@ pub(crate) fn add(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
 
 pub(crate) fn update_one(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
     let layout = env.layout();
-    let repo_key = env.tasks().resolve_repo_key_input(repo_arg)?;
+    let repo_key = env.tasks().resolve_existing_repo_key(repo_arg)?;
     let path = layout.detached_path(&repo_key);
 
     if !path.exists() {
@@ -142,7 +142,7 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
 
 pub(crate) fn remove(env: &RuntimeEnvironment, repo_arg: &str, force: bool) -> Result<()> {
     let layout = env.layout();
-    let repo_key = env.tasks().resolve_repo_key_input(repo_arg)?;
+    let repo_key = env.tasks().resolve_existing_repo_key(repo_arg)?;
     let gitdir = layout.repo_gitdir_path(&repo_key);
     let path = layout.detached_path(&repo_key);
 
@@ -414,6 +414,68 @@ mod tests {
             .expect("git must be available")
             .success();
         assert!(ok, "git init --bare failed");
+    }
+
+    mod add_tests {
+        use super::{super::add, *};
+
+        #[test]
+        fn errors_when_repo_not_cloned() {
+            let dir = TempDir::new("add-not-cloned");
+            let base = dir.path();
+            // No bare repo created — dir is empty.
+            let env = make_env(base);
+
+            let result = add(&env, "github.com/org/nonexistent");
+            assert!(result.is_err(), "add should fail for an uncloned repo");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("not found") || msg.contains("Clone"),
+                "error should tell user to clone first: {msg}"
+            );
+        }
+
+        #[test]
+        fn errors_when_given_a_clone_url() {
+            let dir = TempDir::new("add-clone-url");
+            let base = dir.path();
+            let env = make_env(base);
+
+            let result = add(&env, "https://github.com/org/repo.git");
+            assert!(result.is_err(), "add should reject clone URLs");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("clone URL") || msg.contains("Clone the repository first"),
+                "error should reject clone URLs: {msg}"
+            );
+        }
+
+        #[test]
+        fn resolves_short_name_when_unique_and_cloned() {
+            // Short-name matching should work even for detach add.
+            let dir = TempDir::new("add-short-name");
+            let base = dir.path();
+            // Create a bare repo — we don't actually run git worktree add (no remote),
+            // just verify that resolution finds the right repo and fails later with
+            // a git error (not a "not found" error).
+            init_bare_repo(&base.join("repos/github.com/org/myapp.git"));
+            let env = make_env(base);
+
+            // The resolution itself should succeed; the subsequent git call will fail
+            // because there's no remote — so we just check the error is NOT about
+            // the repo being missing/uncloned.
+            let result = add(&env, "myapp");
+            // We can't easily test a successful add (needs real remote), but we can
+            // confirm the error is a git-level error, not "repo not found".
+            if let Err(err) = result {
+                let msg = err.to_string();
+                assert!(
+                    !msg.contains("not found") && !msg.contains("Clone"),
+                    "error should NOT be about a missing repo when repo is cloned: {msg}"
+                );
+            }
+            // If it returned Ok (e.g. already exists), that's also fine.
+        }
     }
 
     mod update_one_tests {

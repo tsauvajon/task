@@ -138,7 +138,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
     let repos_count = state.repo_rows.len();
     let repo_title = view_title("Repos", &state.filter_text);
 
-    let header = Row::new(vec!["REPO", "OPEN", "PARKED"]).style(
+    let header = Row::new(vec!["REPO", "OPEN", "PARKED", "DET"]).style(
         Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
@@ -146,6 +146,15 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
 
     let rows = state.repo_filtered_indices.iter().filter_map(|index| {
         let row = state.repo_rows.get(*index)?;
+        let det_cell = if row.is_detached {
+            Cell::from("✓").style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Cell::from("·").style(Style::default().fg(Color::DarkGray))
+        };
         Some(Row::new(vec![
             Cell::from(row.repo.to_string()),
             Cell::from(row.open_tasks.to_string()).style(
@@ -154,6 +163,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
                     .add_modifier(Modifier::BOLD),
             ),
             Cell::from(row.parked_tasks.to_string()).style(Style::default().fg(Color::Yellow)),
+            det_cell,
         ]))
     });
 
@@ -163,6 +173,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
             Constraint::Min(20),
             Constraint::Length(8),
             Constraint::Length(8),
+            Constraint::Length(5),
         ],
     )
     .header(header)
@@ -210,6 +221,7 @@ fn actions_for_mode(state: &UiState) -> Vec<Line<'static>> {
                 Line::from("Tab     switch to tasks view"),
                 Line::from("Enter  open selected repo tasks"),
                 Line::from("c      clone repo interactively"),
+                Line::from("d      toggle detached worktree"),
                 Line::from("/      enter filter mode"),
                 Line::from("r      refresh repos"),
                 Line::from("?      toggle help"),
@@ -269,6 +281,7 @@ fn render_help(frame: &mut Frame) {
         Line::from("Repos view:"),
         Line::from("Enter     open selected repo tasks"),
         Line::from("c         clone repo interactively"),
+        Line::from("d         toggle detached worktree (add/remove)"),
         Line::from("/         enter filter mode"),
         Line::from("r         refresh repos"),
         Line::from(""),

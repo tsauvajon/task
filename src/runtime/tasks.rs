@@ -108,6 +108,49 @@ impl TaskResolver {
         }
     }
 
+    /// Like `resolve_repo_key_input` but refuses to accept clone URLs or
+    /// unknown inputs — the repo **must** already exist in the repos directory.
+    /// Returns an error with a helpful message when the repo is not found.
+    pub fn resolve_existing_repo_key(&self, repo_arg: &str) -> Result<RepoKey> {
+        // Reject clone URLs up-front — detach only works on already-cloned repos.
+        let parsed = parse_repo_input(repo_arg);
+        if parsed.clone_url.is_some() {
+            return Err(Error::not_found(format!(
+                "'{repo_arg}' looks like a clone URL. \
+                 Clone the repository first with 'task repo clone {repo_arg}', \
+                 then use 'task detach add <repo>'."
+            )));
+        }
+
+        let normalized = RepoKey::new(parsed.repo_key);
+        if self.layout.repo_gitdir_path(&normalized).is_dir() {
+            return Ok(normalized);
+        }
+
+        // Try partial/suffix matching against already-cloned repos.
+        let keys = self.available_repo_keys()?;
+        let key_strs: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        match resolve_repo_query(&normalized, &key_strs) {
+            ResolveResult::Resolved(key) => {
+                let resolved = RepoKey::new(&key);
+                // resolve_repo_query returns the query itself when no match is found,
+                // so check the resolved key actually exists.
+                if self.layout.repo_gitdir_path(&resolved).is_dir() {
+                    Ok(resolved)
+                } else {
+                    Err(Error::not_found(format!(
+                        "Repository '{repo_arg}' not found. \
+                         Clone it first with 'task repo clone <url>', \
+                         then use 'task detach add <repo>'."
+                    )))
+                }
+            }
+            ResolveResult::Ambiguous(choices) => {
+                choose_repo_key_interactive(repo_arg, &choices).map(RepoKey::new)
+            }
+        }
+    }
+
     pub fn clone_bare_repo(&self, repo_url: &str, repo_key: &RepoKey) -> Result<()> {
         let gitdir = self.layout.repo_gitdir_path(repo_key);
         if gitdir.is_dir() && is_valid_bare_repo(&gitdir) {
@@ -741,6 +784,89 @@ mod tests {
                 .resolve_repo_key_input("nonexistent")
                 .expect("passthrough key");
             assert_eq!(key.to_string(), "nonexistent");
+        }
+    }
+
+    mod resolve_existing_repo_key {
+        use super::*;
+
+        #[test]
+        fn resolves_exact_full_key_when_cloned() {
+            let dir = TempDir::new("rerk-exact");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let key = resolver
+                .resolve_existing_repo_key("github.com/me/app")
+                .expect("exact key");
+            assert_eq!(key.to_string(), "github.com/me/app");
+        }
+
+        #[test]
+        fn resolves_short_name_when_unique_and_cloned() {
+            let dir = TempDir::new("rerk-short");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/me/unique-app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let key = resolver
+                .resolve_existing_repo_key("unique-app")
+                .expect("short name");
+            assert_eq!(key.to_string(), "github.com/me/unique-app");
+        }
+
+        #[test]
+        fn errors_on_clone_url() {
+            let dir = TempDir::new("rerk-clone-url");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver
+                .resolve_existing_repo_key("https://github.com/me/new-app.git")
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("Clone the repository first")
+                    || err.to_string().contains("clone URL"),
+                "error should suggest cloning first: {err}"
+            );
+        }
+
+        #[test]
+        fn errors_when_repo_not_cloned() {
+            let dir = TempDir::new("rerk-not-cloned");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver
+                .resolve_existing_repo_key("nonexistent-repo")
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("not found") || err.to_string().contains("Clone it first"),
+                "error should mention repo not found: {err}"
+            );
+        }
+
+        #[test]
+        fn errors_with_helpful_message_when_no_repos_exist() {
+            let dir = TempDir::new("rerk-no-repos");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&repos_dir).unwrap();
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver.resolve_existing_repo_key("any-repo").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("not found") || msg.contains("Clone"),
+                "error should be helpful: {msg}"
+            );
         }
     }
 

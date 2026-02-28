@@ -81,15 +81,25 @@ pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow
             .count();
         let parked_tasks = task_rows.len().saturating_sub(open_tasks);
 
+        let detached_path = context.layout().detached_path(&repo_key);
+        let is_detached = is_detached_worktree(&detached_path);
+
         rows.push(RepoRow {
             repo: repo_key,
             open_tasks,
             parked_tasks,
+            is_detached,
         });
     }
 
     rows.sort_by(|left, right| left.repo.cmp(&right.repo));
     Ok(rows)
+}
+
+/// Returns true when `path` is the root of a git worktree (has a `.git` file
+/// as created by `git worktree add`, or is a bare/worktree with `HEAD`).
+fn is_detached_worktree(path: &std::path::Path) -> bool {
+    path.join(".git").exists() || path.join("HEAD").exists()
 }
 
 pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {

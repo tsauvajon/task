@@ -19,6 +19,7 @@ pub(super) struct RepoRow {
     pub(super) repo: RepoKey,
     pub(super) open_tasks: usize,
     pub(super) parked_tasks: usize,
+    pub(super) is_detached: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +220,7 @@ mod tests {
             repo: RepoKey::new(repo),
             open_tasks,
             parked_tasks,
+            is_detached: false,
         }
     }
 
