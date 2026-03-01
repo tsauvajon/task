@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::{
     error::{Error, Result},
-    runtime::{environment::RuntimeEnvironment, process, RepoKey},
+    runtime::{RepoKey, environment::RuntimeEnvironment, process},
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs},
         worktrees::{add_detached, update_detached},
@@ -258,12 +258,13 @@ fn repo_key_from_detached_path(detached_dir: &std::path::Path, path: &std::path:
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::{
         collect_detached_worktrees, is_detached_worktree, read_head_sha,
         repo_key_from_detached_path,
     };
-    use crate::runtime::{environment::RuntimeEnvironment, RepoKey};
-    use std::{fs, path::Path};
+    use crate::runtime::{RepoKey, environment::RuntimeEnvironment};
 
     struct TempDir(std::path::PathBuf);
 
@@ -416,8 +417,10 @@ mod tests {
     }
 
     mod update_one_tests {
-        use super::super::{update_all, update_one};
-        use super::*;
+        use super::{
+            super::{update_all, update_one},
+            *,
+        };
 
         #[test]
         fn errors_when_path_does_not_exist() {
@@ -483,8 +486,7 @@ mod tests {
     }
 
     mod list_tests {
-        use super::super::list;
-        use super::*;
+        use super::{super::list, *};
 
         #[test]
         fn returns_ok_with_empty_detached_dir() {
@@ -513,8 +515,7 @@ mod tests {
     }
 
     mod remove_tests {
-        use super::super::remove;
-        use super::*;
+        use super::{super::remove, *};
 
         #[test]
         fn errors_when_path_does_not_exist() {

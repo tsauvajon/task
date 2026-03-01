@@ -14,6 +14,7 @@ use crate::{
     error::{Error, Result},
     runtime::{
         BranchName, RepoKey,
+        config::is_interactive_terminal,
         paths::WorkspacePaths,
         process,
         task_rows::{TaskRow, TaskStatus, build_task_rows},
@@ -145,6 +146,32 @@ impl TaskResolver {
         branch: &BranchName,
         path: &Path,
     ) -> Result<()> {
+        self.launch_workspace_impl(repo_key, branch, path, is_interactive_terminal(), false)
+    }
+
+    pub fn launch_workspace_no_open(
+        &self,
+        repo_key: &RepoKey,
+        branch: &BranchName,
+        path: &Path,
+        no_open: bool,
+    ) -> Result<()> {
+        self.launch_workspace_impl(repo_key, branch, path, is_interactive_terminal(), no_open)
+    }
+
+    fn launch_workspace_impl(
+        &self,
+        repo_key: &RepoKey,
+        branch: &BranchName,
+        path: &Path,
+        interactive: bool,
+        no_open: bool,
+    ) -> Result<()> {
+        if !interactive || no_open {
+            println!("{}", path.display());
+            return Ok(());
+        }
+
         if path.join(".envrc").exists() && direnv::is_available() {
             let _ = direnv::allow(path);
         }
@@ -1043,6 +1070,69 @@ mod tests {
                 .expect("task rows");
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].branch.to_string(), "main");
+        }
+    }
+
+    mod launch_workspace_impl {
+        use super::*;
+
+        #[test]
+        fn non_interactive_prints_path_and_returns_ok() {
+            let dir = TempDir::new("launch-non-interactive");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let branch = BranchName::new("feat-x");
+            let path = dir.path().join("worktree");
+
+            // interactive=false, no_open=false → non-interactive path; must succeed
+            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, false, false);
+            assert!(
+                result.is_ok(),
+                "non-interactive launch_workspace should succeed"
+            );
+        }
+
+        #[test]
+        fn non_interactive_does_not_require_worktree_tools() {
+            // Even when the path does not exist (no .envrc, no tmux available),
+            // the non-interactive path must succeed — it only prints the path.
+            let dir = TempDir::new("launch-non-interactive-missing-path");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let branch = BranchName::new("feat-y");
+            // Intentionally point at a path that does not exist on disk.
+            let path = dir.path().join("no-such-worktree");
+
+            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, false, false);
+            assert!(
+                result.is_ok(),
+                "non-interactive launch_workspace should succeed even with missing path"
+            );
+        }
+
+        #[test]
+        fn no_open_flag_skips_tools_in_interactive_terminal() {
+            let dir = TempDir::new("launch-no-open-flag");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let branch = BranchName::new("feat-z");
+            let path = dir.path().join("worktree");
+
+            // interactive=true but no_open=true → must also skip tools and succeed
+            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, true, true);
+            assert!(
+                result.is_ok(),
+                "no_open=true should skip tools and succeed even in an interactive terminal"
+            );
         }
     }
 }

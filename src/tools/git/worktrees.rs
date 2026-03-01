@@ -295,7 +295,7 @@ branch refs/heads/main\n\
             // Reconstruct what add_detached would build.
             let gitdir_str = gitdir.to_string_lossy();
             let worktree_str = worktree.to_string_lossy();
-            let args = vec![
+            let args = [
                 "--git-dir",
                 gitdir_str.as_ref(),
                 "worktree",

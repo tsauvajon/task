@@ -9,7 +9,7 @@ use crate::{
         git::repo::{default_clone_url, parse_repo_input},
         tmux::{
             sessions::is_available,
-            workflow::{park, ParkResult},
+            workflow::{ParkResult, park},
         },
     },
 };
@@ -215,9 +215,9 @@ mod tests {
         use std::path::PathBuf;
 
         use crate::runtime::{
+            RepoKey,
             branch_name::BranchName,
             task_rows::{TaskRow, TaskStatus},
-            RepoKey,
         };
 
         fn row(status: TaskStatus, repo: &str, branch: &str) -> TaskRow {

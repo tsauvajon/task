@@ -3,7 +3,7 @@ use crate::{
     runtime::{environment::RuntimeEnvironment, process},
     tools::tmux::{
         sessions::is_available,
-        workflow::{park, ParkResult},
+        workflow::{ParkResult, park},
     },
 };
 

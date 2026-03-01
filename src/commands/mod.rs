@@ -20,12 +20,12 @@ pub mod start;
 pub mod ui;
 pub mod worktrees;
 
+use detach::DetachCommand;
+
 use crate::{
     error::Result,
     runtime::{environment::RuntimeEnvironment, setup},
 };
-
-use detach::DetachCommand;
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper")]
@@ -53,6 +53,11 @@ pub enum Command {
         repo: String,
         branch: String,
         base_ref: Option<String>,
+        #[arg(
+            long,
+            help = "Create the worktree without opening tmux/opencode/codium"
+        )]
+        no_open: bool,
     },
     #[command(about = "Re-open a parked task")]
     Open {
@@ -143,7 +148,8 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
             repo,
             branch,
             base_ref,
-        }) => start::run(&context, &repo, &branch, base_ref.as_deref()),
+            no_open,
+        }) => start::run(&context, &repo, &branch, base_ref.as_deref(), no_open),
         Some(Command::Open { repo, branch }) => {
             open::run(&context, repo.as_deref(), branch.as_deref())
         }
@@ -183,7 +189,7 @@ fn should_auto_onboard(command: Option<&Command>) -> bool {
 mod tests {
     use clap::Parser;
 
-    use super::{should_auto_onboard, Cli, Command, CompletionShell, DetachCommand, RepoCommand};
+    use super::{Cli, Command, CompletionShell, DetachCommand, RepoCommand, should_auto_onboard};
 
     mod cli_parsing {
         use super::*;
@@ -197,6 +203,7 @@ mod tests {
                     repo: "goto".to_string(),
                     branch: "bump-deps".to_string(),
                     base_ref: None,
+                    no_open: false,
                 })
             );
         }
@@ -472,6 +479,7 @@ mod tests {
                 repo: "goto".to_string(),
                 branch: "feature".to_string(),
                 base_ref: None,
+                no_open: false,
             })));
         }
 
@@ -549,6 +557,42 @@ mod tests {
                     repo: "goto".to_string(),
                     branch: "bump-deps".to_string(),
                     base_ref: Some("origin/main".to_string()),
+                    no_open: false,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_start_with_no_open_flag() {
+            let cli = Cli::parse_from(["task", "start", "goto", "bump-deps", "--no-open"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Start {
+                    repo: "goto".to_string(),
+                    branch: "bump-deps".to_string(),
+                    base_ref: None,
+                    no_open: true,
+                })
+            );
+        }
+
+        #[test]
+        fn parses_start_with_base_ref_and_no_open_flag() {
+            let cli = Cli::parse_from([
+                "task",
+                "start",
+                "goto",
+                "bump-deps",
+                "origin/main",
+                "--no-open",
+            ]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Start {
+                    repo: "goto".to_string(),
+                    branch: "bump-deps".to_string(),
+                    base_ref: Some("origin/main".to_string()),
+                    no_open: true,
                 })
             );
         }

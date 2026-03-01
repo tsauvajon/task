@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::{
     error::{Error, Result},
-    runtime::{environment::RuntimeEnvironment, process, BranchName},
+    runtime::{BranchName, environment::RuntimeEnvironment, process},
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs, ref_exists, rev_exists},
         worktrees::{add_existing_branch, add_from_base, add_tracking_remote_branch},
@@ -14,6 +14,7 @@ pub fn run(
     repo_arg: &str,
     branch: &str,
     base_ref: Option<&str>,
+    no_open: bool,
 ) -> Result<()> {
     context.tasks().ensure_layout()?;
     let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
@@ -41,9 +42,12 @@ pub fn run(
                 "Reusing existing worktree: {}",
                 worktree.display()
             ));
-            return context
-                .tasks()
-                .launch_workspace(&repo_key, &branch_name, &worktree);
+            return context.tasks().launch_workspace_no_open(
+                &repo_key,
+                &branch_name,
+                &worktree,
+                no_open,
+            );
         }
         WorktreePathState::New => {}
     }
@@ -71,7 +75,7 @@ pub fn run(
 
     context
         .tasks()
-        .launch_workspace(&repo_key, &branch_name, &worktree)
+        .launch_workspace_no_open(&repo_key, &branch_name, &worktree, no_open)
 }
 
 /// Outcome of inspecting the target worktree path on disk.
@@ -136,7 +140,7 @@ mod tests {
     use std::{env, fs, path::PathBuf};
 
     use super::{
-        classify_worktree_path, resolve_branch_strategy, BranchStrategy, WorktreePathState,
+        BranchStrategy, WorktreePathState, classify_worktree_path, resolve_branch_strategy,
     };
 
     struct TempDir(PathBuf);
