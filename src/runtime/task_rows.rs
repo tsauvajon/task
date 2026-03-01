@@ -37,12 +37,14 @@ impl fmt::Display for TaskStatus {
 pub fn build_task_rows(
     repo_key: &RepoKey,
     wt_dir: &Path,
+    detached_dir: &Path,
     entries: &[WorktreeEntry],
     open_sessions: &[String],
 ) -> Vec<TaskRow> {
     entries
         .iter()
         .filter(|e| !e.is_bare)
+        .filter(|e| !e.path.starts_with(detached_dir))
         .map(|entry| {
             let branch = branch_from_ref(entry.branch_ref.as_deref())
                 .or_else(|| branch_from_worktree_path(wt_dir, repo_key, &entry.path))
@@ -124,8 +126,9 @@ mod tests {
                 },
             ];
 
+            let detached_dir = Path::new("/tmp/dev/detached");
             let open_sessions = vec!["github_com_tsauvajon_task-rewrite-in-rust".to_string()];
-            let rows = build_task_rows(&repo_key, wt_dir, &entries, &open_sessions);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &open_sessions);
 
             assert_eq!(
                 rows,
@@ -149,6 +152,7 @@ mod tests {
         #[test]
         fn filters_out_bare_entries() {
             let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![
                 WorktreeEntry {
@@ -163,7 +167,7 @@ mod tests {
                 },
             ];
 
-            let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &[]);
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].branch, BranchName::new("main"));
         }
@@ -171,6 +175,7 @@ mod tests {
         #[test]
         fn falls_back_to_path_stem_for_missing_branch_ref() {
             let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             // No branch_ref AND path is outside the wt_dir/repo_key prefix,
             // so branch_from_worktree_path also returns None.
@@ -181,7 +186,7 @@ mod tests {
                 is_bare: false,
             }];
 
-            let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &[]);
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].branch, BranchName::new("mybranch"));
         }
@@ -189,6 +194,7 @@ mod tests {
         #[test]
         fn returns_empty_for_only_bare_entry() {
             let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![WorktreeEntry {
                 path: "/tmp/dev/repos/github.com/tsauvajon/task.git".into(),
@@ -196,15 +202,16 @@ mod tests {
                 is_bare: true,
             }];
 
-            let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &[]);
             assert!(rows.is_empty());
         }
 
         #[test]
         fn empty_entries_returns_empty() {
             let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
-            let rows = build_task_rows(&repo_key, wt_dir, &[], &[]);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &[], &[]);
             assert!(rows.is_empty());
         }
 
@@ -230,11 +237,12 @@ mod tests {
                 },
             ];
 
+            let detached_dir = Path::new("/tmp/dev/detached");
             let open_sessions = vec![
                 "github_com_tsauvajon_task-branch-a".to_string(),
                 "github_com_tsauvajon_task-branch-c".to_string(),
             ];
-            let rows = build_task_rows(&repo_key, wt_dir, &entries, &open_sessions);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &open_sessions);
 
             assert_eq!(rows.len(), 3);
             assert_eq!(rows[0].status, TaskStatus::Open);
@@ -246,6 +254,7 @@ mod tests {
         fn branch_from_worktree_path_fallback() {
             // branch_ref is None but path matches wt_dir/repo_key prefix
             let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![WorktreeEntry {
                 path: "/tmp/dev/wt/github.com/tsauvajon/task/feature-xyz".into(),
@@ -253,7 +262,7 @@ mod tests {
                 is_bare: false,
             }];
 
-            let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &[]);
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].branch, BranchName::new("feature-xyz"));
         }
@@ -261,6 +270,7 @@ mod tests {
         #[test]
         fn repo_key_is_preserved() {
             let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![WorktreeEntry {
                 path: "/tmp/dev/wt/github.com/tsauvajon/task/main".into(),
@@ -268,13 +278,14 @@ mod tests {
                 is_bare: false,
             }];
 
-            let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &[]);
             assert_eq!(rows[0].repo, repo_key);
         }
 
         #[test]
         fn path_is_preserved_from_entry() {
             let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let path = std::path::PathBuf::from("/tmp/dev/wt/github.com/tsauvajon/task/main");
             let entries = vec![WorktreeEntry {
@@ -283,8 +294,54 @@ mod tests {
                 is_bare: false,
             }];
 
-            let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &[]);
             assert_eq!(rows[0].path, path);
+        }
+
+        #[test]
+        fn filters_out_detached_worktree_entries() {
+            let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
+            let repo_key = RepoKey::new("github.com/tsauvajon/task");
+            let entries = vec![
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/feat".into(),
+                    branch_ref: Some("refs/heads/feat".to_string()),
+                    is_bare: false,
+                },
+                // Detached worktree: lives under detached_dir, no branch ref.
+                WorktreeEntry {
+                    path: "/tmp/dev/detached/github.com/tsauvajon/task".into(),
+                    branch_ref: None,
+                    is_bare: false,
+                },
+            ];
+
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &[]);
+            assert_eq!(rows.len(), 1, "detached worktree should be excluded");
+            assert_eq!(rows[0].branch, BranchName::new("feat"));
+        }
+
+        #[test]
+        fn normal_worktrees_are_unaffected_by_detached_filter() {
+            let wt_dir = Path::new("/tmp/dev/wt");
+            let detached_dir = Path::new("/tmp/dev/detached");
+            let repo_key = RepoKey::new("github.com/tsauvajon/task");
+            let entries = vec![
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/main".into(),
+                    branch_ref: Some("refs/heads/main".to_string()),
+                    is_bare: false,
+                },
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
+                    branch_ref: Some("refs/heads/bump-deps".to_string()),
+                    is_bare: false,
+                },
+            ];
+
+            let rows = build_task_rows(&repo_key, wt_dir, detached_dir, &entries, &[]);
+            assert_eq!(rows.len(), 2, "both normal worktrees should be included");
         }
     }
 }

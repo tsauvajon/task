@@ -247,6 +247,7 @@ impl TaskResolver {
         Ok(build_task_rows(
             repo_key,
             self.layout.wt_dir(),
+            self.layout.detached_dir(),
             &entries,
             &open_session_list,
         ))
