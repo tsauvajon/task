@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dialoguer::{theme::ColorfulTheme, Input};
+use dialoguer::{Input, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -203,7 +203,7 @@ pub fn is_interactive_terminal() -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{expand_path, to_runtime_config, TaskConfigFile, VscodiumConfigFile};
+    use super::{TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
 
     mod expand_path {
         use super::*;
@@ -479,7 +479,7 @@ mod tests {
     mod write_config_tests {
         use std::{env, fs, path::PathBuf};
 
-        use super::super::{load_config, write_config, TaskConfig};
+        use super::super::{TaskConfig, load_config, write_config};
 
         struct TempDir(PathBuf);
 

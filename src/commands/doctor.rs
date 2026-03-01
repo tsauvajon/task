@@ -103,7 +103,7 @@ fn apply_fixes(env: &RuntimeEnvironment, approval: SetupApproval<'_>) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{decide_action, DoctorAction};
+    use super::{DoctorAction, decide_action};
 
     mod decide_action {
         use super::*;

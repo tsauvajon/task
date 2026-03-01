@@ -1,4 +1,4 @@
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 
 use crate::{
     error::{Error, Result},
@@ -132,8 +132,8 @@ fn should_enable_corepack(node_installed: bool, corepack_installed: bool) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_interactive_terminal, resolve_setup_approval_with, should_enable_corepack,
-        SetupApproval,
+        SetupApproval, ensure_interactive_terminal, resolve_setup_approval_with,
+        should_enable_corepack,
     };
 
     mod ensure_interactive_terminal {

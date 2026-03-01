@@ -20,12 +20,12 @@ pub mod start;
 pub mod ui;
 pub mod worktrees;
 
+use detach::DetachCommand;
+
 use crate::{
     error::Result,
     runtime::{environment::RuntimeEnvironment, setup},
 };
-
-use detach::DetachCommand;
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper")]
@@ -183,7 +183,7 @@ fn should_auto_onboard(command: Option<&Command>) -> bool {
 mod tests {
     use clap::Parser;
 
-    use super::{should_auto_onboard, Cli, Command, CompletionShell, DetachCommand, RepoCommand};
+    use super::{Cli, Command, CompletionShell, DetachCommand, RepoCommand, should_auto_onboard};
 
     mod cli_parsing {
         use super::*;

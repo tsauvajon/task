@@ -14,6 +14,7 @@ use crate::{
     error::{Error, Result},
     runtime::{
         BranchName, RepoKey,
+        config::is_interactive_terminal,
         paths::WorkspacePaths,
         process,
         task_rows::{TaskRow, TaskStatus, build_task_rows},
@@ -145,6 +146,21 @@ impl TaskResolver {
         branch: &BranchName,
         path: &Path,
     ) -> Result<()> {
+        self.launch_workspace_impl(repo_key, branch, path, is_interactive_terminal())
+    }
+
+    fn launch_workspace_impl(
+        &self,
+        repo_key: &RepoKey,
+        branch: &BranchName,
+        path: &Path,
+        interactive: bool,
+    ) -> Result<()> {
+        if !interactive {
+            println!("{}", path.display());
+            return Ok(());
+        }
+
         if path.join(".envrc").exists() && direnv::is_available() {
             let _ = direnv::allow(path);
         }
@@ -1043,6 +1059,50 @@ mod tests {
                 .expect("task rows");
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].branch.to_string(), "main");
+        }
+    }
+
+    mod launch_workspace_impl {
+        use super::*;
+
+        #[test]
+        fn non_interactive_prints_path_and_returns_ok() {
+            let dir = TempDir::new("launch-non-interactive");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let branch = BranchName::new("feat-x");
+            let path = dir.path().join("worktree");
+
+            // non_interactive = false → must succeed without touching tmux/opencode/codium
+            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, false);
+            assert!(
+                result.is_ok(),
+                "non-interactive launch_workspace should succeed"
+            );
+        }
+
+        #[test]
+        fn non_interactive_does_not_require_worktree_tools() {
+            // Even when the path does not exist (no .envrc, no tmux available),
+            // the non-interactive path must succeed — it only prints the path.
+            let dir = TempDir::new("launch-non-interactive-missing-path");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let branch = BranchName::new("feat-y");
+            // Intentionally point at a path that does not exist on disk.
+            let path = dir.path().join("no-such-worktree");
+
+            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, false);
+            assert!(
+                result.is_ok(),
+                "non-interactive launch_workspace should succeed even with missing path"
+            );
         }
     }
 }
