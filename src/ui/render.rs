@@ -56,14 +56,34 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
 
     let actions = actions_for_mode(state);
 
-    let details_lines = actions;
+    let details_chunks = UiLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .split(chunks[1]);
 
-    let details_panel = Paragraph::new(details_lines).block(
+    let details_panel = Paragraph::new(actions).block(
         Block::default()
             .title(Line::from(Span::styled(mode, mode_style)))
             .borders(Borders::ALL),
     );
-    frame.render_widget(details_panel, chunks[1]);
+    frame.render_widget(details_panel, details_chunks[0]);
+    render_activity(frame, details_chunks[1], state);
+}
+
+fn render_activity(frame: &mut Frame, area: Rect, state: &UiState) {
+    let lines = if state.activity_lines.is_empty() {
+        vec![Line::from("No recent activity")]
+    } else {
+        state
+            .activity_lines
+            .iter()
+            .map(|line| Line::from(line.clone()))
+            .collect()
+    };
+
+    let panel =
+        Paragraph::new(lines).block(Block::default().title("Activity").borders(Borders::ALL));
+    frame.render_widget(panel, area);
 }
 
 fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {

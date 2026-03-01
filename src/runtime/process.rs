@@ -2,11 +2,24 @@ use std::{
     ffi::OsStr,
     path::Path,
     process::{Command, Stdio},
+    sync::{Mutex, OnceLock},
 };
 
 use owo_colors::OwoColorize;
 
 use crate::error::{Error, Result};
+
+#[derive(Default)]
+struct LogCapture {
+    enabled: bool,
+    lines: Vec<String>,
+}
+
+static LOG_CAPTURE: OnceLock<Mutex<LogCapture>> = OnceLock::new();
+
+fn log_capture() -> &'static Mutex<LogCapture> {
+    LOG_CAPTURE.get_or_init(|| Mutex::new(LogCapture::default()))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedTool {
@@ -159,6 +172,17 @@ pub fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>)
     run_status_raw(plan.program(), &plan_args, cwd)
 }
 
+pub fn run_status_quiet(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<()> {
+    let program_str = program.as_ref().to_string_lossy();
+    let plan = CommandPlan::from_program(&program_str, args);
+    let plan_args = plan.args_refs();
+    run_status_quiet_raw(plan.program(), &plan_args, cwd)
+}
+
 pub fn spawn_detached(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
     let program_str = program.as_ref().to_string_lossy();
     let plan = CommandPlan::from_program(&program_str, args);
@@ -204,6 +228,30 @@ fn run_status_raw(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>)
     )))
 }
 
+fn run_status_quiet_raw(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<()> {
+    let mut cmd = Command::new(program);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    let output = cmd.output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let msg = if stderr.is_empty() {
+        format!("command failed with status {}", output.status)
+    } else {
+        stderr
+    };
+    Err(Error::failed(msg))
+}
+
 fn spawn_detached_raw(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
@@ -214,11 +262,48 @@ fn spawn_detached_raw(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Pa
 }
 
 pub fn log(message: &str) {
+    if capture_log_line(&format!("==> {message}")) {
+        return;
+    }
     println!("{} {}", "==>".bright_blue().bold(), message);
 }
 
 pub fn warn(message: &str) {
+    if capture_log_line(&format!("warning: {message}")) {
+        return;
+    }
     eprintln!("{} {}", "warning:".yellow().bold(), message);
+}
+
+pub fn enable_log_capture() {
+    if let Ok(mut capture) = log_capture().lock() {
+        capture.enabled = true;
+        capture.lines.clear();
+    }
+}
+
+pub fn disable_log_capture() {
+    if let Ok(mut capture) = log_capture().lock() {
+        capture.enabled = false;
+        capture.lines.clear();
+    }
+}
+
+pub fn take_captured_logs() -> Vec<String> {
+    if let Ok(mut capture) = log_capture().lock() {
+        return std::mem::take(&mut capture.lines);
+    }
+    Vec::new()
+}
+
+fn capture_log_line(line: &str) -> bool {
+    if let Ok(mut capture) = log_capture().lock()
+        && capture.enabled
+    {
+        capture.lines.push(line.to_string());
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]

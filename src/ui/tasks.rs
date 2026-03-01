@@ -308,6 +308,7 @@ mod tests {
                 repo: RepoKey::new(repo),
                 open_tasks,
                 parked_tasks,
+                is_detached: false,
             }
         }
 

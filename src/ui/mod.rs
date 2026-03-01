@@ -32,6 +32,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     }
 
     let mut terminal = TerminalGuard::new()?;
+    let _process_log_capture = ProcessLogCaptureGuard::new();
     let ui_result = run_event_loop(context, terminal.terminal_mut(), &mut state);
 
     match ui_result? {
@@ -45,12 +46,28 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     }
 }
 
+struct ProcessLogCaptureGuard;
+
+impl ProcessLogCaptureGuard {
+    fn new() -> Self {
+        crate::runtime::process::enable_log_capture();
+        Self
+    }
+}
+
+impl Drop for ProcessLogCaptureGuard {
+    fn drop(&mut self) {
+        crate::runtime::process::disable_log_capture();
+    }
+}
+
 fn run_event_loop(
     context: &RuntimeEnvironment,
     terminal: &mut terminal::AppTerminal,
     state: &mut UiState,
 ) -> Result<UiAction> {
     loop {
+        state.append_activity_lines(crate::runtime::process::take_captured_logs());
         terminal.draw(|frame| render(frame, state))?;
 
         let event = event::read()?;

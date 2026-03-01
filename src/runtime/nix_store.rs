@@ -51,6 +51,10 @@ impl NixRunner {
         crate::runtime::process::run_status(self.binary()?.as_os_str(), args, cwd)
     }
 
+    pub fn status_quiet(&self, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+        crate::runtime::process::run_status_quiet(self.binary()?.as_os_str(), args, cwd)
+    }
+
     pub fn available(&self) -> bool {
         self.binary().is_ok()
     }
