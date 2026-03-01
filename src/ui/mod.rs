@@ -40,7 +40,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
             .tasks()
             .launch_workspace(&row.repo, &row.branch, &row.path),
         UiAction::Create { repo, branch } => {
-            crate::commands::start::run(context, &repo, &branch, None)
+            crate::commands::start::run(context, &repo, &branch, None, false)
         }
     }
 }

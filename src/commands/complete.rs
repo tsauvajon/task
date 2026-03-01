@@ -24,7 +24,9 @@ fn completion_values(
 
     let mut values = match command {
         "start" => {
-            if arg_count <= 1 {
+            if current.starts_with('-') {
+                vec!["--no-open".to_string()]
+            } else if arg_count <= 1 {
                 repo_candidates(context)?
             } else {
                 Vec::new()
@@ -311,6 +313,34 @@ mod tests {
             )
             .expect("start completions 2nd arg");
             assert!(values.is_empty());
+        }
+
+        #[test]
+        fn start_suggests_no_open_on_dash_prefix() {
+            let values = completion_values(None, &["start".to_string(), "-".to_string()])
+                .expect("start flag completions");
+            assert_eq!(values, vec!["--no-open"]);
+        }
+
+        #[test]
+        fn start_suggests_no_open_on_double_dash_prefix() {
+            let values = completion_values(None, &["start".to_string(), "--".to_string()])
+                .expect("start flag completions");
+            assert_eq!(values, vec!["--no-open"]);
+        }
+
+        #[test]
+        fn start_suggests_no_open_when_typing_flag_mid_args() {
+            let values = completion_values(
+                None,
+                &[
+                    "start".to_string(),
+                    "some-repo".to_string(),
+                    "-".to_string(),
+                ],
+            )
+            .expect("start mid-args flag completions");
+            assert_eq!(values, vec!["--no-open"]);
         }
 
         #[test]
