@@ -15,6 +15,7 @@ pub(super) enum UiIntent {
     FinishSelected,
     RefreshCurrentView,
     ParkSelected,
+    ToggleDetach,
     FilterCancel,
     FilterApply,
     FilterBackspace,
@@ -54,6 +55,7 @@ fn from_key_normal(key: KeyEvent) -> UiIntent {
         KeyCode::Char('/') => UiIntent::EnterFilterMode,
         KeyCode::Char('?') => UiIntent::ToggleHelp,
         KeyCode::Char('c') => UiIntent::EnterCreateTaskMode,
+        KeyCode::Char('d') => UiIntent::ToggleDetach,
         KeyCode::Char('f') => UiIntent::FinishSelected,
         KeyCode::Char('r') => UiIntent::RefreshCurrentView,
         KeyCode::Char('p') => UiIntent::ParkSelected,
@@ -166,6 +168,10 @@ mod tests {
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Char('c'))),
                 UiIntent::EnterCreateTaskMode
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('d'))),
+                UiIntent::ToggleDetach
             );
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Char('f'))),

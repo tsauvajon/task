@@ -3,7 +3,7 @@ use crossterm::event::{self, Event};
 use self::{
     effects::{
         clone_and_refresh, create_action, finish_and_refresh, park_and_refresh, refresh_repo_rows,
-        refresh_task_rows,
+        refresh_task_rows, toggle_detach_and_refresh,
     },
     intent::{UiIntent, from_key},
     render::render,
@@ -32,6 +32,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     }
 
     let mut terminal = TerminalGuard::new()?;
+    let _process_log_capture = ProcessLogCaptureGuard::new();
     let ui_result = run_event_loop(context, terminal.terminal_mut(), &mut state);
 
     match ui_result? {
@@ -45,12 +46,28 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     }
 }
 
+struct ProcessLogCaptureGuard;
+
+impl ProcessLogCaptureGuard {
+    fn new() -> Self {
+        crate::runtime::process::enable_log_capture();
+        Self
+    }
+}
+
+impl Drop for ProcessLogCaptureGuard {
+    fn drop(&mut self) {
+        crate::runtime::process::disable_log_capture();
+    }
+}
+
 fn run_event_loop(
     context: &RuntimeEnvironment,
     terminal: &mut terminal::AppTerminal,
     state: &mut UiState,
 ) -> Result<UiAction> {
     loop {
+        state.append_activity_lines(crate::runtime::process::take_captured_logs());
         terminal.draw(|frame| render(frame, state))?;
 
         let event = event::read()?;
@@ -166,6 +183,17 @@ fn apply_intent(
                 return Ok(None);
             }
             park_and_refresh(context, state)?;
+            Ok(None)
+        }
+        UiIntent::ToggleDetach => {
+            if state.view != ViewMode::Repos {
+                state.message = "Detach toggle is only available in Repos view".to_string();
+                return Ok(None);
+            }
+            match toggle_detach_and_refresh(context, state) {
+                Ok(msg) => state.message = msg,
+                Err(err) => state.message = err.to_string(),
+            }
             Ok(None)
         }
         UiIntent::FilterCancel => {
@@ -547,11 +575,13 @@ mod tests {
                 repo: RepoKey::new("github.com/a/app"),
                 open_tasks: 1,
                 parked_tasks: 0,
+                is_detached: false,
             },
             RepoRow {
                 repo: RepoKey::new("github.com/a/ops"),
                 open_tasks: 2,
                 parked_tasks: 0,
+                is_detached: false,
             },
         ];
         let mut state = UiState::new(vec![], repo_rows, None);
@@ -701,6 +731,38 @@ mod tests {
         assert!(
             state.message.contains("Tasks view"),
             "message should mention Tasks view: {}",
+            state.message
+        );
+    }
+
+    // ── ToggleDetach ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn toggle_detach_in_tasks_view_sets_message_and_returns_none() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        // Default view is Tasks
+        assert_eq!(state.view, ViewMode::Tasks);
+        let result = apply_intent(&ctx, &mut state, UiIntent::ToggleDetach).unwrap();
+        assert!(result.is_none());
+        assert!(
+            state.message.contains("Repos view"),
+            "message should mention Repos view: {}",
+            state.message
+        );
+    }
+
+    #[test]
+    fn toggle_detach_in_repos_view_with_no_selection_sets_message() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        state.view = ViewMode::Repos;
+        // No repo rows → no selection → graceful message
+        let result = apply_intent(&ctx, &mut state, UiIntent::ToggleDetach).unwrap();
+        assert!(result.is_none());
+        assert!(
+            state.message.contains("No repo selected"),
+            "message should mention 'No repo selected': {}",
             state.message
         );
     }

@@ -56,14 +56,34 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
 
     let actions = actions_for_mode(state);
 
-    let details_lines = actions;
+    let details_chunks = UiLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .split(chunks[1]);
 
-    let details_panel = Paragraph::new(details_lines).block(
+    let details_panel = Paragraph::new(actions).block(
         Block::default()
             .title(Line::from(Span::styled(mode, mode_style)))
             .borders(Borders::ALL),
     );
-    frame.render_widget(details_panel, chunks[1]);
+    frame.render_widget(details_panel, details_chunks[0]);
+    render_activity(frame, details_chunks[1], state);
+}
+
+fn render_activity(frame: &mut Frame, area: Rect, state: &UiState) {
+    let lines = if state.activity_lines.is_empty() {
+        vec![Line::from("No recent activity")]
+    } else {
+        state
+            .activity_lines
+            .iter()
+            .map(|line| Line::from(line.clone()))
+            .collect()
+    };
+
+    let panel =
+        Paragraph::new(lines).block(Block::default().title("Activity").borders(Borders::ALL));
+    frame.render_widget(panel, area);
 }
 
 fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
@@ -73,9 +93,16 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
         .filter(|row| row.status == TaskStatus::Open)
         .count();
     let total_count = state.task_rows.len();
-    let task_title = view_title("Tasks", &state.filter_text);
+    let task_title = task_view_title(state.task_repo_scope.as_deref(), &state.filter_text);
 
-    let header = Row::new(vec!["STATUS", "REPO", "BRANCH", "PATH"]).style(
+    let scoped = state.task_repo_scope.is_some();
+
+    let header = if scoped {
+        Row::new(vec!["STATUS", "BRANCH", "PATH"])
+    } else {
+        Row::new(vec!["STATUS", "REPO", "BRANCH", "PATH"])
+    }
+    .style(
         Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
@@ -89,42 +116,57 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
                 .add_modifier(Modifier::BOLD),
             TaskStatus::Parked => Style::default().fg(Color::Yellow),
         };
-        Some(Row::new(vec![
-            Cell::from(status_label(row.status)).style(status_style),
-            Cell::from(row.repo.to_string()),
-            Cell::from(row.branch.to_string()),
-            Cell::from(row.path.to_string_lossy().to_string()),
-        ]))
+        if scoped {
+            Some(Row::new(vec![
+                Cell::from(status_label(row.status)).style(status_style),
+                Cell::from(row.branch.to_string()),
+                Cell::from(row.path.to_string_lossy().to_string()),
+            ]))
+        } else {
+            Some(Row::new(vec![
+                Cell::from(status_label(row.status)).style(status_style),
+                Cell::from(row.repo.to_string()),
+                Cell::from(row.branch.to_string()),
+                Cell::from(row.path.to_string_lossy().to_string()),
+            ]))
+        }
     });
 
-    let table = Table::new(
-        rows,
-        [
+    let widths: &[Constraint] = if scoped {
+        &[
+            Constraint::Length(8),
+            Constraint::Length(24),
+            Constraint::Min(10),
+        ]
+    } else {
+        &[
             Constraint::Length(8),
             Constraint::Length(28),
             Constraint::Length(24),
             Constraint::Min(10),
-        ],
-    )
-    .header(header)
-    .block(
-        Block::default()
-            .title(task_title)
-            .title(
-                Line::from(Span::styled(
-                    format!("{} open / {} total", open_count, total_count),
-                    Style::default().fg(Color::Gray),
-                ))
-                .right_aligned(),
-            )
-            .borders(Borders::ALL),
-    )
-    .row_highlight_style(
-        Style::default()
-            .bg(Color::Rgb(25, 25, 40))
-            .add_modifier(Modifier::BOLD),
-    )
-    .highlight_symbol("▶ ");
+        ]
+    };
+
+    let table = Table::new(rows, widths.to_vec())
+        .header(header)
+        .block(
+            Block::default()
+                .title(task_title)
+                .title(
+                    Line::from(Span::styled(
+                        format!("{} open / {} total", open_count, total_count),
+                        Style::default().fg(Color::Gray),
+                    ))
+                    .right_aligned(),
+                )
+                .borders(Borders::ALL),
+        )
+        .row_highlight_style(
+            Style::default()
+                .bg(Color::Rgb(25, 25, 40))
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
 
     let mut table_state = TableState::default();
     if !state.task_filtered_indices.is_empty() {
@@ -138,7 +180,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
     let repos_count = state.repo_rows.len();
     let repo_title = view_title("Repos", &state.filter_text);
 
-    let header = Row::new(vec!["REPO", "OPEN", "PARKED"]).style(
+    let header = Row::new(vec!["REPO", "OPEN", "PARKED", "DET"]).style(
         Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
@@ -146,6 +188,15 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
 
     let rows = state.repo_filtered_indices.iter().filter_map(|index| {
         let row = state.repo_rows.get(*index)?;
+        let det_cell = if row.is_detached {
+            Cell::from("✓").style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Cell::from("·").style(Style::default().fg(Color::DarkGray))
+        };
         Some(Row::new(vec![
             Cell::from(row.repo.to_string()),
             Cell::from(row.open_tasks.to_string()).style(
@@ -154,6 +205,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
                     .add_modifier(Modifier::BOLD),
             ),
             Cell::from(row.parked_tasks.to_string()).style(Style::default().fg(Color::Yellow)),
+            det_cell,
         ]))
     });
 
@@ -163,6 +215,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
             Constraint::Min(20),
             Constraint::Length(8),
             Constraint::Length(8),
+            Constraint::Length(5),
         ],
     )
     .header(header)
@@ -210,6 +263,7 @@ fn actions_for_mode(state: &UiState) -> Vec<Line<'static>> {
                 Line::from("Tab     switch to tasks view"),
                 Line::from("Enter  open selected repo tasks"),
                 Line::from("c      clone repo interactively"),
+                Line::from("d      toggle detached worktree"),
                 Line::from("/      enter filter mode"),
                 Line::from("r      refresh repos"),
                 Line::from("?      toggle help"),
@@ -269,6 +323,7 @@ fn render_help(frame: &mut Frame) {
         Line::from("Repos view:"),
         Line::from("Enter     open selected repo tasks"),
         Line::from("c         clone repo interactively"),
+        Line::from("d         toggle detached worktree (add/remove)"),
         Line::from("/         enter filter mode"),
         Line::from("r         refresh repos"),
         Line::from(""),
@@ -338,11 +393,27 @@ fn view_title(base: &str, filter: &str) -> String {
     }
 }
 
+/// Title for the Tasks panel, incorporating the scoped repo (if any) and the
+/// active filter text.
+///
+/// Examples:
+/// - unscoped, no filter  → "Tasks"
+/// - unscoped, filter     → "Tasks - feat"
+/// - scoped, no filter    → "Tasks (kakarot.chorse.space/funding/hyperion)"
+/// - scoped + filter      → "Tasks (kakarot.chorse.space/funding/hyperion) - feat"
+fn task_view_title(repo_scope: Option<&str>, filter: &str) -> String {
+    let base = match repo_scope {
+        None => "Tasks".to_string(),
+        Some(repo) => format!("Tasks ({repo})"),
+    };
+    view_title(&base, filter)
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::{actions_for_mode, centered_rect, status_label, view_title};
+    use super::{actions_for_mode, centered_rect, status_label, task_view_title, view_title};
     use crate::{
         runtime::task_rows::TaskStatus,
         ui::state::{InputMode, UiState, ViewMode},
@@ -369,6 +440,80 @@ mod tests {
         #[test]
         fn handles_repos_base() {
             assert_eq!(view_title("Repos", "bar"), "Repos - bar");
+        }
+    }
+
+    mod task_view_title_tests {
+        use super::*;
+
+        #[test]
+        fn unscoped_no_filter() {
+            assert_eq!(task_view_title(None, ""), "Tasks");
+        }
+
+        #[test]
+        fn unscoped_with_filter() {
+            assert_eq!(task_view_title(None, "feat"), "Tasks - feat");
+        }
+
+        #[test]
+        fn scoped_no_filter() {
+            assert_eq!(
+                task_view_title(Some("github.com/org/repo"), ""),
+                "Tasks (github.com/org/repo)"
+            );
+        }
+
+        #[test]
+        fn scoped_with_filter() {
+            assert_eq!(
+                task_view_title(Some("github.com/org/repo"), "fix"),
+                "Tasks (github.com/org/repo) - fix"
+            );
+        }
+
+        #[test]
+        fn scoped_filter_whitespace_only() {
+            assert_eq!(
+                task_view_title(Some("github.com/org/repo"), "   "),
+                "Tasks (github.com/org/repo)"
+            );
+        }
+    }
+
+    mod scoped_tasks_view {
+        use std::path::PathBuf;
+
+        use super::*;
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        fn task_row(repo: &str, branch: &str) -> TaskRow {
+            TaskRow {
+                status: TaskStatus::Parked,
+                repo: RepoKey::new(repo),
+                branch: BranchName::new(branch),
+                path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
+            }
+        }
+
+        #[test]
+        fn scoped_state_has_repo_in_task_repo_scope() {
+            let row = task_row("github.com/org/repo", "my-branch");
+            let state = UiState::new(vec![row], vec![], Some("github.com/org/repo".to_string()));
+            assert_eq!(
+                state.task_repo_scope.as_deref(),
+                Some("github.com/org/repo")
+            );
+        }
+
+        #[test]
+        fn unscoped_state_has_no_task_repo_scope() {
+            let row = task_row("github.com/org/repo", "my-branch");
+            let state = UiState::new(vec![row], vec![], None);
+            assert!(state.task_repo_scope.is_none());
         }
     }
 

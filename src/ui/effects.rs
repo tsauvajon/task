@@ -5,7 +5,9 @@ use super::{
         resolve_create_repo,
     },
 };
-use crate::{error::Result, runtime::environment::RuntimeEnvironment};
+use crate::{
+    commands::detach as detach_cmd, error::Result, runtime::environment::RuntimeEnvironment,
+};
 
 pub(super) fn refresh_task_rows(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let rows = load_task_rows(context, state.task_repo_scope.as_deref())?;
@@ -54,6 +56,31 @@ pub(super) fn clone_and_refresh(
         refresh_task_rows(context, state)?;
     }
     Ok(cloned_repo)
+}
+
+/// Toggle the detached worktree for the currently selected repo.
+/// If a detached worktree already exists for the repo, removes it.
+/// Otherwise, creates one.
+/// Returns a human-readable status message on success.
+pub(super) fn toggle_detach_and_refresh(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+) -> Result<String> {
+    let Some(row) = state.selected_repo_row().cloned() else {
+        return Ok("No repo selected".to_string());
+    };
+
+    let repo_key_str = row.repo.to_string();
+    let message = if row.is_detached {
+        detach_cmd::remove(context, &repo_key_str, false)?;
+        format!("Removed detached worktree for {repo_key_str}")
+    } else {
+        detach_cmd::add(context, &repo_key_str)?;
+        format!("Added detached worktree for {repo_key_str}")
+    };
+
+    refresh_repo_rows(context, state)?;
+    Ok(message)
 }
 
 #[cfg(test)]

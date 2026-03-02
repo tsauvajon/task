@@ -40,9 +40,17 @@ pub fn build_task_rows(
     entries: &[WorktreeEntry],
     open_sessions: &[String],
 ) -> Vec<TaskRow> {
+    // Canonicalize wt_dir so that path comparisons work correctly even when
+    // the directory contains symlinks (e.g. macOS /var → /private/var).
+    let real_wt_dir = std::fs::canonicalize(wt_dir).unwrap_or_else(|_| wt_dir.to_path_buf());
+    let task_root = real_wt_dir.join(repo_key.as_str());
     entries
         .iter()
         .filter(|e| !e.is_bare)
+        .filter(|e| {
+            let real_path = std::fs::canonicalize(&e.path).unwrap_or_else(|_| e.path.clone());
+            real_path.starts_with(&task_root) && real_path != task_root
+        })
         .map(|entry| {
             let branch = branch_from_ref(entry.branch_ref.as_deref())
                 .or_else(|| branch_from_worktree_path(wt_dir, repo_key, &entry.path))
@@ -169,21 +177,38 @@ mod tests {
         }
 
         #[test]
-        fn falls_back_to_path_stem_for_missing_branch_ref() {
+        fn filters_out_entries_outside_task_root() {
+            // Any worktree whose path is not under wt_dir/repo_key is excluded.
+            // This covers detached snapshots, external checkouts, etc.
             let wt_dir = Path::new("/tmp/dev/wt");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
-            // No branch_ref AND path is outside the wt_dir/repo_key prefix,
-            // so branch_from_worktree_path also returns None.
-            // The final fallback is the last path component.
-            let entries = vec![WorktreeEntry {
-                path: "/some/other/dir/mybranch".into(),
-                branch_ref: None,
-                is_bare: false,
-            }];
+            let entries = vec![
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/feat".into(),
+                    branch_ref: Some("refs/heads/feat".to_string()),
+                    is_bare: false,
+                },
+                // Detached snapshot under detached_dir — must be excluded.
+                WorktreeEntry {
+                    path: "/tmp/dev/detached/github.com/tsauvajon/task".into(),
+                    branch_ref: None,
+                    is_bare: false,
+                },
+                // Arbitrary external checkout — must be excluded.
+                WorktreeEntry {
+                    path: "/some/other/dir/mybranch".into(),
+                    branch_ref: Some("refs/heads/mybranch".to_string()),
+                    is_bare: false,
+                },
+            ];
 
             let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
-            assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].branch, BranchName::new("mybranch"));
+            assert_eq!(
+                rows.len(),
+                1,
+                "only the task-root worktree should be included"
+            );
+            assert_eq!(rows[0].branch, BranchName::new("feat"));
         }
 
         #[test]
@@ -244,7 +269,8 @@ mod tests {
 
         #[test]
         fn branch_from_worktree_path_fallback() {
-            // branch_ref is None but path matches wt_dir/repo_key prefix
+            // branch_ref is None but path is under wt_dir/repo_key prefix:
+            // branch is derived from the relative path.
             let wt_dir = Path::new("/tmp/dev/wt");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![WorktreeEntry {
@@ -285,6 +311,27 @@ mod tests {
 
             let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
             assert_eq!(rows[0].path, path);
+        }
+
+        #[test]
+        fn all_task_worktrees_are_included() {
+            let wt_dir = Path::new("/tmp/dev/wt");
+            let repo_key = RepoKey::new("github.com/tsauvajon/task");
+            let entries = vec![
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/main".into(),
+                    branch_ref: Some("refs/heads/main".to_string()),
+                    is_bare: false,
+                },
+                WorktreeEntry {
+                    path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
+                    branch_ref: Some("refs/heads/bump-deps".to_string()),
+                    is_bare: false,
+                },
+            ];
+
+            let rows = build_task_rows(&repo_key, wt_dir, &entries, &[]);
+            assert_eq!(rows.len(), 2, "both task worktrees should be included");
         }
     }
 }

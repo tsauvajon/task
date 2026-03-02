@@ -16,5 +16,5 @@ pub(super) fn capture(args: &[&str], cwd: Option<&Path>) -> crate::error::Result
 }
 
 pub(super) fn status(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<()> {
-    GIT.status(args, cwd)
+    GIT.status_quiet(args, cwd)
 }

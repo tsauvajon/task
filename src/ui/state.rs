@@ -19,6 +19,7 @@ pub(super) struct RepoRow {
     pub(super) repo: RepoKey,
     pub(super) open_tasks: usize,
     pub(super) parked_tasks: usize,
+    pub(super) is_detached: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +41,7 @@ pub(super) struct UiState {
     pub(super) task_repo_scope: Option<String>,
     pub(super) create_branch: String,
     pub(super) clone_input: String,
+    pub(super) activity_lines: Vec<String>,
     pub(super) view: ViewMode,
     pub(super) mode: InputMode,
     pub(super) message: String,
@@ -63,6 +65,7 @@ impl UiState {
             task_repo_scope,
             create_branch: String::new(),
             clone_input: String::new(),
+            activity_lines: Vec::new(),
             view: ViewMode::Tasks,
             mode: InputMode::Normal,
             message: "Ready".to_string(),
@@ -204,6 +207,19 @@ impl UiState {
         self.view = ViewMode::Tasks;
         self.mode = InputMode::Normal;
     }
+
+    pub(super) fn append_activity_lines(&mut self, lines: Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+
+        self.activity_lines.extend(lines);
+        const MAX_ACTIVITY_LINES: usize = 8;
+        if self.activity_lines.len() > MAX_ACTIVITY_LINES {
+            let extra = self.activity_lines.len() - MAX_ACTIVITY_LINES;
+            self.activity_lines.drain(0..extra);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -219,6 +235,7 @@ mod tests {
             repo: RepoKey::new(repo),
             open_tasks,
             parked_tasks,
+            is_detached: false,
         }
     }
 
