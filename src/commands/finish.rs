@@ -58,7 +58,7 @@ pub fn run(
         }
     }
 
-    finish_session(&repo_key, &branch)?;
+    finish_session(&repo_key, &branch, &gitdir)?;
     if let Err(err) = cleanup(&repo_key, &branch) {
         process::warn(&format!(
             "Failed to remove task editor state for {repo_key} {branch}: {err}"

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, path::Path};
 
 use super::run::{available, capture, status};
 
@@ -18,7 +18,11 @@ pub fn list_sessions() -> HashSet<String> {
 }
 
 pub fn has_session(session: &str) -> bool {
-    status(&["has-session", "-t", session], None).is_ok()
+    has_session_in(session, None)
+}
+
+pub fn has_session_in(session: &str, cwd: Option<&Path>) -> bool {
+    status(&["has-session", "-t", session], cwd).is_ok()
 }
 
 fn parse_sessions(output: &str) -> HashSet<String> {

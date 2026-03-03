@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use super::{
     naming::session_name,
     run::status,
-    sessions::{has_session, is_available},
+    sessions::{has_session, has_session_in, is_available},
 };
 use crate::{
     error::Result,
@@ -160,7 +160,7 @@ pub fn open_session(
 
 pub fn park(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
     let session = session_name(repo_key, branch);
-    let has_tmux_session = has_session(&session);
+    let has_tmux_session = has_session_in(&session, Some(path));
     let mut result = ParkResult::AlreadyParked;
     let title = format!("{repo_key} {branch}");
 
@@ -176,7 +176,7 @@ pub fn park(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
                 let _ = close_windows(repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
-                status(&["kill-session", "-t", &session], None)?;
+                status(&["kill-session", "-t", &session], Some(path))?;
                 result = ParkResult::Parked;
             }
         }
@@ -185,10 +185,10 @@ pub fn park(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
     Ok(result)
 }
 
-pub fn finish_session(repo_key: &str, branch: &str) -> Result<()> {
+pub fn finish_session(repo_key: &str, branch: &str, cwd: &Path) -> Result<()> {
     let tmux_available = is_available();
     let session = session_name(repo_key, branch);
-    let has_tmux_session = tmux_available && has_session(&session);
+    let has_tmux_session = tmux_available && has_session_in(&session, Some(cwd));
 
     for action in finish_teardown_actions(tmux_available, has_tmux_session) {
         match action {
@@ -196,7 +196,7 @@ pub fn finish_session(repo_key: &str, branch: &str) -> Result<()> {
                 let _ = close_windows(repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
-                status(&["kill-session", "-t", &session], None)?;
+                status(&["kill-session", "-t", &session], Some(cwd))?;
             }
         }
     }
