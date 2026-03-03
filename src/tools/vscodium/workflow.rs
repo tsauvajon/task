@@ -1,6 +1,6 @@
 use std::{fs, path::Path, thread, time::Duration};
 
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, Signal, System};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, Signal, System, UpdateKind};
 
 use super::{
     naming::user_data_dir, process_match::cmdline_matches_user_data_dir, trust::seed_trusted_roots,
@@ -92,10 +92,10 @@ pub fn cleanup(repo_key: &str, branch: &str) -> Result<()> {
 }
 
 fn codium_pids_for_user_data_dir(user_data_dir: &Path) -> Vec<u32> {
-    let mut system = System::new_with_specifics(
-        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
-    );
-    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let refresh_kind = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always);
+    let mut system =
+        System::new_with_specifics(RefreshKind::nothing().with_processes(refresh_kind));
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
 
     system
         .processes()
