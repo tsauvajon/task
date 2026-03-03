@@ -5,7 +5,7 @@ use crate::runtime::{nix_store::NixRunner, process::ManagedTool};
 static TMUX: NixRunner = NixRunner::new(ManagedTool::Tmux);
 
 pub(super) fn available() -> bool {
-    TMUX.available()
+    crate::runtime::process::command_exists("tmux")
 }
 
 pub(super) fn capture(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<String> {

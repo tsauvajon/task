@@ -1,9 +1,13 @@
-/// Resolves Nix store paths for managed tools using `nix path-info`, then
-/// caches the result for the lifetime of the process.
+/// Resolves Nix store paths for managed tools using `nix build --no-link
+/// --print-out-paths`, then caches the result for the lifetime of the process.
 ///
 /// This avoids the full `nix run` startup cost (flake evaluation + process
-/// spawn overhead) on every tool invocation: instead we pay the `nix path-info`
+/// spawn overhead) on every tool invocation: instead we pay the `nix build`
 /// cost once per tool per process, then execute the store binary directly.
+///
+/// Unlike `nix path-info`, `nix build` fetches or builds the package when it
+/// is not already present in the local store, so the resolved path is always
+/// valid.
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -63,16 +67,21 @@ impl NixRunner {
 // NixRunner is used as `static` — safe because OnceLock is Sync.
 unsafe impl Sync for NixRunner {}
 
-/// Resolve the primary binary path for a managed tool via `nix path-info`.
+/// Resolve the primary binary path for a managed tool via
+/// `nix build --no-link --print-out-paths`.
 ///
 /// Returns the absolute path to the binary inside the Nix store, e.g.
 /// `/nix/store/…-git-2.x/bin/git`.
+///
+/// `nix build` fetches or builds the package when it is not already present,
+/// unlike `nix path-info` which only reports store paths and fails when the
+/// path has not been realised locally.
 fn resolve_nix_binary(tool: ManagedTool) -> Result<PathBuf> {
     let package = tool.nix_package();
     let binary_name = tool.binary_name();
 
     let output = Command::new("nix")
-        .args(["path-info", package])
+        .args(["build", package, "--no-link", "--print-out-paths"])
         .output()
         .map_err(|err| Error::failed(format!("Could not resolve nix package {package}: {err}")))?;
 
@@ -89,84 +98,154 @@ fn resolve_nix_binary(tool: ManagedTool) -> Result<PathBuf> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let store_path = parse_nix_store_path(&stdout, package)?;
-
-    let binary = PathBuf::from(store_path).join("bin").join(binary_name);
-    if !binary.is_file() {
-        return Err(Error::failed(format!(
-            "Could not find binary {binary_name} in nix store path {}",
-            binary.display()
-        )));
-    }
-
-    Ok(binary)
+    find_nix_binary_path(&stdout, package, binary_name)
 }
 
-fn parse_nix_store_path<'a>(stdout: &'a str, package: &str) -> Result<&'a str> {
-    stdout
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            if line.is_empty() { None } else { Some(line) }
-        })
-        .ok_or_else(|| {
-            Error::failed(format!(
-                "Could not resolve nix package {package}: empty output"
-            ))
-        })
+/// Scan each output path printed by `nix build --print-out-paths` and return
+/// the path whose `bin/<binary_name>` exists.
+///
+/// `nix build` may print multiple store paths for a single package (e.g. the
+/// package itself and a separate `-man` output). We need the path that actually
+/// owns the binary, not the documentation output.
+fn find_nix_binary_path(stdout: &str, package: &str, binary_name: &str) -> Result<PathBuf> {
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let candidate = PathBuf::from(line).join("bin").join(binary_name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(Error::failed(format!(
+        "Could not find binary {binary_name} in nix build output for {package}"
+    )))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_nix_store_path;
+    use std::fs;
 
-    mod parse_nix_store_path {
+    use super::find_nix_binary_path;
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("task-rs-nix-store-{name}"));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            self.0.as_path()
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    mod find_nix_binary_path {
         use super::*;
 
         #[test]
-        fn returns_first_non_empty_line() {
-            let output = "\n  /nix/store/abc-tmux \n/nix/store/other\n";
-            let result = parse_nix_store_path(output, "nixpkgs#tmux").expect("store path");
-            assert_eq!(result, "/nix/store/abc-tmux");
+        fn returns_path_containing_the_binary() {
+            let dir = TempDir::new("find-binary");
+            let bin_dir = dir.path().join("bin");
+            fs::create_dir_all(&bin_dir).unwrap();
+            fs::write(bin_dir.join("mytool"), "").unwrap();
+
+            let stdout = format!("{}\n", dir.path().display());
+            let result =
+                find_nix_binary_path(&stdout, "nixpkgs#mytool", "mytool").expect("should find");
+            assert_eq!(result, bin_dir.join("mytool"));
         }
 
         #[test]
-        fn rejects_empty_output() {
-            assert!(parse_nix_store_path("\n\n", "nixpkgs#tmux").is_err());
+        fn skips_paths_without_the_binary() {
+            let dir = TempDir::new("find-binary-skip");
+            // two paths: first has no bin/mytool, second does
+            let no_bin = dir.path().join("no-bin");
+            let with_bin = dir.path().join("with-bin");
+            fs::create_dir_all(no_bin.join("bin")).unwrap();
+            fs::create_dir_all(with_bin.join("bin")).unwrap();
+            fs::write(with_bin.join("bin").join("mytool"), "").unwrap();
+
+            let stdout = format!("{}\n{}\n", no_bin.display(), with_bin.display());
+            let result =
+                find_nix_binary_path(&stdout, "nixpkgs#mytool", "mytool").expect("should find");
+            assert_eq!(result, with_bin.join("bin").join("mytool"));
         }
 
         #[test]
-        fn rejects_completely_empty_string() {
-            assert!(parse_nix_store_path("", "nixpkgs#git").is_err());
+        fn skips_man_output_and_finds_bin() {
+            // Mirrors the real tmux case: nix build prints -man path first,
+            // then the package path that actually has bin/tmux.
+            let dir = TempDir::new("find-binary-man");
+            let man_path = dir.path().join("tmux-man");
+            let pkg_path = dir.path().join("tmux");
+            fs::create_dir_all(man_path.join("share").join("man")).unwrap();
+            fs::create_dir_all(pkg_path.join("bin")).unwrap();
+            fs::write(pkg_path.join("bin").join("tmux"), "").unwrap();
+
+            let stdout = format!("{}\n{}\n", man_path.display(), pkg_path.display());
+            let result =
+                find_nix_binary_path(&stdout, "nixpkgs#tmux", "tmux").expect("should find tmux");
+            assert_eq!(result, pkg_path.join("bin").join("tmux"));
         }
 
         #[test]
-        fn returns_single_line_output() {
-            let output = "/nix/store/xyz123-git-2.44.0\n";
-            let result = parse_nix_store_path(output, "nixpkgs#git").expect("store path");
-            assert_eq!(result, "/nix/store/xyz123-git-2.44.0");
+        fn skips_blank_lines() {
+            let dir = TempDir::new("find-binary-blanks");
+            let pkg_path = dir.path().join("pkg");
+            fs::create_dir_all(pkg_path.join("bin")).unwrap();
+            fs::write(pkg_path.join("bin").join("tool"), "").unwrap();
+
+            let stdout = format!("\n\n{}\n\n", pkg_path.display());
+            let result =
+                find_nix_binary_path(&stdout, "nixpkgs#tool", "tool").expect("should find");
+            assert_eq!(result, pkg_path.join("bin").join("tool"));
         }
 
         #[test]
-        fn skips_leading_blank_lines() {
-            let output = "\n\n\n/nix/store/abc-tmux\n";
-            let result = parse_nix_store_path(output, "nixpkgs#tmux").expect("store path");
-            assert_eq!(result, "/nix/store/abc-tmux");
-        }
+        fn errors_when_no_path_has_the_binary() {
+            let dir = TempDir::new("find-binary-missing");
+            let pkg_path = dir.path().join("pkg");
+            fs::create_dir_all(pkg_path.join("bin")).unwrap();
+            // binary not created
 
-        #[test]
-        fn trims_whitespace_from_first_line() {
-            let output = "   /nix/store/abc-direnv   \n";
-            let result = parse_nix_store_path(output, "nixpkgs#direnv").expect("store path");
-            assert_eq!(result, "/nix/store/abc-direnv");
-        }
-
-        #[test]
-        fn error_message_mentions_package() {
-            let err = parse_nix_store_path("", "nixpkgs#mypackage").unwrap_err();
+            let stdout = format!("{}\n", pkg_path.display());
+            let err = find_nix_binary_path(&stdout, "nixpkgs#mytool", "mytool").unwrap_err();
             assert!(
-                err.to_string().contains("nixpkgs#mypackage"),
-                "error should name the package: {err}"
+                err.to_string().contains("mytool"),
+                "error should mention binary: {err}"
+            );
+            assert!(
+                err.to_string().contains("nixpkgs#mytool"),
+                "error should mention package: {err}"
+            );
+        }
+
+        #[test]
+        fn errors_on_empty_output() {
+            let err = find_nix_binary_path("", "nixpkgs#git", "git").unwrap_err();
+            assert!(
+                err.to_string().contains("git"),
+                "error should mention binary: {err}"
+            );
+        }
+
+        #[test]
+        fn errors_on_blank_only_output() {
+            let err = find_nix_binary_path("\n\n\n", "nixpkgs#git", "git").unwrap_err();
+            assert!(
+                err.to_string().contains("git"),
+                "error should mention binary: {err}"
             );
         }
     }
