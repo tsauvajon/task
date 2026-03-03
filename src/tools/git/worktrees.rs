@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     gitdir::GitDir,
+    refs::parse_ls_remote_branch,
     run::{capture, status},
 };
 use crate::error::Result;
@@ -149,14 +150,94 @@ pub fn add_detached(gitdir: &Path, path: &Path, base_ref: &str) -> Result<()> {
 /// Update a detached worktree by fetching `origin` then hard-resetting to `origin/HEAD`.
 /// Equivalent to:
 ///   git -C <path> fetch origin
-///   git -C <path> reset --hard origin/HEAD
+///   git -C <path> reset --hard <resolved-base>
 pub fn update_detached(path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy();
     status(&["-C", path_str.as_ref(), "fetch", "origin"], None)?;
+    let base_ref = resolve_detached_base_ref(path);
     status(
-        &["-C", path_str.as_ref(), "reset", "--hard", "origin/HEAD"],
+        &["-C", path_str.as_ref(), "reset", "--hard", &base_ref],
         None,
     )
+}
+
+fn resolve_detached_base_ref(path: &Path) -> String {
+    if let Some(remote_head) = remote_default_branch(path)
+        && rev_exists_in_worktree(path, &remote_head)
+    {
+        return remote_head;
+    }
+
+    if let Some(origin_head) = symbolic_origin_head(path)
+        && rev_exists_in_worktree(path, &origin_head)
+    {
+        return origin_head;
+    }
+
+    for fallback in ["origin/main", "origin/master"] {
+        if rev_exists_in_worktree(path, fallback) {
+            return fallback.to_string();
+        }
+    }
+
+    "HEAD".to_string()
+}
+
+fn remote_default_branch(path: &Path) -> Option<String> {
+    let path_str = path.to_string_lossy();
+    let output = capture(
+        &[
+            "-C",
+            path_str.as_ref(),
+            "ls-remote",
+            "--symref",
+            "origin",
+            "HEAD",
+        ],
+        None,
+    )
+    .ok()?;
+    let branch = parse_ls_remote_branch(&output)?;
+    Some(format!("origin/{branch}"))
+}
+
+fn symbolic_origin_head(path: &Path) -> Option<String> {
+    let path_str = path.to_string_lossy();
+    let output = capture(
+        &[
+            "-C",
+            path_str.as_ref(),
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+        None,
+    )
+    .ok()?;
+    let value = output.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn rev_exists_in_worktree(path: &Path, revision: &str) -> bool {
+    let path_str = path.to_string_lossy();
+    let value = format!("{revision}^{{commit}}");
+    status(
+        &[
+            "-C",
+            path_str.as_ref(),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &value,
+        ],
+        None,
+    )
+    .is_ok()
 }
 
 pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
@@ -171,11 +252,56 @@ pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
     use super::{
         WorktreeEntry, branch_from_ref, branch_from_worktree_path, parse_worktree_porcelain,
+        update_detached,
     };
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("task-rs-worktrees-{name}"));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            self.0.as_path()
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn run_git(args: &[&str], cwd: &Path) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .status()
+            .expect("git must be available");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn git_output(args: &[&str], cwd: &Path) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("git must be available");
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
 
     mod parse_worktree_porcelain {
         use super::*;
@@ -364,6 +490,65 @@ branch refs/heads/main\n\
                 Path::new("/other/path/feat/something"),
             );
             assert_eq!(branch, None);
+        }
+    }
+
+    mod update_detached_tests {
+        use super::*;
+
+        #[test]
+        fn falls_back_when_origin_head_is_missing() {
+            let dir = TempDir::new("update-detached-fallback");
+            let remote = dir.path().join("remote.git");
+            let source = dir.path().join("source");
+            let detached = dir.path().join("detached");
+
+            fs::create_dir_all(&source).expect("create source dir");
+
+            run_git(
+                &["init", "--bare", remote.to_string_lossy().as_ref()],
+                dir.path(),
+            );
+
+            run_git(&["init", "-b", "main"], source.as_path());
+            run_git(
+                &["config", "user.email", "test@example.com"],
+                source.as_path(),
+            );
+            run_git(&["config", "user.name", "Test"], source.as_path());
+            fs::write(source.join("README.md"), "v1\n").expect("write initial file");
+            run_git(&["add", "README.md"], source.as_path());
+            run_git(&["commit", "-m", "initial"], source.as_path());
+            run_git(
+                &["remote", "add", "origin", remote.to_string_lossy().as_ref()],
+                source.as_path(),
+            );
+            run_git(&["push", "-u", "origin", "main"], source.as_path());
+
+            run_git(
+                &[
+                    "clone",
+                    remote.to_string_lossy().as_ref(),
+                    detached.to_string_lossy().as_ref(),
+                ],
+                dir.path(),
+            );
+
+            // Remove origin/HEAD to reproduce the detached update failure mode.
+            run_git(
+                &["update-ref", "-d", "refs/remotes/origin/HEAD"],
+                detached.as_path(),
+            );
+
+            fs::write(source.join("README.md"), "v2\n").expect("write updated file");
+            run_git(&["commit", "-am", "update"], source.as_path());
+            run_git(&["push", "origin", "main"], source.as_path());
+
+            update_detached(detached.as_path()).expect("update_detached should succeed");
+
+            let head = git_output(&["rev-parse", "HEAD"], detached.as_path());
+            let origin_main = git_output(&["rev-parse", "origin/main"], detached.as_path());
+            assert_eq!(head, origin_main, "detached HEAD should match origin/main");
         }
     }
 }
