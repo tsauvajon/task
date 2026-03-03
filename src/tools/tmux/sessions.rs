@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use super::run::{capture, status};
+use super::run::{available, capture, status};
 
 pub fn is_available() -> bool {
-    crate::runtime::process::command_exists("tmux")
+    available()
 }
 
 pub fn list_sessions() -> HashSet<String> {
