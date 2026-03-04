@@ -9,11 +9,12 @@ use crate::error::Result;
 /// `ref: refs/heads/main HEAD` is found, otherwise `None`.
 pub(crate) fn parse_ls_remote_branch(output: &str) -> Option<&str> {
     for line in output.lines() {
-        if let Some(target) = line.strip_prefix("ref: ") {
-            let target = target.trim();
-            if let Some(target) = target.strip_suffix(" HEAD")
-                && let Some(branch) = target.strip_prefix("refs/heads/")
-            {
+        if let Some(rest) = line.strip_prefix("ref: ") {
+            // `git ls-remote --symref` output uses tab-separated fields:
+            //   ref: refs/heads/main\tHEAD
+            // Split on whitespace to handle both tab and space separators.
+            let target = rest.split_whitespace().next()?;
+            if let Some(branch) = target.strip_prefix("refs/heads/") {
                 return Some(branch);
             }
         }
@@ -35,16 +36,11 @@ pub fn detect_default_base(gitdir: &Path) -> String {
         }
     }
 
-    if gd
-        .status(&[
-            "show-ref",
-            "--verify",
-            "--quiet",
-            "refs/remotes/origin/master",
-        ])
-        .is_ok()
-    {
-        return "origin/master".to_string();
+    // Fallback: try common default branch names when ls-remote is unavailable.
+    for fallback in ["origin/main", "origin/master"] {
+        if rev_exists(gitdir, fallback) {
+            return fallback.to_string();
+        }
     }
 
     "HEAD".to_string()
@@ -246,21 +242,28 @@ mod tests {
 
         #[test]
         fn returns_branch_for_main() {
-            // Supply the space-separated form that the function is designed to parse.
-            let output = "ref: refs/heads/main HEAD\nabc123\trefs/heads/main\n";
+            // Real git output uses tab-separated fields.
+            let output = "ref: refs/heads/main\tHEAD\nabc123\trefs/heads/main\n";
             assert_eq!(parse_ls_remote_branch(output), Some("main"));
         }
 
         #[test]
         fn returns_branch_for_master() {
-            let output = "ref: refs/heads/master HEAD\nabc123\trefs/heads/master\n";
+            let output = "ref: refs/heads/master\tHEAD\nabc123\trefs/heads/master\n";
             assert_eq!(parse_ls_remote_branch(output), Some("master"));
         }
 
         #[test]
         fn returns_branch_for_nested_name() {
-            let output = "ref: refs/heads/feature/my-thing HEAD\n";
+            let output = "ref: refs/heads/feature/my-thing\tHEAD\n";
             assert_eq!(parse_ls_remote_branch(output), Some("feature/my-thing"));
+        }
+
+        #[test]
+        fn handles_space_separated_output() {
+            // Also accept space-separated format for robustness.
+            let output = "ref: refs/heads/main HEAD\nabc123\trefs/heads/main\n";
+            assert_eq!(parse_ls_remote_branch(output), Some("main"));
         }
 
         #[test]
@@ -277,19 +280,19 @@ mod tests {
         #[test]
         fn returns_none_for_non_heads_ref() {
             // A tag symref – should not match refs/heads/ prefix
-            let output = "ref: refs/tags/v1.0 HEAD\n";
+            let output = "ref: refs/tags/v1.0\tHEAD\n";
             assert_eq!(parse_ls_remote_branch(output), None);
         }
 
         #[test]
         fn ignores_lines_before_symref() {
-            let output = "some-other-line\nref: refs/heads/develop HEAD\nabc123\n";
+            let output = "some-other-line\nref: refs/heads/develop\tHEAD\nabc123\n";
             assert_eq!(parse_ls_remote_branch(output), Some("develop"));
         }
 
         #[test]
         fn returns_first_matching_line() {
-            let output = "ref: refs/heads/first HEAD\nref: refs/heads/second HEAD\n";
+            let output = "ref: refs/heads/first\tHEAD\nref: refs/heads/second\tHEAD\n";
             assert_eq!(parse_ls_remote_branch(output), Some("first"));
         }
     }
