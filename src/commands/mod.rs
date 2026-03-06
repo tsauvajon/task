@@ -37,7 +37,10 @@ pub struct Cli {
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum Command {
     #[command(about = "Prepare workspace and asdf Node plugin")]
-    Bootstrap,
+    Bootstrap {
+        #[arg(long, help = "Skip confirmation prompt and assume yes")]
+        yes: bool,
+    },
     #[command(about = "Check toolchain/workspace health and optionally apply fixes")]
     Doctor {
         #[arg(long)]
@@ -141,7 +144,7 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
 
     match command {
         None => ui::run(&context, None),
-        Some(Command::Bootstrap) => bootstrap::run(&context),
+        Some(Command::Bootstrap { yes }) => bootstrap::run(&context, yes),
         Some(Command::Doctor { fix }) => doctor::run(&context, fix),
         Some(Command::Repo { command }) => repo::run(&context, command),
         Some(Command::Start {
@@ -181,7 +184,9 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
 fn should_auto_onboard(command: Option<&Command>) -> bool {
     !matches!(
         command,
-        Some(Command::Bootstrap) | Some(Command::Doctor { .. }) | Some(Command::Detach { .. })
+        Some(Command::Bootstrap { .. })
+            | Some(Command::Doctor { .. })
+            | Some(Command::Detach { .. })
     )
 }
 
@@ -305,6 +310,18 @@ mod tests {
                     worktree_path: None
                 })
             );
+        }
+
+        #[test]
+        fn parses_bootstrap_without_yes() {
+            let cli = Cli::parse_from(["task", "bootstrap"]);
+            assert_eq!(cli.command, Some(Command::Bootstrap { yes: false }));
+        }
+
+        #[test]
+        fn parses_bootstrap_with_yes() {
+            let cli = Cli::parse_from(["task", "bootstrap", "--yes"]);
+            assert_eq!(cli.command, Some(Command::Bootstrap { yes: true }));
         }
 
         #[test]
@@ -473,7 +490,9 @@ mod tests {
 
         #[test]
         fn skips_bootstrap_and_doctor() {
-            assert!(!should_auto_onboard(Some(&Command::Bootstrap)));
+            assert!(!should_auto_onboard(Some(&Command::Bootstrap {
+                yes: false
+            })));
             assert!(!should_auto_onboard(Some(&Command::Doctor { fix: false })));
             assert!(should_auto_onboard(Some(&Command::Start {
                 repo: "goto".to_string(),
