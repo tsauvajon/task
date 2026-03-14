@@ -40,7 +40,9 @@ pub fn apply_full_setup(
     approval: SetupApproval<'_>,
     non_interactive_guidance: &str,
 ) -> Result<bool> {
-    ensure_interactive_terminal(is_interactive_terminal(), non_interactive_guidance)?;
+    if matches!(approval, SetupApproval::Prompt(_)) {
+        ensure_interactive_terminal(is_interactive_terminal(), non_interactive_guidance)?;
+    }
     let approved = resolve_setup_approval(approval)?;
 
     if !approved {

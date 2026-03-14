@@ -6,11 +6,16 @@ use crate::{
     },
 };
 
-pub fn run(env: &RuntimeEnvironment) -> Result<()> {
-    const GUIDANCE: &str = "'task bootstrap' needs an interactive terminal because it applies local setup changes. Re-run it in an interactive terminal, or use 'task doctor' for read-only diagnostics.";
+pub fn run(env: &RuntimeEnvironment, yes: bool) -> Result<()> {
+    const GUIDANCE: &str = "'task bootstrap' needs an interactive terminal because it applies local setup changes. Re-run it in an interactive terminal, use --yes to skip confirmation, or use 'task doctor' for read-only diagnostics.";
 
-    let applied =
-        setup::apply_full_setup(env, SetupApproval::Prompt("Run bootstrap now?"), GUIDANCE)?;
+    let approval = if yes {
+        SetupApproval::AssumeYes
+    } else {
+        SetupApproval::Prompt("Run bootstrap now?")
+    };
+
+    let applied = setup::apply_full_setup(env, approval, GUIDANCE)?;
     ensure_bootstrap_applied(applied)
 }
 
