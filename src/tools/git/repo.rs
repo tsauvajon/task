@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use super::{gitdir::GitDir, run::capture};
+use super::{gitdir::GitDir, refs::ensure_origin_fetch_refspec, run::capture};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +140,12 @@ pub fn clone_bare_repo(repo_url: &str, gitdir: &Path) -> Result<()> {
         ],
         None,
     )
-    .map(|_| ())
+    .map(|_| ())?;
+
+    // Bare clones default to fetching into refs/heads/* instead of
+    // refs/remotes/origin/*, which breaks plain `git fetch` inside worktrees.
+    // Override the refspec so manual git commands work as expected.
+    ensure_origin_fetch_refspec(gitdir)
 }
 
 fn is_git_url(input: &str) -> bool {
