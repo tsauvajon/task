@@ -126,8 +126,12 @@ fn apply_intent(
                 ViewMode::Repos => {
                     if let Some(repo) = state.selected_repo_row().map(|row| row.repo.to_string()) {
                         state.select_repo_for_tasks(repo);
-                        refresh_task_rows(context, state)?;
-                        state.message = "Opened selected repository tasks".to_string();
+                        match refresh_task_rows(context, state) {
+                            Ok(()) => {
+                                state.message = "Opened selected repository tasks".to_string()
+                            }
+                            Err(err) => state.message = err.to_string(),
+                        }
                     }
                 }
             }
@@ -161,19 +165,21 @@ fn apply_intent(
                 state.message = "Finish is only available in Tasks view".to_string();
                 return Ok(None);
             }
-            finish_and_refresh(context, state)?;
+            if let Err(err) = finish_and_refresh(context, state) {
+                state.message = err.to_string();
+            }
             Ok(None)
         }
         UiIntent::RefreshCurrentView => {
             match state.view {
-                ViewMode::Tasks => {
-                    refresh_task_rows(context, state)?;
-                    state.message = "Refreshed task list".to_string();
-                }
-                ViewMode::Repos => {
-                    refresh_repo_rows(context, state)?;
-                    state.message = "Refreshed repo list".to_string();
-                }
+                ViewMode::Tasks => match refresh_task_rows(context, state) {
+                    Ok(()) => state.message = "Refreshed task list".to_string(),
+                    Err(err) => state.message = err.to_string(),
+                },
+                ViewMode::Repos => match refresh_repo_rows(context, state) {
+                    Ok(()) => state.message = "Refreshed repo list".to_string(),
+                    Err(err) => state.message = err.to_string(),
+                },
             }
             Ok(None)
         }
@@ -182,7 +188,9 @@ fn apply_intent(
                 state.message = "Park is only available in Tasks view".to_string();
                 return Ok(None);
             }
-            park_and_refresh(context, state)?;
+            if let Err(err) = park_and_refresh(context, state) {
+                state.message = err.to_string();
+            }
             Ok(None)
         }
         UiIntent::ToggleDetach => {
