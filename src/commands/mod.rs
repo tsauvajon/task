@@ -28,7 +28,7 @@ use crate::{
 };
 
 #[derive(Debug, Parser, PartialEq, Eq)]
-#[command(name = "task", about = "Task workflow helper")]
+#[command(name = "task", about = "Task workflow helper", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
