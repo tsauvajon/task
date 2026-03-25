@@ -48,9 +48,9 @@ fn park_teardown_actions(has_tmux_session: bool) -> Vec<TeardownAction> {
     actions
 }
 
-fn finish_teardown_actions(tmux_available: bool, has_tmux_session: bool) -> Vec<TeardownAction> {
+fn finish_teardown_actions(tmux_available: bool) -> Vec<TeardownAction> {
     let mut actions = vec![TeardownAction::CloseCodium];
-    if tmux_available && has_tmux_session {
+    if tmux_available {
         actions.push(TeardownAction::KillTmuxSession);
     }
     actions
@@ -188,19 +188,17 @@ pub fn park(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
 pub fn finish_session(repo_key: &str, branch: &str, cwd: &Path) -> Result<()> {
     let tmux_available = is_available();
     let session = session_name(repo_key, branch);
-    let has_tmux_session = tmux_available && has_session_in(&session, Some(cwd));
 
-    if tmux_available && !has_tmux_session {
-        process::log(&format!("No tmux session for {repo_key} {branch}"));
-    }
-
-    for action in finish_teardown_actions(tmux_available, has_tmux_session) {
+    for action in finish_teardown_actions(tmux_available) {
         match action {
             TeardownAction::CloseCodium => {
                 let _ = close_windows(repo_key, branch);
             }
             TeardownAction::KillTmuxSession => {
-                status(&["kill-session", "-t", &session], Some(cwd))?;
+                // Attempt kill-session directly without checking has-session
+                // first. If the session doesn't exist, tmux returns non-zero
+                // which we ignore — the goal is only to ensure it's gone.
+                let _ = status(&["kill-session", "-t", &session], Some(cwd));
             }
         }
     }
@@ -241,8 +239,8 @@ mod tests {
         use super::*;
 
         #[test]
-        fn closes_codium_before_tmux_when_available_and_open() {
-            let actions = finish_teardown_actions(true, true);
+        fn always_attempts_kill_when_tmux_available() {
+            let actions = finish_teardown_actions(true);
             assert_eq!(
                 actions,
                 vec![TeardownAction::CloseCodium, TeardownAction::KillTmuxSession]
@@ -251,13 +249,7 @@ mod tests {
 
         #[test]
         fn only_closes_codium_when_tmux_unavailable() {
-            let actions = finish_teardown_actions(false, false);
-            assert_eq!(actions, vec![TeardownAction::CloseCodium]);
-        }
-
-        #[test]
-        fn only_closes_codium_when_session_missing() {
-            let actions = finish_teardown_actions(true, false);
+            let actions = finish_teardown_actions(false);
             assert_eq!(actions, vec![TeardownAction::CloseCodium]);
         }
     }
