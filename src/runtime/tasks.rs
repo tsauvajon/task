@@ -443,7 +443,7 @@ fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>> {
             }
             let path = entry.path();
             let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
-            if name.ends_with(".git") {
+            if name.ends_with(".git") && name != ".git" {
                 gitdirs.push(path);
             } else {
                 stack.push(path);
@@ -623,6 +623,20 @@ mod tests {
             let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
             assert_eq!(results.len(), 1);
             assert!(results[0].ends_with("deep.git"));
+        }
+
+        #[test]
+        fn ignores_dot_git_directories() {
+            let dir = TempDir::new("dot-git");
+            // A real bare repo that should be collected.
+            fs::create_dir_all(dir.path().join("github.com/me/app.git")).unwrap();
+            // A .git metadata directory (e.g. created by opencode) at a namespace
+            // level — must NOT be treated as a bare repo.
+            fs::create_dir_all(dir.path().join("github.com/me/.git")).unwrap();
+
+            let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
+            assert_eq!(results.len(), 1);
+            assert!(results[0].ends_with("app.git"));
         }
     }
 
