@@ -15,3 +15,7 @@ pub(super) fn capture(args: &[&str], cwd: Option<&Path>) -> crate::error::Result
 pub(super) fn status(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<()> {
     TMUX.status(args, cwd)
 }
+
+pub(super) fn status_quiet(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<()> {
+    TMUX.status_quiet(args, cwd)
+}

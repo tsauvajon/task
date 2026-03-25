@@ -190,6 +190,10 @@ pub fn finish_session(repo_key: &str, branch: &str, cwd: &Path) -> Result<()> {
     let session = session_name(repo_key, branch);
     let has_tmux_session = tmux_available && has_session_in(&session, Some(cwd));
 
+    if tmux_available && !has_tmux_session {
+        process::log(&format!("No tmux session for {repo_key} {branch}"));
+    }
+
     for action in finish_teardown_actions(tmux_available, has_tmux_session) {
         match action {
             TeardownAction::CloseCodium => {
