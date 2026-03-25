@@ -93,6 +93,7 @@ fn trusted_entry(root: &str) -> Value {
         "uri": {
             "$mid": 1,
             "scheme": "file",
+            "authority": "",
             "path": root,
             "fsPath": root,
             "external": format!("file://{root}"),
@@ -207,6 +208,7 @@ mod tests {
             let entry = &parsed["uriTrustInfo"][0];
             assert_eq!(entry["trusted"], true);
             assert_eq!(entry["uri"]["scheme"], "file");
+            assert_eq!(entry["uri"]["authority"], "");
             assert_eq!(entry["uri"]["path"], "/mnt/work");
             assert_eq!(entry["uri"]["fsPath"], "/mnt/work");
             assert_eq!(entry["uri"]["external"], "file:///mnt/work");
