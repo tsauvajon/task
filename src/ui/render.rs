@@ -192,18 +192,27 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
 
     let row_count = rows.len();
 
+    let branch_width = state
+        .task_filtered_indices
+        .iter()
+        .filter_map(|i| state.task_rows.get(*i))
+        .map(|row| row.branch.len())
+        .max()
+        .unwrap_or(0)
+        .max("BRANCH".len()) as u16;
+
     let widths: Vec<Constraint> = if scoped {
         vec![
             Constraint::Length(8),
-            Constraint::Fill(1),
+            Constraint::Length(branch_width),
             Constraint::Fill(1),
         ]
     } else {
         vec![
             Constraint::Length(8),
+            Constraint::Fill(1),
+            Constraint::Length(branch_width),
             Constraint::Fill(2),
-            Constraint::Fill(2),
-            Constraint::Fill(3),
         ]
     };
 
