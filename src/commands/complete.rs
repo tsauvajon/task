@@ -19,6 +19,15 @@ fn completion_values(
 
     let command = words[0].as_str();
     let args = &words[1..];
+
+    // Single word that isn't an exact command match — filter top-level commands by prefix.
+    if args.is_empty() {
+        let top = top_level_commands();
+        if !top.iter().any(|c| c == command) {
+            return Ok(filter_prefix(top, command));
+        }
+    }
+
     let current = args.last().map(String::as_str).unwrap_or_default();
     let arg_count = args.len();
 
@@ -293,6 +302,22 @@ mod tests {
                 .expect("top-level completion from empty word");
             assert!(values.contains(&"doctor".to_string()));
             assert!(values.contains(&"bootstrap".to_string()));
+        }
+
+        #[test]
+        fn partial_command_filters_top_level() {
+            let values =
+                completion_values(None, &["re".to_string()]).expect("partial command prefix");
+            assert!(values.contains(&"rebase".to_string()));
+            assert!(values.contains(&"repo".to_string()));
+            assert!(!values.contains(&"start".to_string()));
+        }
+
+        #[test]
+        fn partial_command_no_match_returns_empty() {
+            let values =
+                completion_values(None, &["xyz".to_string()]).expect("non-matching prefix");
+            assert!(values.is_empty());
         }
 
         #[test]
