@@ -387,8 +387,8 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
     match state.mode {
         InputMode::Normal => match state.view {
             ViewMode::Tasks => vec![
-                keybind_line("Tab", "switch to repos view", kc, theme),
-                keybind_line("Enter", "open selected task", kc, theme),
+                keybind_line("tab", "switch to repos view", kc, theme),
+                keybind_line("enter", "open selected task", kc, theme),
                 keybind_line("c", "create new task", kc, theme),
                 keybind_line("p", "park selected task", kc, theme),
                 keybind_line("f", "finish selected task", kc, theme),
@@ -398,8 +398,8 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
                 keybind_line("q", "quit", kc, theme),
             ],
             ViewMode::Repos => vec![
-                keybind_line("Tab", "switch to tasks view", kc, theme),
-                keybind_line("Enter", "open selected repo tasks", kc, theme),
+                keybind_line("tab", "switch to tasks view", kc, theme),
+                keybind_line("enter", "open selected repo tasks", kc, theme),
                 keybind_line("c", "clone repo interactively", kc, theme),
                 keybind_line("d", "toggle detached worktree", kc, theme),
                 keybind_line("/", "enter filter mode", kc, theme),
@@ -409,19 +409,19 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
             ],
         },
         InputMode::Filter => vec![
-            keybind_line("Tab", "switch Tasks/Repos", kc, theme),
-            keybind_line("Type", "append filter text", kc, theme),
-            keybind_line("Backsp", "delete character", kc, theme),
-            keybind_line("Ctrl-U", "clear filter", kc, theme),
-            keybind_line("Enter", "apply and return", kc, theme),
-            keybind_line("Esc", "return to normal", kc, theme),
+            keybind_line("tab", "switch tasks/repos", kc, theme),
+            keybind_line("type", "append filter text", kc, theme),
+            keybind_line("backsp", "delete character", kc, theme),
+            keybind_line("ctrl-u", "clear filter", kc, theme),
+            keybind_line("enter", "apply and return", kc, theme),
+            keybind_line("esc", "return to normal", kc, theme),
         ],
         InputMode::CreateTask => {
             let mut lines = vec![
-                keybind_line("Type", "set new branch name", kc, theme),
-                keybind_line("Backsp", "delete character", kc, theme),
-                keybind_line("Enter", "create and open task", kc, theme),
-                keybind_line("Esc", "return to normal", kc, theme),
+                keybind_line("type", "set new branch name", kc, theme),
+                keybind_line("backsp", "delete character", kc, theme),
+                keybind_line("enter", "create and open task", kc, theme),
+                keybind_line("esc", "return to normal", kc, theme),
             ];
             if !state.create_branch.is_empty() {
                 lines.push(Line::from(""));
@@ -437,11 +437,11 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
         }
         InputMode::CloneRepo => {
             let mut lines = vec![
-                keybind_line("Type", "<repo-url> [repo-key]", kc, theme),
-                keybind_line("Backsp", "delete character", kc, theme),
-                keybind_line("Ctrl-U", "clear input", kc, theme),
-                keybind_line("Enter", "clone repository", kc, theme),
-                keybind_line("Esc", "return to normal", kc, theme),
+                keybind_line("type", "<repo-url> [repo-key]", kc, theme),
+                keybind_line("backsp", "delete character", kc, theme),
+                keybind_line("ctrl-u", "clear input", kc, theme),
+                keybind_line("enter", "clone repository", kc, theme),
+                keybind_line("esc", "return to normal", kc, theme),
             ];
             if !state.clone_input.is_empty() {
                 lines.push(Line::from(""));
@@ -480,48 +480,48 @@ fn render_help(frame: &mut Frame, theme: &Theme) {
     };
 
     let lines = vec![
-        section("Normal mode (all views)"),
+        section("normal mode (all views)"),
         hk("↑/k", "move up"),
         hk("↓/j", "move down"),
-        hk("Tab", "switch Tasks/Repos view"),
+        hk("tab", "switch tasks/repos view"),
         hk("?", "toggle help"),
-        hk("q/Ctrl-C", "quit"),
+        hk("q/ctrl-c", "quit"),
         Line::from(""),
-        section("Tasks view"),
-        hk("Enter", "open selected task"),
+        section("tasks view"),
+        hk("enter", "open selected task"),
         hk("p", "park selected task"),
         hk("f", "finish selected task"),
         hk("c", "create new task"),
         hk("r", "refresh tasks"),
         hk("/", "enter filter mode"),
         Line::from(""),
-        section("Repos view"),
-        hk("Enter", "open selected repo tasks"),
+        section("repos view"),
+        hk("enter", "open selected repo tasks"),
         hk("c", "clone repo interactively"),
         hk("d", "toggle detached worktree"),
         hk("/", "enter filter mode"),
         hk("r", "refresh repos"),
         Line::from(""),
-        section("Filter mode"),
-        hk("Tab", "switch Tasks/Repos view"),
-        hk("Type", "append filter text"),
-        hk("Backspace", "delete character"),
-        hk("Ctrl-U", "clear filter"),
-        hk("Enter", "apply and return to normal"),
-        hk("Esc", "return to normal"),
+        section("filter mode"),
+        hk("tab", "switch tasks/repos view"),
+        hk("type", "append filter text"),
+        hk("backspace", "delete character"),
+        hk("ctrl-u", "clear filter"),
+        hk("enter", "apply and return to normal"),
+        hk("esc", "return to normal"),
         Line::from(""),
-        section("Create task mode"),
-        hk("Type", "set new branch name"),
-        hk("Backspace", "delete character"),
-        hk("Enter", "create and open new task"),
-        hk("Esc", "return to normal"),
+        section("create task mode"),
+        hk("type", "set new branch name"),
+        hk("backspace", "delete character"),
+        hk("enter", "create and open new task"),
+        hk("esc", "return to normal"),
         Line::from(""),
-        section("Clone repo mode"),
-        hk("Type", "<repo-url> [repo-key]"),
-        hk("Backspace", "delete character"),
-        hk("Ctrl-U", "clear input"),
-        hk("Enter", "clone repository"),
-        hk("Esc", "return to normal"),
+        section("clone repo mode"),
+        hk("type", "<repo-url> [repo-key]"),
+        hk("backspace", "delete character"),
+        hk("ctrl-u", "clear input"),
+        hk("enter", "clone repository"),
+        hk("esc", "return to normal"),
     ];
 
     let help = Paragraph::new(lines)
@@ -697,7 +697,7 @@ mod tests {
             let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(text.contains("filter text"));
-            assert!(text.contains("Esc"));
+            assert!(text.contains("esc"));
         }
 
         #[test]
