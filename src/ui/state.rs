@@ -145,15 +145,13 @@ impl UiState {
                 if self.task_filtered_indices.is_empty() {
                     return;
                 }
-                self.task_selected = (self.task_selected + 1)
-                    .min(self.task_filtered_indices.len().saturating_sub(1));
+                self.task_selected = (self.task_selected + 1) % self.task_filtered_indices.len();
             }
             ViewMode::Repos => {
                 if self.repo_filtered_indices.is_empty() {
                     return;
                 }
-                self.repo_selected = (self.repo_selected + 1)
-                    .min(self.repo_filtered_indices.len().saturating_sub(1));
+                self.repo_selected = (self.repo_selected + 1) % self.repo_filtered_indices.len();
             }
         }
     }
@@ -161,10 +159,24 @@ impl UiState {
     pub(super) fn move_prev(&mut self) {
         match self.view {
             ViewMode::Tasks => {
-                self.task_selected = self.task_selected.saturating_sub(1);
+                if self.task_filtered_indices.is_empty() {
+                    return;
+                }
+                self.task_selected = if self.task_selected == 0 {
+                    self.task_filtered_indices.len() - 1
+                } else {
+                    self.task_selected - 1
+                };
             }
             ViewMode::Repos => {
-                self.repo_selected = self.repo_selected.saturating_sub(1);
+                if self.repo_filtered_indices.is_empty() {
+                    return;
+                }
+                self.repo_selected = if self.repo_selected == 0 {
+                    self.repo_filtered_indices.len() - 1
+                } else {
+                    self.repo_selected - 1
+                };
             }
         }
     }
@@ -459,11 +471,17 @@ mod tests {
         }
 
         #[test]
-        fn move_next_clamps_at_last_item() {
-            let mut state =
-                UiState::new(vec![task_row_for_repo("github.com/acme/a")], vec![], None);
-            state.move_next();
-            state.move_next(); // second call should not overflow
+        fn move_next_wraps_to_first_item() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/a"),
+                    task_row_for_repo("github.com/acme/b"),
+                ],
+                vec![],
+                None,
+            );
+            state.task_selected = 1;
+            state.move_next(); // wraps back to 0
             assert_eq!(state.task_selected, 0);
         }
 
@@ -483,11 +501,17 @@ mod tests {
         }
 
         #[test]
-        fn move_prev_saturates_at_zero() {
-            let mut state =
-                UiState::new(vec![task_row_for_repo("github.com/acme/a")], vec![], None);
-            state.move_prev(); // should not underflow
-            assert_eq!(state.task_selected, 0);
+        fn move_prev_wraps_to_last_item() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/a"),
+                    task_row_for_repo("github.com/acme/b"),
+                ],
+                vec![],
+                None,
+            );
+            state.move_prev(); // wraps from 0 to last item
+            assert_eq!(state.task_selected, 1);
         }
 
         #[test]
@@ -782,12 +806,19 @@ mod tests {
         }
 
         #[test]
-        fn move_next_clamps_at_last_repo() {
+        fn move_next_wraps_to_first_repo() {
             use super::super::ViewMode;
-            let mut state = UiState::new(vec![], vec![repo_row("github.com/acme/a", 1, 0)], None);
+            let mut state = UiState::new(
+                vec![],
+                vec![
+                    repo_row("github.com/acme/a", 1, 0),
+                    repo_row("github.com/acme/b", 2, 0),
+                ],
+                None,
+            );
             state.view = ViewMode::Repos;
-            state.move_next();
-            state.move_next();
+            state.repo_selected = 1;
+            state.move_next(); // wraps back to 0
             assert_eq!(state.repo_selected, 0);
         }
 
@@ -809,12 +840,19 @@ mod tests {
         }
 
         #[test]
-        fn move_prev_saturates_at_zero_for_repos() {
+        fn move_prev_wraps_to_last_repo() {
             use super::super::ViewMode;
-            let mut state = UiState::new(vec![], vec![repo_row("github.com/acme/a", 1, 0)], None);
+            let mut state = UiState::new(
+                vec![],
+                vec![
+                    repo_row("github.com/acme/a", 1, 0),
+                    repo_row("github.com/acme/b", 2, 0),
+                ],
+                None,
+            );
             state.view = ViewMode::Repos;
-            state.move_prev();
-            assert_eq!(state.repo_selected, 0);
+            state.move_prev(); // wraps from 0 to last item
+            assert_eq!(state.repo_selected, 1);
         }
 
         #[test]
