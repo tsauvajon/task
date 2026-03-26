@@ -76,25 +76,66 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
 // ── Status bar ───────────────────────────────────────────────────────────────
 
 fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
+    let sep = Span::styled(" │ ", theme.muted_style());
     let mut spans: Vec<Span> = Vec::new();
 
     // Show input text for interactive modes.
-    match state.mode {
+    let has_input = match state.mode {
         InputMode::Filter if !state.filter_text.is_empty() => {
             spans.push(Span::styled(" filter: ", theme.muted_style()));
             spans.push(Span::styled(&state.filter_text, theme.text_style()));
+            true
         }
         InputMode::CreateTask => {
             spans.push(Span::styled(" branch: ", theme.muted_style()));
             spans.push(Span::styled(&state.create_branch, theme.text_style()));
             spans.push(Span::styled("▎", theme.key_style()));
+            true
         }
         InputMode::CloneRepo => {
             spans.push(Span::styled(" url: ", theme.muted_style()));
             spans.push(Span::styled(&state.clone_input, theme.text_style()));
             spans.push(Span::styled("▎", theme.key_style()));
+            true
         }
-        _ => {}
+        _ => false,
+    };
+
+    // View context: view label, optional scope, counts.
+    if has_input {
+        spans.push(sep);
+    } else {
+        spans.push(Span::raw(" "));
+    }
+
+    match state.view {
+        ViewMode::Tasks => {
+            let open_count = state
+                .task_rows
+                .iter()
+                .filter(|row| row.status == TaskStatus::Open)
+                .count();
+            let total_count = state.task_rows.len();
+
+            spans.push(Span::styled("Tasks", theme.title_style()));
+            if let Some(scope) = &state.task_repo_scope {
+                spans.push(Span::styled(format!(" ({scope})"), theme.muted_style()));
+            }
+            spans.push(Span::styled(
+                format!("  {open_count} open / {total_count} total"),
+                theme.title_counter_style(),
+            ));
+        }
+        ViewMode::Repos => {
+            let shown = state.repo_filtered_indices.len();
+            let total = state.repo_rows.len();
+
+            spans.push(Span::styled("Repos", theme.title_style()));
+            spans.push(Span::styled(
+                format!("  {shown} shown / {total} total"),
+                theme.title_counter_style(),
+            ));
+        }
     }
 
     // Right-aligned message.
@@ -143,33 +184,7 @@ fn render_activity(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme
 // ── Tasks table ──────────────────────────────────────────────────────────────
 
 fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
-    let open_count = state
-        .task_rows
-        .iter()
-        .filter(|row| row.status == TaskStatus::Open)
-        .count();
-    let total_count = state.task_rows.len();
-    let task_title = task_view_title(state.task_repo_scope.as_deref(), &state.filter_text);
-
     let scoped = state.task_repo_scope.is_some();
-
-    // Split into title row + table content.
-    let panel_chunks = UiLayout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(1)])
-        .split(area);
-
-    // Title bar.
-    let title_line = Line::from(vec![
-        Span::styled(format!(" {task_title}"), theme.title_style()),
-        Span::raw("  "),
-        Span::styled(
-            format!("{open_count} open / {total_count} total"),
-            theme.title_counter_style(),
-        ),
-    ]);
-    let title_para = Paragraph::new(vec![title_line]).style(Style::default().bg(theme.panel_main));
-    frame.render_widget(title_para, panel_chunks[0]);
 
     let header = if scoped {
         Row::new(vec!["STATUS", "BRANCH", "PATH"])
@@ -239,8 +254,6 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
         ]
     };
 
-    let table_area = panel_chunks[1];
-
     let table = Table::new(rows, widths)
         .header(header)
         .block(
@@ -255,11 +268,11 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     if !state.task_filtered_indices.is_empty() {
         table_state.select(Some(state.task_selected));
     }
-    frame.render_stateful_widget(table, table_area, &mut table_state);
+    frame.render_stateful_widget(table, area, &mut table_state);
 
     // Scrollbar — only when content overflows the visible area.
     // Account for padding (1 top) + header row (1) = 2 rows overhead.
-    let visible_rows = table_area.height.saturating_sub(2) as usize;
+    let visible_rows = area.height.saturating_sub(2) as usize;
     if row_count > visible_rows {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .track_symbol(Some("│"))
@@ -274,10 +287,10 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
             .unwrap_or(0);
         let mut sb_state = ScrollbarState::new(content_len).position(scaled_pos);
         let sb_area = Rect {
-            x: table_area.x,
-            y: table_area.y + 1, // below header
-            width: table_area.width,
-            height: table_area.height.saturating_sub(1),
+            x: area.x,
+            y: area.y + 1, // below header
+            width: area.width,
+            height: area.height.saturating_sub(1),
         };
         frame.render_stateful_widget(scrollbar, sb_area, &mut sb_state);
     }
@@ -286,28 +299,6 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
 // ── Repos table ──────────────────────────────────────────────────────────────
 
 fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
-    let filtered_count = state.repo_filtered_indices.len();
-    let repos_count = state.repo_rows.len();
-    let repo_title = view_title("Repos", &state.filter_text);
-
-    // Split into title row + table content.
-    let panel_chunks = UiLayout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(1)])
-        .split(area);
-
-    // Title bar.
-    let title_line = Line::from(vec![
-        Span::styled(format!(" {repo_title}"), theme.title_style()),
-        Span::raw("  "),
-        Span::styled(
-            format!("{filtered_count} shown / {repos_count} total"),
-            theme.title_counter_style(),
-        ),
-    ]);
-    let title_para = Paragraph::new(vec![title_line]).style(Style::default().bg(theme.panel_main));
-    frame.render_widget(title_para, panel_chunks[0]);
-
     let header = Row::new(vec!["REPO", "OPEN", "PARKED", "DET"])
         .style(theme.header_style())
         .bottom_margin(0);
@@ -336,7 +327,6 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
         .collect();
 
     let row_count = rows.len();
-    let table_area = panel_chunks[1];
 
     let table = Table::new(
         rows,
@@ -360,10 +350,10 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     if !state.repo_filtered_indices.is_empty() {
         table_state.select(Some(state.repo_selected));
     }
-    frame.render_stateful_widget(table, table_area, &mut table_state);
+    frame.render_stateful_widget(table, area, &mut table_state);
 
     // Scrollbar — only when content overflows the visible area.
-    let visible_rows = table_area.height.saturating_sub(2) as usize;
+    let visible_rows = area.height.saturating_sub(2) as usize;
     if row_count > visible_rows {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .track_symbol(Some("│"))
@@ -378,10 +368,10 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
             .unwrap_or(0);
         let mut sb_state = ScrollbarState::new(content_len).position(scaled_pos);
         let sb_area = Rect {
-            x: table_area.x,
-            y: table_area.y + 1,
-            width: table_area.width,
-            height: table_area.height.saturating_sub(1),
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: area.height.saturating_sub(1),
         };
         frame.render_stateful_widget(scrollbar, sb_area, &mut sb_state);
     }
@@ -583,36 +573,11 @@ fn status_label(status: TaskStatus) -> &'static str {
     }
 }
 
-fn view_title(base: &str, filter: &str) -> String {
-    let trimmed = filter.trim();
-    if trimmed.is_empty() {
-        base.to_string()
-    } else {
-        format!("{base} - {trimmed}")
-    }
-}
-
-/// Title for the Tasks panel, incorporating the scoped repo (if any) and the
-/// active filter text.
-///
-/// Examples:
-/// - unscoped, no filter  → "Tasks"
-/// - unscoped, filter     → "Tasks - feat"
-/// - scoped, no filter    → "Tasks (kakarot.chorse.space/funding/hyperion)"
-/// - scoped + filter      → "Tasks (kakarot.chorse.space/funding/hyperion) - feat"
-fn task_view_title(repo_scope: Option<&str>, filter: &str) -> String {
-    let base = match repo_scope {
-        None => "Tasks".to_string(),
-        Some(repo) => format!("Tasks ({repo})"),
-    };
-    view_title(&base, filter)
-}
-
 #[cfg(test)]
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::{centered_rect, status_label, task_view_title, view_title};
+    use super::{centered_rect, status_label};
     use crate::{
         runtime::task_rows::TaskStatus,
         ui::{
@@ -620,68 +585,6 @@ mod tests {
             theme::Theme,
         },
     };
-
-    mod view_title_tests {
-        use super::*;
-
-        #[test]
-        fn returns_base_when_filter_empty() {
-            assert_eq!(view_title("Tasks", ""), "Tasks");
-        }
-
-        #[test]
-        fn returns_base_when_filter_whitespace_only() {
-            assert_eq!(view_title("Tasks", "   "), "Tasks");
-        }
-
-        #[test]
-        fn appends_trimmed_filter() {
-            assert_eq!(view_title("Tasks", " foo "), "Tasks - foo");
-        }
-
-        #[test]
-        fn handles_repos_base() {
-            assert_eq!(view_title("Repos", "bar"), "Repos - bar");
-        }
-    }
-
-    mod task_view_title_tests {
-        use super::*;
-
-        #[test]
-        fn unscoped_no_filter() {
-            assert_eq!(task_view_title(None, ""), "Tasks");
-        }
-
-        #[test]
-        fn unscoped_with_filter() {
-            assert_eq!(task_view_title(None, "feat"), "Tasks - feat");
-        }
-
-        #[test]
-        fn scoped_no_filter() {
-            assert_eq!(
-                task_view_title(Some("github.com/org/repo"), ""),
-                "Tasks (github.com/org/repo)"
-            );
-        }
-
-        #[test]
-        fn scoped_with_filter() {
-            assert_eq!(
-                task_view_title(Some("github.com/org/repo"), "fix"),
-                "Tasks (github.com/org/repo) - fix"
-            );
-        }
-
-        #[test]
-        fn scoped_filter_whitespace_only() {
-            assert_eq!(
-                task_view_title(Some("github.com/org/repo"), "   "),
-                "Tasks (github.com/org/repo)"
-            );
-        }
-    }
 
     mod scoped_tasks_view {
         use std::path::PathBuf;
