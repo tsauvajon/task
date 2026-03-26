@@ -76,6 +76,7 @@ impl Theme {
     }
 
     /// Style for a keybind label in the actions / help panels.
+    #[allow(dead_code)]
     pub fn key_style(&self) -> Style {
         Style::default().fg(self.accent)
     }
@@ -122,6 +123,16 @@ impl Theme {
         Style::default()
             .fg(self.mode_color(mode))
             .add_modifier(Modifier::BOLD)
+    }
+
+    /// Block cursor style for text input fields.
+    ///
+    /// Renders a solid block in the mode's accent color, mimicking
+    /// OpenCode's "big square cursor" look.
+    pub fn cursor_style(&self, mode: super::state::InputMode) -> Style {
+        Style::default()
+            .bg(self.mode_color(mode))
+            .fg(self.panel_bar)
     }
 }
 

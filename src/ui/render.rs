@@ -24,7 +24,9 @@ pub(super) fn render(frame: &mut Frame, state: &mut UiState) {
     render_status_bar(frame, outer[1], state, &theme);
 
     if state.show_help {
-        render_help(frame, &theme);
+        render_help(frame, state, &theme);
+    } else {
+        state.help_area = None;
     }
 }
 
@@ -112,19 +114,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &The
     }
 
     // Input text for interactive modes — shown after view context.
-    match state.mode {
-        InputMode::Filter if !state.filter_text.is_empty() => {
-            spans.push(Span::styled("  filter ", theme.text_style()));
-            spans.push(Span::styled(&state.filter_text, theme.muted_style()));
-        }
-        InputMode::CreateTask => {}
-        InputMode::CloneRepo => {
-            spans.push(Span::styled("  url: ", theme.text_style()));
-            spans.push(Span::styled(&state.clone_input, theme.muted_style()));
-            spans.push(Span::styled("▎", theme.key_style()));
-        }
-        _ => {}
-    }
+    // Filter, CreateTask, and CloneRepo inputs are rendered in the right panel;
+    // the status bar stays clean in all input modes.
 
     // Right-aligned message.
     let msg = &state.message;
@@ -378,14 +369,14 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
         InputMode::Normal => match state.view {
             ViewMode::Tasks => {
                 let mut lines = vec![
-                    keybind_line("tab", "switch to repos view", kc, theme),
                     keybind_line("enter", "open selected task", kc, theme),
-                    keybind_line("c", "create new task", kc, theme),
+                    keybind_line("tab", "switch to repos view", kc, theme),
+                    keybind_line("/", "enter filter mode", kc, theme),
+                    keybind_line("t", "create new task", kc, theme),
                     keybind_line("p", "park selected task", kc, theme),
                     keybind_line("f", "finish selected task", kc, theme),
-                    keybind_line("/", "enter filter mode", kc, theme),
                     keybind_line("r", "refresh tasks", kc, theme),
-                    keybind_line("?", "toggle help", kc, theme),
+                    keybind_line("ctrl+p", "commands", kc, theme),
                     keybind_line("q", "quit", kc, theme),
                 ];
                 if state.task_repo_scope.is_some() {
@@ -394,28 +385,37 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
                 lines
             }
             ViewMode::Repos => vec![
-                keybind_line("tab", "switch to tasks view", kc, theme),
                 keybind_line("enter", "open selected repo tasks", kc, theme),
-                keybind_line("t", "start task on selected repo", kc, theme),
+                keybind_line("tab", "switch to tasks view", kc, theme),
+                keybind_line("/", "enter filter mode", kc, theme),
+                keybind_line("t", "create new task", kc, theme),
                 keybind_line("c", "clone repo interactively", kc, theme),
                 keybind_line("d", "toggle detached worktree", kc, theme),
-                keybind_line("/", "enter filter mode", kc, theme),
                 keybind_line("r", "refresh repos", kc, theme),
-                keybind_line("?", "toggle help", kc, theme),
+                keybind_line("ctrl+p", "commands", kc, theme),
                 keybind_line("q", "quit", kc, theme),
             ],
         },
-        InputMode::Filter => vec![
-            keybind_line("tab", "switch tasks/repos", kc, theme),
-            keybind_line("type", "append filter text", kc, theme),
-            keybind_line("backsp", "delete character", kc, theme),
-            keybind_line("ctrl-u", "clear filter", kc, theme),
-            keybind_line("enter", "apply and return", kc, theme),
-            keybind_line("esc", "return to normal", kc, theme),
-        ],
+        InputMode::Filter => {
+            let mut lines = vec![
+                keybind_line("tab", "switch tasks/repos", kc, theme),
+                keybind_line("ctrl-u", "clear filter", kc, theme),
+                keybind_line("enter", "apply and return", kc, theme),
+                keybind_line("esc", "return to normal", kc, theme),
+            ];
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("filter ", theme.muted_style()),
+                Span::styled(
+                    state.filter_text.clone(),
+                    Style::default().fg(kc).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ", theme.cursor_style(InputMode::Filter)),
+            ]));
+            lines
+        }
         InputMode::CreateTask => {
             let mut lines = vec![
-                keybind_line("type", "set new branch name", kc, theme),
                 keybind_line("ctrl-u", "clear branch name", kc, theme),
                 keybind_line("enter", "create and open task", kc, theme),
                 keybind_line("esc", "return to normal", kc, theme),
@@ -427,27 +427,25 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
                     state.create_branch.clone(),
                     Style::default().fg(kc).add_modifier(Modifier::BOLD),
                 ),
+                Span::styled(" ", theme.cursor_style(InputMode::CreateTask)),
             ]));
             lines
         }
         InputMode::CloneRepo => {
             let mut lines = vec![
-                keybind_line("type", "<repo-url> [repo-key]", kc, theme),
-                keybind_line("backsp", "delete character", kc, theme),
                 keybind_line("ctrl-u", "clear input", kc, theme),
                 keybind_line("enter", "clone repository", kc, theme),
                 keybind_line("esc", "return to normal", kc, theme),
             ];
-            if !state.clone_input.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::styled("Input: ", theme.muted_style()),
-                    Span::styled(
-                        state.clone_input.clone(),
-                        Style::default().fg(kc).add_modifier(Modifier::BOLD),
-                    ),
-                ]));
-            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("url ", theme.muted_style()),
+                Span::styled(
+                    state.clone_input.clone(),
+                    Style::default().fg(kc).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ", theme.cursor_style(InputMode::CloneRepo)),
+            ]));
             lines
         }
     }
@@ -455,27 +453,33 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
 
 // ── Help overlay ─────────────────────────────────────────────────────────────
 
-fn render_help(frame: &mut Frame, theme: &Theme) {
-    let popup = centered_rect(80, 80, frame.area());
+fn render_help(frame: &mut Frame, state: &mut UiState, theme: &Theme) {
+    let popup = help_popup_rect(frame.area());
+    state.help_area = Some(popup);
 
-    let section = |title: &str| -> Line<'static> {
+    let normal_c = theme.mode_color(InputMode::Normal);
+    let filter_c = theme.mode_color(InputMode::Filter);
+    let create_c = theme.mode_color(InputMode::CreateTask);
+    let clone_c = theme.mode_color(InputMode::CloneRepo);
+    let desc_style = theme.key_desc_style();
+
+    let section = |title: &str, color: Color| -> Line<'static> {
         Line::from(Span::styled(
             title.to_string(),
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ))
     };
 
-    let hk = |key: &str, desc: &str| -> Line<'static> {
+    let key_style = Style::default().fg(theme.text);
+    let hk = move |key: &str, desc: &str| -> Line<'static> {
         Line::from(vec![
-            Span::styled(format!("  {key:<11}"), theme.key_style()),
-            Span::styled(desc.to_string(), theme.key_desc_style()),
+            Span::styled(format!("{key:<11}"), key_style),
+            Span::styled(desc.to_string(), desc_style),
         ])
     };
 
-    let lines = vec![
-        section("normal mode (all views)"),
+    let mut lines = vec![
+        section("All Views", normal_c),
         hk("↑/k", "move up"),
         hk("↓/j", "move down"),
         hk("PgUp", "page up"),
@@ -483,52 +487,64 @@ fn render_help(frame: &mut Frame, theme: &Theme) {
         hk("Home", "jump to first"),
         hk("End", "jump to last"),
         hk("tab", "switch tasks/repos view"),
-        hk("?", "toggle help"),
+        hk("ctrl+p", "commands"),
         hk("q/ctrl-c", "quit"),
         Line::from(""),
-        section("tasks view"),
+        section("Tasks View", normal_c),
         hk("enter", "open selected task"),
         hk("esc", "back to repos (when scoped)"),
+        hk("/", "enter filter mode"),
+        hk("t", "create new task"),
         hk("p", "park selected task"),
         hk("f", "finish selected task"),
-        hk("c", "create new task"),
         hk("r", "refresh tasks"),
-        hk("/", "enter filter mode"),
         Line::from(""),
-        section("repos view"),
+        section("Repos View", normal_c),
         hk("enter", "open selected repo tasks"),
-        hk("t", "start task on selected repo"),
+        hk("/", "enter filter mode"),
+        hk("t", "create new task"),
         hk("c", "clone repo interactively"),
         hk("d", "toggle detached worktree"),
-        hk("/", "enter filter mode"),
         hk("r", "refresh repos"),
         Line::from(""),
-        section("filter mode"),
+        section("Filter", filter_c),
         hk("tab", "switch tasks/repos view"),
-        hk("type", "append filter text"),
-        hk("backspace", "delete character"),
         hk("ctrl-u", "clear filter"),
         hk("enter", "apply and return to normal"),
         hk("esc", "return to normal"),
         Line::from(""),
-        section("create task mode"),
-        hk("type", "set new branch name"),
+        section("Create Task", create_c),
         hk("ctrl-u", "clear branch name"),
         hk("enter", "create and open new task"),
         hk("esc", "return to normal"),
         Line::from(""),
-        section("clone repo mode"),
-        hk("type", "<repo-url> [repo-key]"),
-        hk("backspace", "delete character"),
+        section("Clone Repo", clone_c),
         hk("ctrl-u", "clear input"),
         hk("enter", "clone repository"),
         hk("esc", "return to normal"),
     ];
 
+    let pad_h: u16 = 4;
+    let inner_w = popup.width.saturating_sub(pad_h * 2) as usize;
+    let left = "Commands";
+    let right = "esc";
+    let gap = inner_w.saturating_sub(left.len() + right.len());
+    let title_line = Line::from(vec![
+        Span::styled(
+            left.to_string(),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(right.to_string(), Style::default().fg(theme.text)),
+    ]);
+
+    lines.insert(0, title_line);
+    lines.insert(1, Line::from(""));
+
     let help = Paragraph::new(lines)
         .block(
             Block::default()
-                .padding(Padding::new(2, 2, 1, 1))
+                .padding(Padding::new(pad_h, pad_h, 1, 1))
                 .style(Style::default().bg(theme.overlay_bg)),
         )
         .style(Style::default().fg(theme.text));
@@ -597,24 +613,23 @@ fn render_scrollbar(
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
-fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
-    let vertical = UiLayout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(rect);
+/// Compute a fixed-width, top-offset popup rect for the help/commands overlay.
+///
+/// Mimics OpenCode's command palette layout:
+/// - Fixed width of 60 columns (clamped to `terminal_width - 2`).
+/// - Positioned 25% from the top of the terminal.
+/// - Height capped at `floor(terminal_height / 2)`.
+/// - Horizontally centered.
+fn help_popup_rect(area: Rect) -> Rect {
+    let max_w: u16 = 60;
+    let w = max_w.min(area.width.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
 
-    UiLayout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
+    let y = area.y + area.height / 4;
+    let max_h = area.height / 2;
+    let h = max_h.min(area.height.saturating_sub(y));
+
+    Rect::new(x, y, w, h)
 }
 
 fn status_label(status: TaskStatus) -> &'static str {
@@ -628,7 +643,7 @@ fn status_label(status: TaskStatus) -> &'static str {
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::{centered_rect, scrollbar_geometry, status_label};
+    use super::{help_popup_rect, scrollbar_geometry, status_label};
     use crate::{
         runtime::task_rows::TaskStatus,
         ui::{
@@ -687,33 +702,62 @@ mod tests {
         }
     }
 
-    mod centered_rect_tests {
+    mod help_popup_rect_tests {
         use super::*;
 
         #[test]
-        fn returns_inner_rect_within_bounds() {
-            let outer = Rect::new(0, 0, 100, 100);
-            let inner = centered_rect(50, 50, outer);
-            assert!(inner.x >= outer.x);
-            assert!(inner.y >= outer.y);
-            assert!(inner.x + inner.width <= outer.x + outer.width);
-            assert!(inner.y + inner.height <= outer.y + outer.height);
+        fn fits_within_terminal_bounds() {
+            let area = Rect::new(0, 0, 120, 40);
+            let popup = help_popup_rect(area);
+            assert!(popup.x >= area.x);
+            assert!(popup.y >= area.y);
+            assert!(popup.x + popup.width <= area.x + area.width);
+            assert!(popup.y + popup.height <= area.y + area.height);
         }
 
         #[test]
-        fn full_percent_covers_most_of_area() {
-            let outer = Rect::new(0, 0, 100, 100);
-            let inner = centered_rect(100, 100, outer);
-            assert!(inner.width >= outer.width / 2);
-            assert!(inner.height >= outer.height / 2);
+        fn width_capped_at_60() {
+            let area = Rect::new(0, 0, 200, 60);
+            let popup = help_popup_rect(area);
+            assert_eq!(popup.width, 60);
         }
 
         #[test]
-        fn zero_rect_returns_zero_area() {
-            let outer = Rect::new(0, 0, 0, 0);
-            let inner = centered_rect(50, 50, outer);
-            assert_eq!(inner.width, 0);
-            assert_eq!(inner.height, 0);
+        fn width_clamped_to_narrow_terminal() {
+            let area = Rect::new(0, 0, 40, 30);
+            let popup = help_popup_rect(area);
+            assert_eq!(popup.width, 38); // 40 - 2
+        }
+
+        #[test]
+        fn positioned_25_percent_from_top() {
+            let area = Rect::new(0, 0, 80, 40);
+            let popup = help_popup_rect(area);
+            assert_eq!(popup.y, 10); // 40 / 4
+        }
+
+        #[test]
+        fn height_capped_at_half_terminal() {
+            let area = Rect::new(0, 0, 80, 40);
+            let popup = help_popup_rect(area);
+            assert!(popup.height <= 20); // 40 / 2
+        }
+
+        #[test]
+        fn horizontally_centered() {
+            let area = Rect::new(0, 0, 100, 40);
+            let popup = help_popup_rect(area);
+            let left_margin = popup.x;
+            let right_margin = area.width - popup.x - popup.width;
+            assert_eq!(left_margin, right_margin);
+        }
+
+        #[test]
+        fn zero_area_returns_zero_rect() {
+            let area = Rect::new(0, 0, 0, 0);
+            let popup = help_popup_rect(area);
+            assert_eq!(popup.width, 0);
+            assert_eq!(popup.height, 0);
         }
     }
 
@@ -755,7 +799,7 @@ mod tests {
             let state = state_with_mode(InputMode::Filter, ViewMode::Tasks);
             let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
-            assert!(text.contains("filter text"));
+            assert!(text.contains("clear filter"));
             assert!(text.contains("esc"));
         }
 
@@ -765,7 +809,7 @@ mod tests {
             let state = state_with_mode(InputMode::CreateTask, ViewMode::Tasks);
             let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
-            assert!(text.contains("branch name"));
+            assert!(text.contains("clear branch name"));
             assert!(text.contains("create and open"));
         }
 
@@ -775,7 +819,7 @@ mod tests {
             let state = state_with_mode(InputMode::CloneRepo, ViewMode::Repos);
             let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
-            assert!(text.contains("repo-url"));
+            assert!(text.contains("clear input"));
             assert!(text.contains("clone repository"));
         }
 
@@ -840,14 +884,14 @@ mod tests {
         }
 
         #[test]
-        fn normal_repos_includes_start_task_action() {
+        fn normal_repos_includes_create_new_task_action() {
             let theme = Theme::dark();
             let state = state_with_mode(InputMode::Normal, ViewMode::Repos);
             let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(
-                text.contains("start task on selected repo"),
-                "repos view should include start task action: {text}"
+                text.contains("create new task"),
+                "repos view should include create new task action: {text}"
             );
         }
 
@@ -860,18 +904,6 @@ mod tests {
             assert!(
                 text.contains("toggle detached worktree"),
                 "repos view should include detach action: {text}"
-            );
-        }
-
-        #[test]
-        fn normal_repos_does_not_include_create_new_task() {
-            let theme = Theme::dark();
-            let state = state_with_mode(InputMode::Normal, ViewMode::Repos);
-            let lines = actions_for_mode(&state, &theme);
-            let text: String = lines.iter().map(|l| l.to_string()).collect();
-            assert!(
-                !text.contains("create new task"),
-                "repos view should not include 'create new task' (c is clone here): {text}"
             );
         }
 

@@ -1,3 +1,5 @@
+use ratatui::layout::Rect;
+
 use crate::runtime::{RepoKey, task_rows::TaskRow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +48,7 @@ pub(super) struct UiState {
     pub(super) mode: InputMode,
     pub(super) message: String,
     pub(super) show_help: bool,
+    pub(super) help_area: Option<Rect>,
     pub(super) visible_rows: usize,
 }
 
@@ -71,6 +74,7 @@ impl UiState {
             mode: InputMode::Normal,
             message: "Ready".to_string(),
             show_help: false,
+            help_area: None,
             visible_rows: 20,
         };
         state.apply_filters();
