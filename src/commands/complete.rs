@@ -69,13 +69,14 @@ fn completion_values(
                 Vec::new()
             }
         }
-        "prune" | "list" | "ui" | "worktrees" => {
+        "list" | "ui" | "worktrees" => {
             if arg_count <= 1 {
                 repo_candidates(context)?
             } else {
                 Vec::new()
             }
         }
+        "repo" => repo_subcommand_completions(context, args)?,
         "doctor" => {
             if arg_count <= 1 {
                 vec!["--fix".to_string()]
@@ -96,6 +97,7 @@ fn top_level_commands() -> Vec<String> {
     [
         "bootstrap",
         "doctor",
+        "repo",
         "clone",
         "start",
         "open",
@@ -105,7 +107,6 @@ fn top_level_commands() -> Vec<String> {
         "ui",
         "worktrees",
         "finish",
-        "prune",
         "check",
         "rebase",
         "completions",
@@ -113,6 +114,32 @@ fn top_level_commands() -> Vec<String> {
     .iter()
     .map(|&s| s.to_string())
     .collect()
+}
+
+fn repo_subcommand_completions(
+    context: Option<&RuntimeEnvironment>,
+    args: &[String],
+) -> Result<Vec<String>> {
+    let repo_subcommands = vec!["list".to_string(), "clone".to_string(), "prune".to_string()];
+
+    if args.len() <= 1 {
+        return Ok(repo_subcommands);
+    }
+
+    let subcmd = args[0].as_str();
+    let sub_args = &args[1..];
+    let sub_arg_count = sub_args.len();
+
+    match subcmd {
+        "prune" => {
+            if sub_arg_count <= 1 {
+                repo_candidates(context)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 fn repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<String>> {
@@ -219,6 +246,7 @@ mod tests {
             for expected in [
                 "bootstrap",
                 "doctor",
+                "repo",
                 "clone",
                 "start",
                 "open",
@@ -228,7 +256,6 @@ mod tests {
                 "ui",
                 "worktrees",
                 "finish",
-                "prune",
                 "check",
                 "rebase",
                 "completions",
@@ -434,19 +461,36 @@ mod tests {
         }
 
         #[test]
-        fn prune_returns_empty_without_context() {
-            let values = completion_values(None, &["prune".to_string(), "".to_string()])
-                .expect("prune completions");
+        fn repo_suggests_subcommands() {
+            let values = completion_values(None, &["repo".to_string(), "".to_string()])
+                .expect("repo subcommand completions");
+            assert!(values.contains(&"list".to_string()));
+            assert!(values.contains(&"clone".to_string()));
+            assert!(values.contains(&"prune".to_string()));
+        }
+
+        #[test]
+        fn repo_prune_returns_empty_without_context() {
+            let values = completion_values(
+                None,
+                &["repo".to_string(), "prune".to_string(), "".to_string()],
+            )
+            .expect("repo prune completions");
             assert!(values.is_empty());
         }
 
         #[test]
-        fn prune_second_arg_returns_empty() {
+        fn repo_prune_second_arg_returns_empty() {
             let values = completion_values(
                 None,
-                &["prune".to_string(), "repo".to_string(), "".to_string()],
+                &[
+                    "repo".to_string(),
+                    "prune".to_string(),
+                    "some-repo".to_string(),
+                    "".to_string(),
+                ],
             )
-            .expect("prune 2nd arg");
+            .expect("repo prune 2nd arg");
             assert!(values.is_empty());
         }
 

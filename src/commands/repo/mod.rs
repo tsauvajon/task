@@ -1,5 +1,5 @@
 use crate::{
-    commands::{RepoCommand, clone},
+    commands::{RepoCommand, clone, prune},
     error::Result,
     runtime::{environment::RuntimeEnvironment, process},
 };
@@ -8,6 +8,7 @@ pub fn run(context: &RuntimeEnvironment, command: RepoCommand) -> Result<()> {
     match command {
         RepoCommand::List => list(context),
         RepoCommand::Clone { repo_url, repo_key } => clone::run(context, &repo_url, repo_key),
+        RepoCommand::Prune { repo } => prune::run(context, repo.as_deref()),
     }
 }
 
