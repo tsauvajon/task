@@ -11,14 +11,14 @@ pub(crate) fn script_for(shell: CompletionShell) -> &'static str {
         CompletionShell::Bash => {
             r#"_task_complete() {
     local IFS=$'\n'
-    COMPREPLY=($(task __complete "${COMP_WORDS[@]:1}" 2>/dev/null))
+    COMPREPLY=($(task __complete -- "${COMP_WORDS[@]:1}" 2>/dev/null))
 }
 
 complete -o nosort -F _task_complete task"#
         }
         CompletionShell::Fish => {
             r#"function __task_complete
-    task __complete (commandline -opc | string split ' ' | tail -n +2) 2>/dev/null
+    task __complete -- (commandline -opc | string split ' ' | tail -n +2) 2>/dev/null
 end
 
 complete -c task -f -a '(__task_complete)'"#
@@ -28,7 +28,7 @@ complete -c task -f -a '(__task_complete)'"#
 
 _task_complete() {
   local -a suggestions
-  suggestions=("${(@f)$(task __complete "${words[@]:1}" 2>/dev/null)}")
+  suggestions=("${(@f)$(task __complete -- "${words[@]:1}" 2>/dev/null)}")
   _describe 'values' suggestions
 }
 
@@ -60,8 +60,8 @@ mod tests {
                 "missing complete directive"
             );
             assert!(
-                script.contains("task __complete"),
-                "missing task __complete invocation"
+                script.contains("task __complete --"),
+                "missing task __complete -- invocation"
             );
         }
 
@@ -77,8 +77,8 @@ mod tests {
                 "missing complete directive"
             );
             assert!(
-                script.contains("task __complete"),
-                "missing task __complete invocation"
+                script.contains("task __complete --"),
+                "missing task __complete -- invocation"
             );
         }
 
@@ -94,8 +94,8 @@ mod tests {
                 "missing completion function"
             );
             assert!(
-                script.contains("task __complete"),
-                "missing task __complete invocation"
+                script.contains("task __complete --"),
+                "missing task __complete -- invocation"
             );
         }
 

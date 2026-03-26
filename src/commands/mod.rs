@@ -101,7 +101,10 @@ pub enum Command {
     #[command(about = "Generate shell completion scripts")]
     Completions { shell: CompletionShell },
     #[command(name = "__complete", hide = true, trailing_var_arg = true)]
-    Complete { words: Vec<String> },
+    Complete {
+        #[arg(allow_hyphen_values = true)]
+        words: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
