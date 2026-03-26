@@ -211,6 +211,7 @@ impl UiState {
     pub(super) fn clear_repo_scope(&mut self) {
         self.task_repo_scope = None;
         self.task_selected = 0;
+        self.view = ViewMode::Repos;
         self.apply_filters();
     }
 
@@ -652,6 +653,7 @@ mod tests {
             assert!(state.task_repo_scope.is_none());
             assert_eq!(state.task_selected, 0);
             assert_eq!(state.task_filtered_indices.len(), 2);
+            assert_eq!(state.view, super::super::ViewMode::Repos);
         }
 
         #[test]

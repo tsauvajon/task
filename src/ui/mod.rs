@@ -215,7 +215,7 @@ fn apply_intent(
             if state.task_repo_scope.is_some() {
                 state.clear_repo_scope();
                 match refresh_task_rows(context, state) {
-                    Ok(()) => state.message = "Showing all tasks".to_string(),
+                    Ok(()) => state.message = "Returned to repos view".to_string(),
                     Err(err) => state.message = err.to_string(),
                 }
             }

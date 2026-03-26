@@ -399,7 +399,7 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
                     keybind_line("q", "quit", kc, theme),
                 ];
                 if state.task_repo_scope.is_some() {
-                    lines.insert(0, keybind_line("esc", "show all tasks", kc, theme));
+                    lines.insert(0, keybind_line("esc", "back to repos", kc, theme));
                 }
                 lines
             }
@@ -495,7 +495,7 @@ fn render_help(frame: &mut Frame, theme: &Theme) {
         Line::from(""),
         section("tasks view"),
         hk("enter", "open selected task"),
-        hk("esc", "exit repo scope (when scoped)"),
+        hk("esc", "back to repos (when scoped)"),
         hk("p", "park selected task"),
         hk("f", "finish selected task"),
         hk("c", "create new task"),
