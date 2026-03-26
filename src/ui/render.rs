@@ -73,39 +73,21 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
 // ── Status bar ───────────────────────────────────────────────────────────────
 
 fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
-    let mode_span = Span::styled(
-        format!(
-            " {} ",
-            match state.mode {
-                InputMode::Normal => "NORMAL",
-                InputMode::Filter => "FILTER",
-                InputMode::CreateTask => "CREATE",
-                InputMode::CloneRepo => "CLONE",
-            }
-        ),
-        theme.mode_style(state.mode),
-    );
-
-    let separator = Span::styled(" │ ", theme.muted_style());
-
-    let mut spans = vec![mode_span];
+    let mut spans: Vec<Span> = Vec::new();
 
     // Show input text for interactive modes.
     match state.mode {
         InputMode::Filter if !state.filter_text.is_empty() => {
-            spans.push(separator.clone());
-            spans.push(Span::styled("filter: ", theme.muted_style()));
+            spans.push(Span::styled(" filter: ", theme.muted_style()));
             spans.push(Span::styled(&state.filter_text, theme.text_style()));
         }
         InputMode::CreateTask => {
-            spans.push(separator.clone());
-            spans.push(Span::styled("branch: ", theme.muted_style()));
+            spans.push(Span::styled(" branch: ", theme.muted_style()));
             spans.push(Span::styled(&state.create_branch, theme.text_style()));
             spans.push(Span::styled("▎", theme.key_style()));
         }
         InputMode::CloneRepo => {
-            spans.push(separator.clone());
-            spans.push(Span::styled("url: ", theme.muted_style()));
+            spans.push(Span::styled(" url: ", theme.muted_style()));
             spans.push(Span::styled(&state.clone_input, theme.text_style()));
             spans.push(Span::styled("▎", theme.key_style()));
         }
