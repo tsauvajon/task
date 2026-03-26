@@ -254,7 +254,11 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     let visible_rows = area.height.saturating_sub(3) as usize;
     if row_count > visible_rows {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .style(theme.border_style())
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_style(theme.border_style())
             .thumb_style(theme.muted_style());
         let mut sb_state = ScrollbarState::new(row_count).position(state.task_selected);
         let sb_area = Rect {
@@ -340,7 +344,11 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     let visible_rows = area.height.saturating_sub(3) as usize;
     if row_count > visible_rows {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .style(theme.border_style())
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_style(theme.border_style())
             .thumb_style(theme.muted_style());
         let mut sb_state = ScrollbarState::new(row_count).position(state.repo_selected);
         let sb_area = Rect {
