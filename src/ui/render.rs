@@ -243,8 +243,8 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
             .track_style(theme.border_style())
             .thumb_style(theme.muted_style());
         let content_len = row_count.max(visible_rows * 10);
-        let scaled_pos = (state.task_selected * content_len)
-            .checked_div(row_count)
+        let scaled_pos = (state.task_selected * content_len.saturating_sub(1))
+            .checked_div(row_count.saturating_sub(1))
             .unwrap_or(0);
         let mut sb_state = ScrollbarState::new(content_len).position(scaled_pos);
         let sb_area = Rect {
@@ -337,8 +337,8 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
             .track_style(theme.border_style())
             .thumb_style(theme.muted_style());
         let content_len = row_count.max(visible_rows * 10);
-        let scaled_pos = (state.repo_selected * content_len)
-            .checked_div(row_count)
+        let scaled_pos = (state.repo_selected * content_len.saturating_sub(1))
+            .checked_div(row_count.saturating_sub(1))
             .unwrap_or(0);
         let mut sb_state = ScrollbarState::new(content_len).position(scaled_pos);
         let sb_area = Rect {
