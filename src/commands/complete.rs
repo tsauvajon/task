@@ -13,7 +13,7 @@ fn completion_values(
     context: Option<&RuntimeEnvironment>,
     words: &[String],
 ) -> Result<Vec<String>> {
-    if words.is_empty() {
+    if words.is_empty() || (words.len() == 1 && words[0].is_empty()) {
         return Ok(top_level_commands());
     }
 
@@ -283,6 +283,14 @@ mod tests {
         #[test]
         fn top_level_available_without_configured_context() {
             let values = completion_values(None, &[]).expect("top-level completion values");
+            assert!(values.contains(&"doctor".to_string()));
+            assert!(values.contains(&"bootstrap".to_string()));
+        }
+
+        #[test]
+        fn top_level_available_with_single_empty_word() {
+            let values = completion_values(None, &["".to_string()])
+                .expect("top-level completion from empty word");
             assert!(values.contains(&"doctor".to_string()));
             assert!(values.contains(&"bootstrap".to_string()));
         }
