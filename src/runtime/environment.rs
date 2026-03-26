@@ -27,11 +27,7 @@ impl RuntimeEnvironment {
         let Some(config) = TaskConfig::load_if_present()? else {
             return Ok(None);
         };
-        Ok(Some(Self::from_paths(
-            config.repos_dir,
-            config.wt_dir,
-            config.detached_dir,
-        )))
+        Ok(Some(Self::from_config(config)))
     }
 
     pub fn from_paths(
@@ -93,6 +89,51 @@ mod tests {
             assert_eq!(env.layout().repos_dir(), repos.as_path());
             assert_eq!(env.layout().wt_dir(), wt.as_path());
             assert_eq!(env.layout().detached_dir(), detached.as_path());
+        }
+    }
+
+    mod from_config {
+        use super::*;
+        use crate::runtime::config::TaskConfig;
+
+        #[test]
+        fn preserves_codium_trusted_roots() {
+            let config = TaskConfig {
+                repos_dir: std::path::PathBuf::from("/tmp/repos"),
+                wt_dir: std::path::PathBuf::from("/tmp/wt"),
+                detached_dir: std::path::PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: vec![
+                    std::path::PathBuf::from("/tmp/wt/github.com/me"),
+                    std::path::PathBuf::from("/tmp/wt/github.com/team"),
+                ],
+            };
+            let env = RuntimeEnvironment::from_config(config);
+            assert_eq!(env.tasks().codium_trusted_roots().len(), 2);
+            assert_eq!(
+                env.tasks().codium_trusted_roots()[0],
+                std::path::Path::new("/tmp/wt/github.com/me")
+            );
+            assert_eq!(
+                env.tasks().codium_trusted_roots()[1],
+                std::path::Path::new("/tmp/wt/github.com/team")
+            );
+        }
+
+        #[test]
+        fn layout_and_tasks_share_consistent_paths() {
+            let config = TaskConfig {
+                repos_dir: std::path::PathBuf::from("/tmp/repos"),
+                wt_dir: std::path::PathBuf::from("/tmp/wt"),
+                detached_dir: std::path::PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+            };
+            let env = RuntimeEnvironment::from_config(config);
+            assert_eq!(env.layout().repos_dir(), env.tasks().layout().repos_dir());
+            assert_eq!(env.layout().wt_dir(), env.tasks().layout().wt_dir());
+            assert_eq!(
+                env.layout().detached_dir(),
+                env.tasks().layout().detached_dir()
+            );
         }
     }
 }

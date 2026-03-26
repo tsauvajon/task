@@ -69,7 +69,7 @@ fn run_event_loop(
 ) -> Result<UiAction> {
     loop {
         state.append_activity_lines(crate::runtime::process::take_captured_logs());
-        terminal.draw(|frame| render(frame, state))?;
+        terminal.draw(|frame| render(frame, &mut *state))?;
 
         let event = event::read()?;
         let intent = match event {
@@ -117,6 +117,22 @@ fn apply_intent(
         }
         UiIntent::MovePrev => {
             state.move_prev();
+            Ok(None)
+        }
+        UiIntent::PageDown => {
+            state.move_page_down();
+            Ok(None)
+        }
+        UiIntent::PageUp => {
+            state.move_page_up();
+            Ok(None)
+        }
+        UiIntent::MoveFirst => {
+            state.move_first();
+            Ok(None)
+        }
+        UiIntent::MoveLast => {
+            state.move_last();
             Ok(None)
         }
         UiIntent::ToggleHelp => {
@@ -211,6 +227,26 @@ fn apply_intent(
             }
             Ok(None)
         }
+        UiIntent::StartTaskFromRepo => {
+            if state.view != ViewMode::Repos {
+                state.message = "Start task is only available in Repos view".to_string();
+                return Ok(None);
+            }
+            let Some(row) = state.selected_repo_row().cloned() else {
+                state.message = "No repo selected".to_string();
+                return Ok(None);
+            };
+            let repo_key_str = row.repo.to_string();
+            state.task_repo_scope = Some(repo_key_str.clone());
+            // Best-effort: filter task rows to the selected repo so
+            // resolve_create_repo picks the correct repo from scope,
+            // not from a stale selected_task_row.
+            let _ = refresh_task_rows(context, state);
+            state.mode = InputMode::CreateTask;
+            state.create_branch.clear();
+            state.message = format!("Start task on {repo_key_str}: type branch name");
+            Ok(None)
+        }
         UiIntent::ClearScope => {
             if state.task_repo_scope.is_some() {
                 state.clear_repo_scope();
@@ -270,6 +306,10 @@ fn apply_intent(
         },
         UiIntent::CreateBackspace => {
             state.create_branch.pop();
+            Ok(None)
+        }
+        UiIntent::CreateClear => {
+            state.create_branch.clear();
             Ok(None)
         }
         UiIntent::CreateAppend(ch) => {
@@ -469,6 +509,106 @@ mod tests {
         state.task_selected = 1;
         apply_intent(&ctx, &mut state, UiIntent::MovePrev).unwrap();
         assert_eq!(state.task_selected, 0);
+    }
+
+    // ── PageDown / PageUp / MoveFirst / MoveLast ────────────────────────────
+
+    #[test]
+    fn page_down_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..30)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.visible_rows = 10;
+        assert_eq!(state.task_selected, 0);
+        apply_intent(&ctx, &mut state, UiIntent::PageDown).unwrap();
+        assert_eq!(state.task_selected, 10);
+    }
+
+    #[test]
+    fn page_up_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..30)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.visible_rows = 10;
+        state.task_selected = 20;
+        apply_intent(&ctx, &mut state, UiIntent::PageUp).unwrap();
+        assert_eq!(state.task_selected, 10);
+    }
+
+    #[test]
+    fn move_first_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..10)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.task_selected = 7;
+        apply_intent(&ctx, &mut state, UiIntent::MoveFirst).unwrap();
+        assert_eq!(state.task_selected, 0);
+    }
+
+    #[test]
+    fn move_last_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..10)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.task_selected = 3;
+        apply_intent(&ctx, &mut state, UiIntent::MoveLast).unwrap();
+        assert_eq!(state.task_selected, 9);
     }
 
     // ── EnterFilterMode ──────────────────────────────────────────────────────
@@ -687,6 +827,15 @@ mod tests {
         assert_eq!(state.create_branch, "fe");
     }
 
+    #[test]
+    fn create_clear_empties_branch() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        state.create_branch = "some-branch".to_string();
+        apply_intent(&ctx, &mut state, UiIntent::CreateClear).unwrap();
+        assert!(state.create_branch.is_empty());
+    }
+
     // ── CloneCancel / CloneAppend / CloneBackspace / CloneClear ─────────────
 
     #[test]
@@ -728,6 +877,76 @@ mod tests {
         state.clone_input = "something".to_string();
         apply_intent(&ctx, &mut state, UiIntent::CloneClear).unwrap();
         assert!(state.clone_input.is_empty());
+    }
+
+    // ── StartTaskFromRepo ──────────────────────────────────────────────────
+
+    #[test]
+    fn start_task_from_repo_in_tasks_view_sets_message_and_returns_none() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        assert_eq!(state.view, ViewMode::Tasks);
+        let result = apply_intent(&ctx, &mut state, UiIntent::StartTaskFromRepo).unwrap();
+        assert!(result.is_none());
+        assert!(
+            state.message.contains("Repos view"),
+            "message should mention Repos view: {}",
+            state.message
+        );
+    }
+
+    #[test]
+    fn start_task_from_repo_with_no_selection_sets_message() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        state.view = ViewMode::Repos;
+        let result = apply_intent(&ctx, &mut state, UiIntent::StartTaskFromRepo).unwrap();
+        assert!(result.is_none());
+        assert!(
+            state.message.contains("No repo selected"),
+            "message should mention 'No repo selected': {}",
+            state.message
+        );
+    }
+
+    #[test]
+    fn start_task_from_repo_enters_create_mode_with_repo_scope() {
+        use crate::{runtime::RepoKey, ui::state::RepoRow};
+
+        let ctx = test_env();
+        let repo_rows = vec![
+            RepoRow {
+                repo: RepoKey::new("github.com/acme/app"),
+                open_tasks: 1,
+                parked_tasks: 0,
+                is_detached: false,
+            },
+            RepoRow {
+                repo: RepoKey::new("github.com/acme/ops"),
+                open_tasks: 0,
+                parked_tasks: 0,
+                is_detached: false,
+            },
+        ];
+        let mut state = UiState::new(vec![], repo_rows, None);
+        state.view = ViewMode::Repos;
+        state.create_branch = "leftover".to_string();
+        // Select second repo
+        state.repo_selected = 1;
+
+        let result = apply_intent(&ctx, &mut state, UiIntent::StartTaskFromRepo).unwrap();
+        assert!(result.is_none());
+        assert_eq!(state.mode, InputMode::CreateTask);
+        assert!(state.create_branch.is_empty(), "branch should be cleared");
+        assert_eq!(
+            state.task_repo_scope,
+            Some("github.com/acme/ops".to_string())
+        );
+        assert!(
+            state.message.contains("github.com/acme/ops"),
+            "message should mention selected repo: {}",
+            state.message
+        );
     }
 
     // ── FinishSelected / ParkSelected guard in non-Tasks view ────────────────

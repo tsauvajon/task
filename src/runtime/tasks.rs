@@ -56,6 +56,11 @@ impl TaskResolver {
         &self.layout
     }
 
+    #[cfg(test)]
+    pub fn codium_trusted_roots(&self) -> &[PathBuf] {
+        &self.codium_trusted_roots
+    }
+
     pub fn ensure_layout(&self) -> Result<()> {
         fs::create_dir_all(self.layout.repos_dir())?;
         fs::create_dir_all(self.layout.wt_dir())?;
@@ -950,6 +955,48 @@ mod tests {
             // Bare repo has no worktrees, so falls back to computed path
             assert_eq!(path, wt_dir.join("github.com/me/app/feature-y"));
         }
+
+        #[test]
+        fn returns_actual_worktree_path_when_branch_exists() {
+            let dir = TempDir::new("resolve-wt-path-found");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let repo_slug = "github.com/me/app";
+            let gitdir = repos_dir.join(format!("{repo_slug}.git"));
+            init_bare_repo(&gitdir);
+
+            // Create a real worktree at the expected path
+            let wt_path = wt_dir.join(repo_slug).join("feat-login");
+            fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+            let status = std::process::Command::new("git")
+                .args([
+                    "--git-dir",
+                    gitdir.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "--orphan",
+                    "-b",
+                    "feat-login",
+                    wt_path.to_str().unwrap(),
+                ])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", std::env::temp_dir())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("git worktree add");
+            assert!(status.success(), "git worktree add failed");
+
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+            let repo_key = RepoKey::new(repo_slug);
+            let branch = BranchName::new("feat-login");
+            let path = resolver.resolve_worktree_path(&repo_key, &branch);
+            // Compare canonicalized paths to handle macOS /var → /private/var symlinks
+            assert_eq!(
+                path.canonicalize().unwrap(),
+                wt_path.canonicalize().unwrap()
+            );
+        }
     }
 
     mod resolve_repo_branch_inputs {
@@ -1045,7 +1092,7 @@ mod tests {
         use super::*;
 
         /// Creates a bare repo with a single worktree at the expected wt path.
-        fn setup_worktree(
+        pub(super) fn setup_worktree(
             repos_dir: &std::path::Path,
             wt_dir: &std::path::Path,
             repo_slug: &str,
@@ -1278,6 +1325,90 @@ mod tests {
             assert!(
                 result.is_ok(),
                 "no_open=true should skip tools and succeed even in an interactive terminal"
+            );
+        }
+    }
+
+    mod ambiguous_repo_resolution {
+        use super::*;
+
+        #[test]
+        fn resolve_repo_key_input_errors_on_ambiguous_match() {
+            // In a non-terminal environment (test harness), ambiguous matches
+            // produce an error listing the choices.
+            let dir = TempDir::new("resolve-ambiguous-input");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            // Two repos with the same short name under different orgs
+            init_bare_repo(&repos_dir.join("github.com/org-a/tool.git"));
+            init_bare_repo(&repos_dir.join("github.com/org-b/tool.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver.resolve_repo_key_input("tool").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("org-a/tool") && msg.contains("org-b/tool"),
+                "error should list both choices: {msg}"
+            );
+        }
+
+        #[test]
+        fn resolve_existing_repo_key_errors_on_ambiguous_match() {
+            let dir = TempDir::new("rerk-ambiguous");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/org-a/service.git"));
+            init_bare_repo(&repos_dir.join("github.com/org-b/service.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver.resolve_existing_repo_key("service").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("org-a/service") && msg.contains("org-b/service"),
+                "error should list both choices: {msg}"
+            );
+        }
+    }
+
+    mod resolve_task_from_query_multi_match {
+        use super::{resolve_task_from_query::setup_worktree, *};
+
+        #[test]
+        fn errors_with_choices_on_partial_branch_match() {
+            let dir = TempDir::new("resolve-query-multi-partial");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            setup_worktree(&repos_dir, &wt_dir, "github.com/me/app", "feat-alpha");
+            setup_worktree(&repos_dir, &wt_dir, "github.com/me/lib", "feat-beta");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            // "feat" partially matches both branches
+            let err = resolver.resolve_task_from_query("feat").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("feat-alpha") && msg.contains("feat-beta"),
+                "error should list both matching tasks: {msg}"
+            );
+        }
+    }
+
+    mod clone_bare_repo_method {
+        use super::*;
+
+        #[test]
+        fn returns_ok_when_valid_bare_repo_already_exists() {
+            let dir = TempDir::new("clone-idempotent");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let repo_key = RepoKey::new("github.com/me/app");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            // Should return Ok without doing anything (no network needed)
+            let result = resolver.clone_bare_repo("https://example.com/fake.git", &repo_key);
+            assert!(
+                result.is_ok(),
+                "should skip clone when valid bare repo exists"
             );
         }
     }

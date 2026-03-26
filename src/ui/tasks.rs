@@ -558,4 +558,65 @@ mod tests {
             let _ = fs::remove_dir_all(&base);
         }
     }
+
+    mod is_detached_worktree_tests {
+        use std::{env, fs};
+
+        use super::super::is_detached_worktree;
+
+        struct TempDir(std::path::PathBuf);
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = env::temp_dir().join(format!("task-rs-detached-{name}"));
+                let _ = fs::remove_dir_all(&path);
+                fs::create_dir_all(&path).expect("create temp dir");
+                Self(path)
+            }
+
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+        }
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[test]
+        fn detects_git_file_as_worktree() {
+            // `git worktree add` creates a .git *file* (not directory)
+            let dir = TempDir::new("git-file");
+            fs::write(dir.path().join(".git"), "gitdir: /some/path").unwrap();
+            assert!(is_detached_worktree(dir.path()));
+        }
+
+        #[test]
+        fn detects_git_directory() {
+            // A regular clone has a .git directory -- this also returns true
+            let dir = TempDir::new("git-dir");
+            fs::create_dir_all(dir.path().join(".git")).unwrap();
+            assert!(is_detached_worktree(dir.path()));
+        }
+
+        #[test]
+        fn detects_head_file_as_bare_repo() {
+            let dir = TempDir::new("head-file");
+            fs::write(dir.path().join("HEAD"), "ref: refs/heads/main").unwrap();
+            assert!(is_detached_worktree(dir.path()));
+        }
+
+        #[test]
+        fn returns_false_for_empty_directory() {
+            let dir = TempDir::new("empty");
+            assert!(!is_detached_worktree(dir.path()));
+        }
+
+        #[test]
+        fn returns_false_for_nonexistent_path() {
+            let path = env::temp_dir().join("task-rs-detached-nonexistent-12345");
+            let _ = fs::remove_dir_all(&path);
+            assert!(!is_detached_worktree(&path));
+        }
+    }
 }

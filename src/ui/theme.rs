@@ -77,9 +77,7 @@ impl Theme {
 
     /// Style for a keybind label in the actions / help panels.
     pub fn key_style(&self) -> Style {
-        Style::default()
-            .fg(self.accent)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(self.accent)
     }
 
     /// Style for the description next to a keybind.
@@ -138,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn mode_style_returns_bold_for_all_modes() {
+    fn mode_style_is_bold() {
         let theme = Theme::dark();
         for mode in [
             InputMode::Normal,
@@ -152,5 +150,15 @@ mod tests {
                 "mode {mode:?} should be bold"
             );
         }
+    }
+
+    #[test]
+    fn key_style_is_not_bold() {
+        let theme = Theme::dark();
+        let style = theme.key_style();
+        assert!(
+            !style.add_modifier.contains(Modifier::BOLD),
+            "key_style should not be bold"
+        );
     }
 }

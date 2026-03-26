@@ -190,7 +190,8 @@ pub fn config_dir_path() -> Result<PathBuf> {
 }
 
 fn resolve_config_dir(xdg_config_home: Option<&str>, home: Option<&str>) -> Result<PathBuf> {
-    if let Some(base) = xdg_config_home {
+    // Per XDG spec, empty $XDG_CONFIG_HOME is treated as unset.
+    if let Some(base) = xdg_config_home.filter(|s| !s.is_empty()) {
         return Ok(PathBuf::from(base).join("task"));
     }
     let home = home.ok_or_else(|| Error::failed("HOME is not set"))?;
@@ -540,6 +541,97 @@ mod tests {
             write_config(&config_path, &config).expect("write config");
             let content = fs::read_to_string(&config_path).unwrap();
             assert!(!content.contains("[vscodium]"));
+        }
+    }
+
+    mod expand_path_edge_cases {
+        use super::*;
+
+        #[test]
+        fn tilde_without_slash_is_passthrough() {
+            // "~user/repos" is NOT expanded -- it falls through to the literal path.
+            // This pins the current behavior; if this changes, this test should be updated.
+            let home = Path::new("/home/me");
+            let result = expand_path("~user/repos", home).unwrap();
+            assert_eq!(result, std::path::PathBuf::from("~user/repos"));
+        }
+    }
+
+    mod to_runtime_config_edge_cases {
+        use super::*;
+
+        #[test]
+        fn trims_whitespace_around_paths() {
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "  /tmp/repos  ".to_string(),
+                wt_dir: "  /tmp/wt  ".to_string(),
+                detached_dir: "  /tmp/detached  ".to_string(),
+                vscodium: None,
+            })
+            .expect("runtime config");
+
+            assert_eq!(config.repos_dir, std::path::PathBuf::from("/tmp/repos"));
+            assert_eq!(config.wt_dir, std::path::PathBuf::from("/tmp/wt"));
+            assert_eq!(
+                config.detached_dir,
+                std::path::PathBuf::from("/tmp/detached")
+            );
+        }
+    }
+
+    mod resolve_config_dir_edge_cases {
+        use super::super::resolve_config_dir;
+
+        #[test]
+        fn empty_xdg_string_falls_back_to_home() {
+            // Per XDG spec, empty $XDG_CONFIG_HOME is treated as unset and
+            // should fall back to $HOME/.config.
+            let path = resolve_config_dir(Some(""), Some("/home/user")).expect("ok");
+            assert_eq!(path, std::path::PathBuf::from("/home/user/.config/task"));
+        }
+    }
+
+    mod load_config_edge_cases {
+        use std::{env, fs, path::PathBuf};
+
+        use super::super::load_config;
+
+        struct TempDir(PathBuf);
+
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = env::temp_dir().join(format!("task-rs-config-edge-{name}"));
+                let _ = fs::remove_dir_all(&path);
+                fs::create_dir_all(&path).expect("create temp dir");
+                Self(path)
+            }
+
+            fn path(&self) -> &PathBuf {
+                &self.0
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[test]
+        fn errors_on_empty_repos_dir() {
+            let dir = TempDir::new("empty-repos-dir");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n",
+            )
+            .unwrap();
+
+            let err = load_config(&config_path).unwrap_err();
+            assert!(
+                err.to_string().contains("empty"),
+                "expected 'empty' in error: {err}"
+            );
         }
     }
 }

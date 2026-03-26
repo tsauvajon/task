@@ -46,6 +46,7 @@ pub(super) struct UiState {
     pub(super) mode: InputMode,
     pub(super) message: String,
     pub(super) show_help: bool,
+    pub(super) visible_rows: usize,
 }
 
 impl UiState {
@@ -70,6 +71,7 @@ impl UiState {
             mode: InputMode::Normal,
             message: "Ready".to_string(),
             show_help: false,
+            visible_rows: 20,
         };
         state.apply_filters();
         state
@@ -81,19 +83,27 @@ impl UiState {
     }
 
     pub(super) fn apply_task_filter(&mut self) {
-        let needle = self.filter_text.to_lowercase();
+        let tokens: Vec<String> = self
+            .filter_text
+            .split_whitespace()
+            .map(|t| t.to_lowercase())
+            .collect();
         self.task_filtered_indices = self
             .task_rows
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                if needle.is_empty() {
+                if tokens.is_empty() {
                     return true;
                 }
 
-                row.repo.to_lowercase().contains(&needle)
-                    || row.branch.to_lowercase().contains(&needle)
-                    || row.path.to_string_lossy().to_lowercase().contains(&needle)
+                let haystack = format!(
+                    "{} {} {}",
+                    row.repo.to_lowercase(),
+                    row.branch.to_lowercase(),
+                    row.path.to_string_lossy().to_lowercase(),
+                );
+                tokens.iter().all(|token| haystack.contains(token.as_str()))
             })
             .map(|(index, _)| index)
             .collect();
@@ -179,6 +189,47 @@ impl UiState {
                 };
             }
         }
+    }
+
+    pub(super) fn move_page_down(&mut self) {
+        let (selected, len) = match self.view {
+            ViewMode::Tasks => (&mut self.task_selected, self.task_filtered_indices.len()),
+            ViewMode::Repos => (&mut self.repo_selected, self.repo_filtered_indices.len()),
+        };
+        if len == 0 {
+            return;
+        }
+        *selected = (*selected + self.visible_rows).min(len - 1);
+    }
+
+    pub(super) fn move_page_up(&mut self) {
+        let (selected, len) = match self.view {
+            ViewMode::Tasks => (&mut self.task_selected, self.task_filtered_indices.len()),
+            ViewMode::Repos => (&mut self.repo_selected, self.repo_filtered_indices.len()),
+        };
+        if len == 0 {
+            return;
+        }
+        *selected = selected.saturating_sub(self.visible_rows);
+    }
+
+    pub(super) fn move_first(&mut self) {
+        match self.view {
+            ViewMode::Tasks => self.task_selected = 0,
+            ViewMode::Repos => self.repo_selected = 0,
+        }
+    }
+
+    pub(super) fn move_last(&mut self) {
+        let (selected, len) = match self.view {
+            ViewMode::Tasks => (&mut self.task_selected, self.task_filtered_indices.len()),
+            ViewMode::Repos => (&mut self.repo_selected, self.repo_filtered_indices.len()),
+        };
+        *selected = len.saturating_sub(1);
+    }
+
+    pub(super) fn set_visible_rows(&mut self, rows: usize) {
+        self.visible_rows = rows;
     }
 
     pub(super) fn set_task_rows(&mut self, rows: Vec<TaskRow>) {
@@ -895,6 +946,386 @@ mod tests {
                 state.task_repo_scope,
                 Some("github.com/acme/app".to_string())
             );
+        }
+
+        #[test]
+        fn default_visible_rows_is_twenty() {
+            let state = UiState::new(vec![], vec![], None);
+            assert_eq!(state.visible_rows, 20);
+        }
+    }
+
+    mod visible_rows {
+        use super::*;
+
+        #[test]
+        fn set_visible_rows_updates_field() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.set_visible_rows(42);
+            assert_eq!(state.visible_rows, 42);
+        }
+    }
+
+    mod page_navigation {
+        use super::*;
+
+        fn many_task_rows(n: usize) -> Vec<TaskRow> {
+            (0..n)
+                .map(|i| task_row_for_repo(&format!("github.com/acme/repo-{i}")))
+                .collect()
+        }
+
+        fn many_repo_rows(n: usize) -> Vec<RepoRow> {
+            (0..n)
+                .map(|i| repo_row(&format!("github.com/acme/repo-{i}"), 1, 0))
+                .collect()
+        }
+
+        #[test]
+        fn page_down_advances_by_visible_rows() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 10;
+            state.task_selected = 0;
+            state.move_page_down();
+            assert_eq!(state.task_selected, 10);
+        }
+
+        #[test]
+        fn page_down_clamps_at_last_item() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 10;
+            state.task_selected = 25;
+            state.move_page_down();
+            assert_eq!(state.task_selected, 29);
+        }
+
+        #[test]
+        fn page_down_already_at_last_stays_put() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 10;
+            state.task_selected = 29;
+            state.move_page_down();
+            assert_eq!(state.task_selected, 29);
+        }
+
+        #[test]
+        fn page_down_on_empty_list_is_noop() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.visible_rows = 10;
+            state.move_page_down();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn page_down_fewer_items_than_page_size() {
+            let mut state = UiState::new(many_task_rows(5), vec![], None);
+            state.visible_rows = 10;
+            state.task_selected = 0;
+            state.move_page_down();
+            assert_eq!(state.task_selected, 4);
+        }
+
+        #[test]
+        fn page_up_moves_back_by_visible_rows() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 10;
+            state.task_selected = 20;
+            state.move_page_up();
+            assert_eq!(state.task_selected, 10);
+        }
+
+        #[test]
+        fn page_up_clamps_at_zero() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 10;
+            state.task_selected = 5;
+            state.move_page_up();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn page_up_already_at_first_stays_put() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 10;
+            state.task_selected = 0;
+            state.move_page_up();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn page_up_on_empty_list_is_noop() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.visible_rows = 10;
+            state.move_page_up();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn page_down_advances_repo_selection() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], many_repo_rows(30), None);
+            state.view = ViewMode::Repos;
+            state.visible_rows = 10;
+            state.repo_selected = 0;
+            state.move_page_down();
+            assert_eq!(state.repo_selected, 10);
+        }
+
+        #[test]
+        fn page_up_clamps_repo_selection_at_zero() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], many_repo_rows(30), None);
+            state.view = ViewMode::Repos;
+            state.visible_rows = 10;
+            state.repo_selected = 5;
+            state.move_page_up();
+            assert_eq!(state.repo_selected, 0);
+        }
+    }
+
+    mod first_last_navigation {
+        use super::*;
+
+        fn many_task_rows(n: usize) -> Vec<TaskRow> {
+            (0..n)
+                .map(|i| task_row_for_repo(&format!("github.com/acme/repo-{i}")))
+                .collect()
+        }
+
+        fn many_repo_rows(n: usize) -> Vec<RepoRow> {
+            (0..n)
+                .map(|i| repo_row(&format!("github.com/acme/repo-{i}"), 1, 0))
+                .collect()
+        }
+
+        #[test]
+        fn move_first_jumps_to_zero() {
+            let mut state = UiState::new(many_task_rows(10), vec![], None);
+            state.task_selected = 7;
+            state.move_first();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn move_first_already_at_zero_stays_put() {
+            let mut state = UiState::new(many_task_rows(10), vec![], None);
+            state.task_selected = 0;
+            state.move_first();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn move_first_on_empty_list_is_noop() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.move_first();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn move_last_jumps_to_end() {
+            let mut state = UiState::new(many_task_rows(10), vec![], None);
+            state.task_selected = 3;
+            state.move_last();
+            assert_eq!(state.task_selected, 9);
+        }
+
+        #[test]
+        fn move_last_already_at_end_stays_put() {
+            let mut state = UiState::new(many_task_rows(10), vec![], None);
+            state.task_selected = 9;
+            state.move_last();
+            assert_eq!(state.task_selected, 9);
+        }
+
+        #[test]
+        fn move_last_on_empty_list_is_noop() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.move_last();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn move_first_jumps_to_first_repo() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], many_repo_rows(10), None);
+            state.view = ViewMode::Repos;
+            state.repo_selected = 7;
+            state.move_first();
+            assert_eq!(state.repo_selected, 0);
+        }
+
+        #[test]
+        fn move_last_jumps_to_last_repo() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], many_repo_rows(10), None);
+            state.view = ViewMode::Repos;
+            state.repo_selected = 3;
+            state.move_last();
+            assert_eq!(state.repo_selected, 9);
+        }
+    }
+
+    mod activity_lines {
+        use super::*;
+
+        #[test]
+        fn empty_input_is_noop() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.activity_lines = vec!["existing".to_string()];
+            state.append_activity_lines(vec![]);
+            assert_eq!(state.activity_lines, vec!["existing"]);
+        }
+
+        #[test]
+        fn appends_lines() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.append_activity_lines(vec!["line-1".to_string(), "line-2".to_string()]);
+            assert_eq!(state.activity_lines, vec!["line-1", "line-2"]);
+        }
+
+        #[test]
+        fn drains_oldest_when_exceeding_cap() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.activity_lines = (0..6).map(|i| format!("old-{i}")).collect();
+            state.append_activity_lines((0..5).map(|i| format!("new-{i}")).collect());
+            // 6 + 5 = 11, drain 3 oldest → keep last 8
+            assert_eq!(state.activity_lines.len(), 8);
+            assert_eq!(state.activity_lines[0], "old-3");
+            assert_eq!(state.activity_lines[3], "new-0");
+            assert_eq!(state.activity_lines[7], "new-4");
+        }
+
+        #[test]
+        fn exactly_at_cap_does_not_drain() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.activity_lines = (0..5).map(|i| format!("old-{i}")).collect();
+            state.append_activity_lines((0..3).map(|i| format!("new-{i}")).collect());
+            // 5 + 3 = 8, exactly at cap
+            assert_eq!(state.activity_lines.len(), 8);
+            assert_eq!(state.activity_lines[0], "old-0");
+            assert_eq!(state.activity_lines[7], "new-2");
+        }
+    }
+
+    mod navigation_edge_cases {
+        use super::*;
+
+        #[test]
+        fn move_prev_on_empty_task_list_is_noop() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.move_prev();
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn move_prev_on_empty_repo_list_is_noop() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], vec![], None);
+            state.view = ViewMode::Repos;
+            state.move_prev();
+            assert_eq!(state.repo_selected, 0);
+        }
+
+        #[test]
+        fn single_element_list_navigation_is_stable() {
+            let mut state =
+                UiState::new(vec![task_row_for_repo("github.com/acme/app")], vec![], None);
+            assert_eq!(state.task_selected, 0);
+            state.move_next();
+            assert_eq!(state.task_selected, 0);
+            state.move_prev();
+            assert_eq!(state.task_selected, 0);
+        }
+    }
+
+    mod task_filter_clamping {
+        use super::*;
+
+        #[test]
+        fn selection_clamps_when_filter_reduces_results() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/app"),
+                    task_row_for_repo("github.com/acme/ops"),
+                    task_row_for_repo("github.com/acme/docs"),
+                ],
+                vec![],
+                None,
+            );
+
+            state.task_selected = 2;
+            state.filter_text = "ops".to_string();
+            state.apply_task_filter();
+
+            assert_eq!(state.task_filtered_indices, vec![1]);
+            assert_eq!(state.task_selected, 0);
+        }
+    }
+
+    mod filter_edge_cases {
+        use super::*;
+
+        #[test]
+        fn backspace_on_empty_filter_is_noop() {
+            let mut state =
+                UiState::new(vec![task_row_for_repo("github.com/acme/app")], vec![], None);
+            assert!(state.filter_text.is_empty());
+            state.filter_backspace(); // must not panic
+            assert!(state.filter_text.is_empty());
+            assert_eq!(state.task_filtered_indices.len(), 1);
+        }
+
+        #[test]
+        fn whitespace_only_repo_filter_shows_all() {
+            let mut state = UiState::new(
+                vec![],
+                vec![
+                    repo_row("github.com/acme/app", 1, 0),
+                    repo_row("github.com/acme/ops", 1, 0),
+                ],
+                None,
+            );
+            state.filter_text = "   ".to_string();
+            state.apply_repo_filter();
+
+            assert_eq!(state.repo_filtered_indices.len(), 2);
+        }
+
+        #[test]
+        fn task_filter_splits_on_whitespace_like_repo_filter() {
+            // Both task and repo filters use multi-token AND: "acme app"
+            // splits into ["acme", "app"] and both must match somewhere in
+            // the combined repo+branch+path.
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/app"),
+                    task_row_for_repo("github.com/acme/ops"),
+                    task_row_for_repo("github.com/other/app"),
+                ],
+                vec![],
+                None,
+            );
+            state.filter_text = "acme app".to_string();
+            state.apply_task_filter();
+
+            // Only the row containing both "acme" AND "app" matches
+            assert_eq!(state.task_filtered_indices, vec![0]);
+        }
+
+        #[test]
+        fn task_filter_whitespace_only_shows_all() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/app"),
+                    task_row_for_repo("github.com/acme/ops"),
+                ],
+                vec![],
+                None,
+            );
+            state.filter_text = "   ".to_string();
+            state.apply_task_filter();
+
+            assert_eq!(state.task_filtered_indices.len(), 2);
         }
     }
 }

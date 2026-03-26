@@ -8,6 +8,10 @@ pub(super) enum UiIntent {
     SwitchView,
     MoveNext,
     MovePrev,
+    PageDown,
+    PageUp,
+    MoveFirst,
+    MoveLast,
     ToggleHelp,
     OpenSelected,
     EnterFilterMode,
@@ -16,6 +20,7 @@ pub(super) enum UiIntent {
     RefreshCurrentView,
     ParkSelected,
     ToggleDetach,
+    StartTaskFromRepo,
     ClearScope,
     FilterCancel,
     FilterApply,
@@ -25,6 +30,7 @@ pub(super) enum UiIntent {
     CreateCancel,
     CreateSubmit,
     CreateBackspace,
+    CreateClear,
     CreateAppend(char),
     CloneCancel,
     CloneSubmit,
@@ -53,10 +59,15 @@ fn from_key_normal(key: KeyEvent) -> UiIntent {
         KeyCode::Tab => UiIntent::SwitchView,
         KeyCode::Down | KeyCode::Char('j') => UiIntent::MoveNext,
         KeyCode::Up | KeyCode::Char('k') => UiIntent::MovePrev,
+        KeyCode::PageDown => UiIntent::PageDown,
+        KeyCode::PageUp => UiIntent::PageUp,
+        KeyCode::Home => UiIntent::MoveFirst,
+        KeyCode::End => UiIntent::MoveLast,
         KeyCode::Char('/') => UiIntent::EnterFilterMode,
         KeyCode::Char('?') => UiIntent::ToggleHelp,
         KeyCode::Char('c') => UiIntent::EnterCreateTaskMode,
         KeyCode::Char('d') => UiIntent::ToggleDetach,
+        KeyCode::Char('t') => UiIntent::StartTaskFromRepo,
         KeyCode::Char('f') => UiIntent::FinishSelected,
         KeyCode::Char('r') => UiIntent::RefreshCurrentView,
         KeyCode::Char('p') => UiIntent::ParkSelected,
@@ -87,6 +98,9 @@ fn from_key_create(key: KeyEvent) -> UiIntent {
         KeyCode::Esc => UiIntent::CreateCancel,
         KeyCode::Enter => UiIntent::CreateSubmit,
         KeyCode::Backspace => UiIntent::CreateBackspace,
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            UiIntent::CreateClear
+        }
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CreateAppend(ch)
         }
@@ -187,6 +201,30 @@ mod tests {
                 from_key(InputMode::Normal, key(KeyCode::Char('p'))),
                 UiIntent::ParkSelected
             );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('t'))),
+                UiIntent::StartTaskFromRepo
+            );
+        }
+
+        #[test]
+        fn maps_page_and_home_end_keys() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::PageDown)),
+                UiIntent::PageDown
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::PageUp)),
+                UiIntent::PageUp
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Home)),
+                UiIntent::MoveFirst
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::End)),
+                UiIntent::MoveLast
+            );
         }
 
         #[test]
@@ -276,6 +314,15 @@ mod tests {
             assert_eq!(
                 from_key(InputMode::CreateTask, key(KeyCode::Backspace)),
                 UiIntent::CreateBackspace
+            );
+        }
+
+        #[test]
+        fn ctrl_u_maps_to_create_clear() {
+            let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+            assert_eq!(
+                from_key(InputMode::CreateTask, ctrl_u),
+                UiIntent::CreateClear
             );
         }
 

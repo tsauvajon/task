@@ -177,5 +177,39 @@ mod tests {
 
             let _ = fs::remove_dir_all(&dir);
         }
+
+        #[test]
+        fn errors_when_field_is_missing_from_valid_toml() {
+            // A valid TOML file without the `onboarding_complete` field should
+            // error -- not silently return false. This pins the contract so that
+            // adding `#[serde(default)]` to TaskStateFile is a conscious decision.
+            let path = env::temp_dir().join("task-rs-state-missing-field.toml");
+            fs::write(&path, b"other_key = 42").expect("write toml");
+
+            let err = onboarding_complete_at(&path).expect_err("should fail on missing field");
+            assert!(
+                err.to_string().contains("parse") || err.to_string().contains("missing"),
+                "unexpected error: {err}"
+            );
+
+            let _ = fs::remove_file(&path);
+        }
+
+        #[test]
+        fn ignores_extra_unknown_fields() {
+            // Forward-compatibility: state files with extra keys (e.g. from a
+            // newer version) should still parse without error.
+            let path = env::temp_dir().join("task-rs-state-extra-fields.toml");
+            fs::write(
+                &path,
+                b"onboarding_complete = true\nsome_future_field = 123\n",
+            )
+            .expect("write toml");
+
+            let result = onboarding_complete_at(&path).expect("should parse despite extra fields");
+            assert!(result);
+
+            let _ = fs::remove_file(&path);
+        }
     }
 }

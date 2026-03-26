@@ -100,13 +100,16 @@ fn ensure_codium_running(
     }
 }
 
+/// Returns `true` when the given env-var value indicates the process is running
+/// inside a tmux session (i.e. the value is present and non-empty).
+fn tmux_env_indicates_inside(tmux_var: Option<&str>) -> bool {
+    tmux_var.is_some_and(|v| !v.is_empty())
+}
+
 /// Returns `true` when the process is already running inside a tmux session
 /// (i.e. the `TMUX` environment variable is set and non-empty).
 fn is_inside_tmux() -> bool {
-    std::env::var("TMUX")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .is_some()
+    tmux_env_indicates_inside(std::env::var("TMUX").ok().as_deref())
 }
 
 pub fn open_session(
@@ -212,7 +215,7 @@ mod tests {
 
     use super::{
         SessionStartup, TeardownAction, finish_teardown_actions, is_inside_tmux, new_session_args,
-        park_teardown_actions,
+        park_teardown_actions, tmux_env_indicates_inside,
     };
     use crate::runtime::process::{CommandPlan, ManagedTool};
 
@@ -258,46 +261,33 @@ mod tests {
         use super::*;
 
         #[test]
-        fn returns_false_when_tmux_var_absent() {
-            // We cannot mutate global env safely in parallel tests, so assert
-            // this helper matches the predicate computed from current env.
-            let expected = std::env::var("TMUX")
-                .ok()
-                .filter(|v| !v.is_empty())
-                .is_some();
+        fn consistent_with_current_environment() {
+            // Verify that `is_inside_tmux` agrees with the extracted pure
+            // function when both inspect the same env snapshot.
+            let expected = tmux_env_indicates_inside(std::env::var("TMUX").ok().as_deref());
             assert_eq!(is_inside_tmux(), expected);
         }
 
         #[test]
-        fn inside_tmux_logic_with_non_empty_value() {
-            // Directly test the same predicate logic that is_inside_tmux() uses,
-            // using a controlled string instead of reading the real env variable.
-            let tmux_env: Option<&str> = Some("/tmp/tmux-1000/default,42,0");
-            let inside = tmux_env
-                .map(str::to_string)
-                .filter(|v| !v.is_empty())
-                .is_some();
-            assert!(inside, "non-empty TMUX value should indicate inside tmux");
+        fn detects_typical_socket_path() {
+            assert!(tmux_env_indicates_inside(Some(
+                "/tmp/tmux-1000/default,42,0"
+            )));
         }
 
         #[test]
-        fn inside_tmux_logic_with_empty_value() {
-            let tmux_env: Option<&str> = Some("");
-            let inside = tmux_env
-                .map(str::to_string)
-                .filter(|v| !v.is_empty())
-                .is_some();
-            assert!(!inside, "empty TMUX value should indicate outside tmux");
+        fn rejects_empty_value() {
+            assert!(!tmux_env_indicates_inside(Some("")));
         }
 
         #[test]
-        fn inside_tmux_logic_with_absent_value() {
-            let tmux_env: Option<&str> = None;
-            let inside = tmux_env
-                .map(str::to_string)
-                .filter(|v| !v.is_empty())
-                .is_some();
-            assert!(!inside, "absent TMUX variable should indicate outside tmux");
+        fn rejects_absent_value() {
+            assert!(!tmux_env_indicates_inside(None));
+        }
+
+        #[test]
+        fn accepts_any_non_empty_string() {
+            assert!(tmux_env_indicates_inside(Some("1")));
         }
     }
 
@@ -353,6 +343,68 @@ mod tests {
                     "--session",
                     "ses_123",
                 ]
+            );
+        }
+
+        #[test]
+        fn with_opencode_no_extra_args_ends_after_separator() {
+            let opencode_command = CommandPlan::for_managed_tool(ManagedTool::Opencode, vec![]);
+
+            let args = new_session_args(
+                "repo-branch",
+                Path::new("/tmp/wt/repo"),
+                SessionStartup::WithOpencode(opencode_command),
+            );
+
+            assert_eq!(
+                args,
+                vec![
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "repo-branch",
+                    "-c",
+                    "/tmp/wt/repo",
+                    "nix",
+                    "run",
+                    "nixpkgs#opencode",
+                    "--",
+                ]
+            );
+        }
+
+        #[test]
+        fn preserves_path_with_spaces() {
+            let args = new_session_args(
+                "my-session",
+                Path::new("/home/user/my projects/repo"),
+                SessionStartup::ShellOnly,
+            );
+
+            assert_eq!(
+                args,
+                vec![
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "my-session",
+                    "-c",
+                    "/home/user/my projects/repo",
+                ]
+            );
+        }
+
+        #[test]
+        fn empty_session_name_still_produces_valid_structure() {
+            let args = new_session_args("", Path::new("/tmp/wt/repo"), SessionStartup::ShellOnly);
+
+            // The structure is always: new-session -d -s <session> -c <path>
+            // An empty session name is passed through unchanged — tmux itself
+            // will reject it, but the args builder should not panic or corrupt
+            // surrounding arguments.
+            assert_eq!(
+                args,
+                vec!["new-session", "-d", "-s", "", "-c", "/tmp/wt/repo"]
             );
         }
     }
