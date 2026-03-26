@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     ffi::OsStr,
     fs,
-    io::{self, IsTerminal},
     path::{Path, PathBuf},
 };
 
@@ -42,13 +41,19 @@ use crate::{
 pub struct TaskResolver {
     layout: WorkspacePaths,
     codium_trusted_roots: Vec<PathBuf>,
+    interactive: bool,
 }
 
 impl TaskResolver {
-    pub fn new(layout: WorkspacePaths, codium_trusted_roots: Vec<PathBuf>) -> Self {
+    pub fn new(
+        layout: WorkspacePaths,
+        codium_trusted_roots: Vec<PathBuf>,
+        interactive: bool,
+    ) -> Self {
         Self {
             layout,
             codium_trusted_roots,
+            interactive,
         }
     }
 
@@ -108,7 +113,7 @@ impl TaskResolver {
         match resolve_repo_query(&normalized, &key_strs) {
             ResolveResult::Resolved(key) => Ok(RepoKey::new(key)),
             ResolveResult::Ambiguous(choices) => {
-                choose_repo_key_interactive(repo_arg, &choices).map(RepoKey::new)
+                choose_repo_key_interactive(repo_arg, &choices, self.interactive).map(RepoKey::new)
             }
         }
     }
@@ -151,7 +156,7 @@ impl TaskResolver {
                 }
             }
             ResolveResult::Ambiguous(choices) => {
-                choose_repo_key_interactive(repo_arg, &choices).map(RepoKey::new)
+                choose_repo_key_interactive(repo_arg, &choices, self.interactive).map(RepoKey::new)
             }
         }
     }
@@ -305,7 +310,7 @@ impl TaskResolver {
             return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
         }
         if !matches.is_empty() {
-            return choose_task_interactive(query, &matches);
+            return choose_task_interactive(query, &matches, self.interactive);
         }
 
         let mut matches: Vec<&TaskRow> =
@@ -315,7 +320,7 @@ impl TaskResolver {
             return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
         }
         if !matches.is_empty() {
-            return choose_task_interactive(query, &matches);
+            return choose_task_interactive(query, &matches, self.interactive);
         }
 
         let mut matches: Vec<&TaskRow> = tasks.iter().filter(|r| r.repo.contains(query)).collect();
@@ -328,7 +333,7 @@ impl TaskResolver {
             return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
         }
 
-        choose_task_interactive(query, &matches)
+        choose_task_interactive(query, &matches, self.interactive)
     }
 
     pub fn print_task_rows_table(&self, rows: &[TaskRow]) {
@@ -460,8 +465,12 @@ fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(gitdirs)
 }
 
-fn choose_repo_key_interactive(query: &str, choices: &[String]) -> Result<String> {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+fn choose_repo_key_interactive(
+    query: &str,
+    choices: &[String],
+    interactive: bool,
+) -> Result<String> {
+    if !interactive {
         return Err(Error::failed(format!(
             "Multiple repositories match '{query}': {}. Please use a full repo key.",
             choices.join(" ")
@@ -479,13 +488,17 @@ fn choose_repo_key_interactive(query: &str, choices: &[String]) -> Result<String
     index.map(|i| choices[i].clone()).ok_or(Error::Cancelled)
 }
 
-fn choose_task_interactive(query: &str, choices: &[&TaskRow]) -> Result<(RepoKey, BranchName)> {
+fn choose_task_interactive(
+    query: &str,
+    choices: &[&TaskRow],
+    interactive: bool,
+) -> Result<(RepoKey, BranchName)> {
     let items: Vec<String> = choices
         .iter()
         .map(|row| format!("{}/{}", row.repo, row.branch))
         .collect();
 
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+    if !interactive {
         return Err(Error::failed(format!(
             "Multiple tasks match '{query}': {}. Please specify repo and branch.",
             items.join(" ")
@@ -552,7 +565,7 @@ mod tests {
     /// Build a `TaskResolver` from temp repos, wt, and detached dirs.
     fn resolver_for(repos_dir: &std::path::Path, wt_dir: &std::path::Path) -> TaskResolver {
         let layout = WorkspacePaths::new(repos_dir, wt_dir, std::path::Path::new("/tmp/detached"));
-        TaskResolver::new(layout, Vec::new())
+        TaskResolver::new(layout, Vec::new(), false)
     }
 
     mod collect_gitdirs {

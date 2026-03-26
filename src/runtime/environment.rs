@@ -2,7 +2,11 @@ use std::path::Path;
 
 use crate::{
     error::Result,
-    runtime::{config::TaskConfig, paths::WorkspacePaths, tasks::TaskResolver},
+    runtime::{
+        config::{TaskConfig, is_interactive_terminal},
+        paths::WorkspacePaths,
+        tasks::TaskResolver,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -19,7 +23,11 @@ impl RuntimeEnvironment {
 
     fn from_config(config: TaskConfig) -> Self {
         let layout = WorkspacePaths::new(config.repos_dir, config.wt_dir, config.detached_dir);
-        let tasks = TaskResolver::new(layout.clone(), config.codium_trusted_roots);
+        let tasks = TaskResolver::new(
+            layout.clone(),
+            config.codium_trusted_roots,
+            is_interactive_terminal(),
+        );
         Self { layout, tasks }
     }
 
@@ -36,7 +44,7 @@ impl RuntimeEnvironment {
         detached_dir: impl AsRef<Path>,
     ) -> Self {
         let layout = WorkspacePaths::new(repos_dir, wt_dir, detached_dir);
-        let tasks = TaskResolver::new(layout.clone(), Vec::new());
+        let tasks = TaskResolver::new(layout.clone(), Vec::new(), is_interactive_terminal());
         Self { layout, tasks }
     }
 
