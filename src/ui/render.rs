@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout as UiLayout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, Cell, Clear, Padding, Paragraph, Row, Scrollbar, ScrollbarOrientation,
@@ -389,52 +389,57 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
 
 // ── Actions / keybind panel ──────────────────────────────────────────────────
 
-fn keybind_line(key: &str, desc: &str, theme: &Theme) -> Line<'static> {
+fn keybind_line(key: &str, desc: &str, key_color: Color, theme: &Theme) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("{key:<7}"), theme.key_style()),
+        Span::styled(
+            format!("{key:<7}"),
+            Style::default().fg(key_color).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(format!(" {desc}"), theme.key_desc_style()),
     ])
 }
 
 fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
+    let kc = theme.mode_color(state.mode);
+
     match state.mode {
         InputMode::Normal => match state.view {
             ViewMode::Tasks => vec![
-                keybind_line("Tab", "switch to repos view", theme),
-                keybind_line("Enter", "open selected task", theme),
-                keybind_line("c", "create new task", theme),
-                keybind_line("p", "park selected task", theme),
-                keybind_line("f", "finish selected task", theme),
-                keybind_line("/", "enter filter mode", theme),
-                keybind_line("r", "refresh tasks", theme),
-                keybind_line("?", "toggle help", theme),
-                keybind_line("q", "quit", theme),
+                keybind_line("Tab", "switch to repos view", kc, theme),
+                keybind_line("Enter", "open selected task", kc, theme),
+                keybind_line("c", "create new task", kc, theme),
+                keybind_line("p", "park selected task", kc, theme),
+                keybind_line("f", "finish selected task", kc, theme),
+                keybind_line("/", "enter filter mode", kc, theme),
+                keybind_line("r", "refresh tasks", kc, theme),
+                keybind_line("?", "toggle help", kc, theme),
+                keybind_line("q", "quit", kc, theme),
             ],
             ViewMode::Repos => vec![
-                keybind_line("Tab", "switch to tasks view", theme),
-                keybind_line("Enter", "open selected repo tasks", theme),
-                keybind_line("c", "clone repo interactively", theme),
-                keybind_line("d", "toggle detached worktree", theme),
-                keybind_line("/", "enter filter mode", theme),
-                keybind_line("r", "refresh repos", theme),
-                keybind_line("?", "toggle help", theme),
-                keybind_line("q", "quit", theme),
+                keybind_line("Tab", "switch to tasks view", kc, theme),
+                keybind_line("Enter", "open selected repo tasks", kc, theme),
+                keybind_line("c", "clone repo interactively", kc, theme),
+                keybind_line("d", "toggle detached worktree", kc, theme),
+                keybind_line("/", "enter filter mode", kc, theme),
+                keybind_line("r", "refresh repos", kc, theme),
+                keybind_line("?", "toggle help", kc, theme),
+                keybind_line("q", "quit", kc, theme),
             ],
         },
         InputMode::Filter => vec![
-            keybind_line("Tab", "switch Tasks/Repos", theme),
-            keybind_line("Type", "append filter text", theme),
-            keybind_line("Backsp", "delete character", theme),
-            keybind_line("Ctrl-U", "clear filter", theme),
-            keybind_line("Enter", "apply and return", theme),
-            keybind_line("Esc", "return to normal", theme),
+            keybind_line("Tab", "switch Tasks/Repos", kc, theme),
+            keybind_line("Type", "append filter text", kc, theme),
+            keybind_line("Backsp", "delete character", kc, theme),
+            keybind_line("Ctrl-U", "clear filter", kc, theme),
+            keybind_line("Enter", "apply and return", kc, theme),
+            keybind_line("Esc", "return to normal", kc, theme),
         ],
         InputMode::CreateTask => {
             let mut lines = vec![
-                keybind_line("Type", "set new branch name", theme),
-                keybind_line("Backsp", "delete character", theme),
-                keybind_line("Enter", "create and open task", theme),
-                keybind_line("Esc", "return to normal", theme),
+                keybind_line("Type", "set new branch name", kc, theme),
+                keybind_line("Backsp", "delete character", kc, theme),
+                keybind_line("Enter", "create and open task", kc, theme),
+                keybind_line("Esc", "return to normal", kc, theme),
             ];
             if !state.create_branch.is_empty() {
                 lines.push(Line::from(""));
@@ -442,7 +447,7 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
                     Span::styled("Branch: ", theme.muted_style()),
                     Span::styled(
                         state.create_branch.clone(),
-                        Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+                        Style::default().fg(kc).add_modifier(Modifier::BOLD),
                     ),
                 ]));
             }
@@ -450,11 +455,11 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
         }
         InputMode::CloneRepo => {
             let mut lines = vec![
-                keybind_line("Type", "<repo-url> [repo-key]", theme),
-                keybind_line("Backsp", "delete character", theme),
-                keybind_line("Ctrl-U", "clear input", theme),
-                keybind_line("Enter", "clone repository", theme),
-                keybind_line("Esc", "return to normal", theme),
+                keybind_line("Type", "<repo-url> [repo-key]", kc, theme),
+                keybind_line("Backsp", "delete character", kc, theme),
+                keybind_line("Ctrl-U", "clear input", kc, theme),
+                keybind_line("Enter", "clone repository", kc, theme),
+                keybind_line("Esc", "return to normal", kc, theme),
             ];
             if !state.clone_input.is_empty() {
                 lines.push(Line::from(""));
@@ -462,9 +467,7 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
                     Span::styled("Input: ", theme.muted_style()),
                     Span::styled(
                         state.clone_input.clone(),
-                        Style::default()
-                            .fg(theme.secondary)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(kc).add_modifier(Modifier::BOLD),
                     ),
                 ]));
             }

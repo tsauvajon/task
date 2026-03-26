@@ -109,15 +109,21 @@ impl Theme {
         Style::default().fg(self.muted)
     }
 
+    /// The semantic color for a given input mode.
+    pub fn mode_color(&self, mode: super::state::InputMode) -> Color {
+        match mode {
+            super::state::InputMode::Normal => self.accent,
+            super::state::InputMode::Filter => self.secondary,
+            super::state::InputMode::CreateTask => self.info,
+            super::state::InputMode::CloneRepo => self.info,
+        }
+    }
+
     /// Mode indicator badge.
     pub fn mode_style(&self, mode: super::state::InputMode) -> Style {
-        let color = match mode {
-            super::state::InputMode::Normal => self.success,
-            super::state::InputMode::Filter => self.warning,
-            super::state::InputMode::CreateTask => self.info,
-            super::state::InputMode::CloneRepo => self.secondary,
-        };
-        Style::default().fg(color).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(self.mode_color(mode))
+            .add_modifier(Modifier::BOLD)
     }
 }
 
