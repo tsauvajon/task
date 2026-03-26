@@ -76,37 +76,10 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
 // ── Status bar ───────────────────────────────────────────────────────────────
 
 fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
-    let sep = Span::styled(" │ ", theme.muted_style());
     let mut spans: Vec<Span> = Vec::new();
 
-    // Show input text for interactive modes.
-    let has_input = match state.mode {
-        InputMode::Filter if !state.filter_text.is_empty() => {
-            spans.push(Span::styled(" filter: ", theme.muted_style()));
-            spans.push(Span::styled(&state.filter_text, theme.text_style()));
-            true
-        }
-        InputMode::CreateTask => {
-            spans.push(Span::styled(" branch: ", theme.muted_style()));
-            spans.push(Span::styled(&state.create_branch, theme.text_style()));
-            spans.push(Span::styled("▎", theme.key_style()));
-            true
-        }
-        InputMode::CloneRepo => {
-            spans.push(Span::styled(" url: ", theme.muted_style()));
-            spans.push(Span::styled(&state.clone_input, theme.text_style()));
-            spans.push(Span::styled("▎", theme.key_style()));
-            true
-        }
-        _ => false,
-    };
-
     // View context: view label, optional scope, counts.
-    if has_input {
-        spans.push(sep);
-    } else {
-        spans.push(Span::raw(" "));
-    }
+    spans.push(Span::raw(" "));
 
     match state.view {
         ViewMode::Tasks => {
@@ -117,7 +90,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &The
                 .count();
             let total_count = state.task_rows.len();
 
-            spans.push(Span::styled("Tasks", theme.title_style()));
+            spans.push(Span::styled("tasks", theme.title_style()));
             if let Some(scope) = &state.task_repo_scope {
                 spans.push(Span::styled(format!(" ({scope})"), theme.muted_style()));
             }
@@ -130,12 +103,31 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &The
             let shown = state.repo_filtered_indices.len();
             let total = state.repo_rows.len();
 
-            spans.push(Span::styled("Repos", theme.title_style()));
+            spans.push(Span::styled("repos", theme.title_style()));
             spans.push(Span::styled(
                 format!("  {shown} shown / {total} total"),
                 theme.title_counter_style(),
             ));
         }
+    }
+
+    // Input text for interactive modes — shown after view context.
+    match state.mode {
+        InputMode::Filter if !state.filter_text.is_empty() => {
+            spans.push(Span::styled("  filter: ", theme.text_style()));
+            spans.push(Span::styled(&state.filter_text, theme.muted_style()));
+        }
+        InputMode::CreateTask => {
+            spans.push(Span::styled("  branch: ", theme.text_style()));
+            spans.push(Span::styled(&state.create_branch, theme.muted_style()));
+            spans.push(Span::styled("▎", theme.key_style()));
+        }
+        InputMode::CloneRepo => {
+            spans.push(Span::styled("  url: ", theme.text_style()));
+            spans.push(Span::styled(&state.clone_input, theme.muted_style()));
+            spans.push(Span::styled("▎", theme.key_style()));
+        }
+        _ => {}
     }
 
     // Right-aligned message.
