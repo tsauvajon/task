@@ -22,6 +22,9 @@ fn completion_values(
 
     // Single word that isn't an exact command match — filter top-level commands by prefix.
     if args.is_empty() {
+        if command.starts_with('-') {
+            return Ok(filter_prefix(global_flags(), command));
+        }
         let top = top_level_commands();
         if !top.iter().any(|c| c == command) {
             return Ok(filter_prefix(top, command));
@@ -97,6 +100,10 @@ fn completion_values(
         _ => Vec::new(),
     };
 
+    if current.starts_with('-') {
+        values.extend(subcommand_help_flags());
+    }
+
     values.sort();
     values.dedup();
     Ok(filter_prefix(values, current))
@@ -123,6 +130,17 @@ fn top_level_commands() -> Vec<String> {
     .iter()
     .map(|&s| s.to_string())
     .collect()
+}
+
+fn global_flags() -> Vec<String> {
+    ["-h", "-V", "--help", "--version"]
+        .iter()
+        .map(|&s| s.to_string())
+        .collect()
+}
+
+fn subcommand_help_flags() -> Vec<String> {
+    ["-h", "--help"].iter().map(|&s| s.to_string()).collect()
 }
 
 fn repo_subcommand_completions(
@@ -321,6 +339,62 @@ mod tests {
         }
 
         #[test]
+        fn dash_suggests_all_global_flags() {
+            let values = completion_values(None, &["-".to_string()]).expect("dash global flags");
+            assert!(values.contains(&"-h".to_string()));
+            assert!(values.contains(&"-V".to_string()));
+            assert!(values.contains(&"--help".to_string()));
+            assert!(values.contains(&"--version".to_string()));
+        }
+
+        #[test]
+        fn double_dash_suggests_long_global_flags() {
+            let values =
+                completion_values(None, &["--".to_string()]).expect("double dash global flags");
+            assert!(values.contains(&"--help".to_string()));
+            assert!(values.contains(&"--version".to_string()));
+            assert!(!values.contains(&"-h".to_string()));
+            assert!(!values.contains(&"-V".to_string()));
+        }
+
+        #[test]
+        fn double_dash_h_completes_help() {
+            let values = completion_values(None, &["--h".to_string()]).expect("--h prefix");
+            assert_eq!(values, vec!["--help"]);
+        }
+
+        #[test]
+        fn dash_v_completes_version() {
+            let values = completion_values(None, &["-V".to_string()]).expect("-V prefix");
+            assert_eq!(values, vec!["-V"]);
+        }
+
+        #[test]
+        fn start_dash_includes_help_and_no_open() {
+            let values = completion_values(None, &["start".to_string(), "-".to_string()])
+                .expect("start dash flags");
+            assert!(values.contains(&"-h".to_string()));
+            assert!(values.contains(&"--help".to_string()));
+            assert!(values.contains(&"--no-open".to_string()));
+        }
+
+        #[test]
+        fn open_double_dash_suggests_help() {
+            let values = completion_values(None, &["open".to_string(), "--".to_string()])
+                .expect("open double dash");
+            assert_eq!(values, vec!["--help"]);
+        }
+
+        #[test]
+        fn doctor_dash_includes_help_and_fix() {
+            let values = completion_values(None, &["doctor".to_string(), "-".to_string()])
+                .expect("doctor dash flags");
+            assert!(values.contains(&"-h".to_string()));
+            assert!(values.contains(&"--help".to_string()));
+            assert!(values.contains(&"--fix".to_string()));
+        }
+
+        #[test]
         fn unknown_command_returns_empty() {
             let values = completion_values(None, &["nonexistent".to_string(), "".to_string()])
                 .expect("unknown command completions");
@@ -379,14 +453,18 @@ mod tests {
         fn start_suggests_no_open_on_dash_prefix() {
             let values = completion_values(None, &["start".to_string(), "-".to_string()])
                 .expect("start flag completions");
-            assert_eq!(values, vec!["--no-open"]);
+            assert!(values.contains(&"--no-open".to_string()));
+            assert!(values.contains(&"-h".to_string()));
+            assert!(values.contains(&"--help".to_string()));
         }
 
         #[test]
         fn start_suggests_no_open_on_double_dash_prefix() {
             let values = completion_values(None, &["start".to_string(), "--".to_string()])
                 .expect("start flag completions");
-            assert_eq!(values, vec!["--no-open"]);
+            assert!(values.contains(&"--no-open".to_string()));
+            assert!(values.contains(&"--help".to_string()));
+            assert!(!values.contains(&"-h".to_string()));
         }
 
         #[test]
@@ -400,7 +478,9 @@ mod tests {
                 ],
             )
             .expect("start mid-args flag completions");
-            assert_eq!(values, vec!["--no-open"]);
+            assert!(values.contains(&"--no-open".to_string()));
+            assert!(values.contains(&"-h".to_string()));
+            assert!(values.contains(&"--help".to_string()));
         }
 
         #[test]
@@ -446,7 +526,9 @@ mod tests {
         fn finish_suggests_force_flag_on_dash_prefix() {
             let values = completion_values(None, &["finish".to_string(), "-".to_string()])
                 .expect("finish flag completions");
-            assert_eq!(values, vec!["--force"]);
+            assert!(values.contains(&"--force".to_string()));
+            assert!(values.contains(&"-h".to_string()));
+            assert!(values.contains(&"--help".to_string()));
         }
 
         #[test]
@@ -468,7 +550,9 @@ mod tests {
                 ],
             )
             .expect("finish 3rd arg flag");
-            assert_eq!(values, vec!["--force"]);
+            assert!(values.contains(&"--force".to_string()));
+            assert!(values.contains(&"-h".to_string()));
+            assert!(values.contains(&"--help".to_string()));
         }
 
         #[test]
