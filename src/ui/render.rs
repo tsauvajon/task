@@ -90,7 +90,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &The
                 .count();
             let total_count = state.task_rows.len();
 
-            spans.push(Span::styled("tasks", theme.title_style()));
+            spans.push(Span::styled("tasks", theme.text_style()));
             if let Some(scope) = &state.task_repo_scope {
                 spans.push(Span::styled(format!(" ({scope})"), theme.muted_style()));
             }
@@ -103,7 +103,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &The
             let shown = state.repo_filtered_indices.len();
             let total = state.repo_rows.len();
 
-            spans.push(Span::styled("repos", theme.title_style()));
+            spans.push(Span::styled("repos", theme.text_style()));
             spans.push(Span::styled(
                 format!("  {shown} shown / {total} total"),
                 theme.title_counter_style(),
@@ -114,7 +114,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &The
     // Input text for interactive modes — shown after view context.
     match state.mode {
         InputMode::Filter if !state.filter_text.is_empty() => {
-            spans.push(Span::styled("  filter: ", theme.text_style()));
+            spans.push(Span::styled("  filter ", theme.text_style()));
             spans.push(Span::styled(&state.filter_text, theme.muted_style()));
         }
         InputMode::CreateTask => {
