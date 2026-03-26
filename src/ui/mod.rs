@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, MouseEventKind};
 
 use self::{
     effects::{
@@ -72,11 +72,17 @@ fn run_event_loop(
         terminal.draw(|frame| render(frame, state))?;
 
         let event = event::read()?;
-        if let Event::Key(key) = event {
-            let intent = from_key(state.mode, key);
-            if let Some(action) = apply_intent(context, state, intent)? {
-                return Ok(action);
-            }
+        let intent = match event {
+            Event::Key(key) => from_key(state.mode, key),
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollDown => UiIntent::MoveNext,
+                MouseEventKind::ScrollUp => UiIntent::MovePrev,
+                _ => UiIntent::Noop,
+            },
+            _ => UiIntent::Noop,
+        };
+        if let Some(action) = apply_intent(context, state, intent)? {
+            return Ok(action);
         }
     }
 }

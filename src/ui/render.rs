@@ -250,13 +250,13 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     }
     frame.render_stateful_widget(table, area, &mut table_state);
 
-    // Scrollbar.
-    if row_count > 0 {
+    // Scrollbar — only when content overflows the visible area.
+    let visible_rows = area.height.saturating_sub(3) as usize;
+    if row_count > visible_rows {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(theme.border_style())
             .thumb_style(theme.muted_style());
         let mut sb_state = ScrollbarState::new(row_count).position(state.task_selected);
-        // Render inside the block border (shrink by 1 on each side).
         let sb_area = Rect {
             x: area.x,
             y: area.y + 2, // below border + header
@@ -336,8 +336,9 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     }
     frame.render_stateful_widget(table, area, &mut table_state);
 
-    // Scrollbar.
-    if row_count > 0 {
+    // Scrollbar — only when content overflows the visible area.
+    let visible_rows = area.height.saturating_sub(3) as usize;
+    if row_count > visible_rows {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(theme.border_style())
             .thumb_style(theme.muted_style());
