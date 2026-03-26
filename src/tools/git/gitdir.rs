@@ -81,6 +81,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let status = Command::new("git")
             .args(["init", "--bare", dir.to_str().expect("valid utf-8 path")])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", env::temp_dir())
             .status()
             .expect("git must be available");
         assert!(status.success(), "git init --bare failed");

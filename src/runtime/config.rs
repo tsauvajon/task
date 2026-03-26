@@ -183,10 +183,18 @@ pub fn config_file_path() -> Result<PathBuf> {
 }
 
 pub fn config_dir_path() -> Result<PathBuf> {
-    if let Ok(base) = std::env::var("XDG_CONFIG_HOME") {
+    resolve_config_dir(
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+fn resolve_config_dir(xdg_config_home: Option<&str>, home: Option<&str>) -> Result<PathBuf> {
+    if let Some(base) = xdg_config_home {
         return Ok(PathBuf::from(base).join("task"));
     }
-    Ok(home_dir()?.join(".config/task"))
+    let home = home.ok_or_else(|| Error::failed("HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".config/task"))
 }
 
 fn home_dir() -> Result<PathBuf> {
@@ -297,51 +305,32 @@ mod tests {
     }
 
     mod config_dir_path {
-        use super::super::config_dir_path;
+        use super::super::resolve_config_dir;
 
         #[test]
         fn uses_xdg_config_home_when_set() {
-            // Temporarily set XDG_CONFIG_HOME for this test.
-            let prev = std::env::var_os("XDG_CONFIG_HOME");
-            // SAFETY: single-threaded test binary section; no other thread reads this var.
-            unsafe {
-                std::env::set_var("XDG_CONFIG_HOME", "/tmp/custom-xdg");
-            }
-            let path = config_dir_path().expect("config_dir_path");
-            // Restore
-            unsafe {
-                match prev {
-                    Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                    None => std::env::remove_var("XDG_CONFIG_HOME"),
-                }
-            }
+            let path = resolve_config_dir(Some("/tmp/custom-xdg"), Some("/home/user")).expect("ok");
             assert_eq!(path, std::path::PathBuf::from("/tmp/custom-xdg/task"));
         }
 
         #[test]
         fn falls_back_to_home_dot_config_task_without_xdg() {
-            let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
-            let prev_home = std::env::var_os("HOME");
-            // SAFETY: single-threaded test binary section.
-            unsafe {
-                std::env::remove_var("XDG_CONFIG_HOME");
-                std::env::set_var("HOME", "/home/testuser");
-            }
-            let path = config_dir_path().expect("config_dir_path");
-            unsafe {
-                match prev_xdg {
-                    Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                    None => std::env::remove_var("XDG_CONFIG_HOME"),
-                }
-                match prev_home {
-                    Some(v) => std::env::set_var("HOME", v),
-                    None => std::env::remove_var("HOME"),
-                }
-            }
+            let path = resolve_config_dir(None, Some("/home/testuser")).expect("ok");
             assert_eq!(
                 path,
                 std::path::PathBuf::from("/home/testuser/.config/task")
             );
+        }
+
+        #[test]
+        fn errors_when_both_xdg_and_home_are_missing() {
+            assert!(resolve_config_dir(None, None).is_err());
+        }
+
+        #[test]
+        fn xdg_takes_priority_over_home() {
+            let path = resolve_config_dir(Some("/xdg/config"), Some("/home/user")).expect("ok");
+            assert_eq!(path, std::path::PathBuf::from("/xdg/config/task"));
         }
     }
 

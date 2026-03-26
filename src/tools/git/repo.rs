@@ -433,6 +433,8 @@ mod tests {
 
             let output = std::process::Command::new("git")
                 .args(["init", "--bare", &path.to_string_lossy()])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", env::temp_dir())
                 .output()
                 .expect("git init --bare");
             assert!(output.status.success(), "git init --bare failed");

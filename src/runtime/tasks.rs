@@ -535,6 +535,8 @@ mod tests {
         let status = std::process::Command::new("git")
             .args(["init", "--bare"])
             .arg(path)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", std::env::temp_dir())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -1064,6 +1066,8 @@ mod tests {
                     branch,
                     wt_path.to_str().unwrap(),
                 ])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", std::env::temp_dir())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -1198,6 +1202,8 @@ mod tests {
                     "main",
                     wt_path.to_str().unwrap(),
                 ])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", std::env::temp_dir())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()

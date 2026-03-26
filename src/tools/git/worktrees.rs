@@ -284,10 +284,17 @@ mod tests {
         }
     }
 
+    /// Run a git command isolated from the user's global config.
+    ///
+    /// Sets `GIT_CONFIG_NOSYSTEM` and `HOME` to the working directory so that
+    /// the subprocess never reads `~/.gitconfig` or `/etc/gitconfig`.  This
+    /// prevents races with parallel tests that mutate `HOME`.
     fn run_git(args: &[&str], cwd: &Path) {
         let status = Command::new("git")
             .args(args)
             .current_dir(cwd)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", cwd)
             .status()
             .expect("git must be available");
         assert!(status.success(), "git {args:?} failed");
@@ -297,6 +304,8 @@ mod tests {
         let output = Command::new("git")
             .args(args)
             .current_dir(cwd)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", cwd)
             .output()
             .expect("git must be available");
         assert!(output.status.success(), "git {args:?} failed");

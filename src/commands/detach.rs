@@ -408,6 +408,8 @@ mod tests {
         let ok = std::process::Command::new("git")
             .args(["init", "--bare"])
             .arg(path)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", std::env::temp_dir())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()

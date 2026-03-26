@@ -103,12 +103,14 @@ mod tests {
 
     use super::{current_branch, parse_ls_remote_branch, ref_exists, rev_exists};
 
-    /// Create a temporary bare git repository.
+    /// Create a temporary bare git repository, isolated from user config.
     fn make_bare_repo(name: &str) -> std::path::PathBuf {
         let dir = env::temp_dir().join(format!("task-rs-refs-bare-{name}.git"));
         let _ = fs::remove_dir_all(&dir);
         let status = Command::new("git")
             .args(["init", "--bare", dir.to_str().expect("valid utf-8")])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", env::temp_dir())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -119,6 +121,9 @@ mod tests {
 
     /// Create a regular git repo with an initial commit on `main` and return
     /// its path (the working tree root, which is also the `.git` parent).
+    ///
+    /// Git subprocesses are isolated from the user's global config to avoid
+    /// races with parallel tests that mutate `HOME`.
     fn make_regular_repo_with_commit(name: &str) -> std::path::PathBuf {
         let dir = env::temp_dir().join(format!("task-rs-refs-regular-{name}"));
         let _ = fs::remove_dir_all(&dir);
@@ -128,6 +133,8 @@ mod tests {
             let status = Command::new("git")
                 .args(args)
                 .current_dir(&dir)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", &dir)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
