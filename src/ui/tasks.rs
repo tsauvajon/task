@@ -93,10 +93,11 @@ pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow
     }
 
     rows.sort_by(|left, right| {
-        let left_empty = left.open_tasks + left.parked_tasks == 0;
-        let right_empty = right.open_tasks + right.parked_tasks == 0;
-        left_empty
-            .cmp(&right_empty)
+        right
+            .open_tasks
+            .cmp(&left.open_tasks)
+            .then(right.parked_tasks.cmp(&left.parked_tasks))
+            .then(right.is_detached.cmp(&left.is_detached))
             .then(left.repo.cmp(&right.repo))
     });
     Ok(rows)
@@ -303,32 +304,77 @@ mod tests {
     mod repo_row_sort_order {
         use crate::{runtime::RepoKey, ui::state::RepoRow};
 
-        fn row(repo: &str, open_tasks: usize, parked_tasks: usize) -> RepoRow {
+        fn row(repo: &str, open: usize, parked: usize, detached: bool) -> RepoRow {
             RepoRow {
                 repo: RepoKey::new(repo),
-                open_tasks,
-                parked_tasks,
-                is_detached: false,
+                open_tasks: open,
+                parked_tasks: parked,
+                is_detached: detached,
             }
         }
 
         /// Mirrors the sort used in `load_repo_rows`.
         fn sort(mut rows: Vec<RepoRow>) -> Vec<RepoRow> {
             rows.sort_by(|left, right| {
-                let left_empty = left.open_tasks + left.parked_tasks == 0;
-                let right_empty = right.open_tasks + right.parked_tasks == 0;
-                left_empty
-                    .cmp(&right_empty)
+                right
+                    .open_tasks
+                    .cmp(&left.open_tasks)
+                    .then(right.parked_tasks.cmp(&left.parked_tasks))
+                    .then(right.is_detached.cmp(&left.is_detached))
                     .then(left.repo.cmp(&right.repo))
             });
             rows
         }
 
         #[test]
+        fn higher_open_count_sorts_first() {
+            let rows = vec![
+                row("github.com/me/one-open", 1, 0, false),
+                row("github.com/me/three-open", 3, 0, false),
+            ];
+            let sorted = sort(rows);
+            assert_eq!(sorted[0].repo.as_str(), "github.com/me/three-open");
+            assert_eq!(sorted[1].repo.as_str(), "github.com/me/one-open");
+        }
+
+        #[test]
+        fn equal_open_higher_parked_sorts_first() {
+            let rows = vec![
+                row("github.com/me/one-parked", 1, 1, false),
+                row("github.com/me/three-parked", 1, 3, false),
+            ];
+            let sorted = sort(rows);
+            assert_eq!(sorted[0].repo.as_str(), "github.com/me/three-parked");
+            assert_eq!(sorted[1].repo.as_str(), "github.com/me/one-parked");
+        }
+
+        #[test]
+        fn equal_tasks_detached_sorts_before_non_detached() {
+            let rows = vec![
+                row("github.com/me/not-detached", 0, 1, false),
+                row("github.com/me/detached", 0, 1, true),
+            ];
+            let sorted = sort(rows);
+            assert_eq!(sorted[0].repo.as_str(), "github.com/me/detached");
+            assert_eq!(sorted[1].repo.as_str(), "github.com/me/not-detached");
+        }
+
+        #[test]
+        fn alphabetical_tiebreaker() {
+            let rows = vec![
+                row("github.com/z/repo", 1, 0, false),
+                row("github.com/a/repo", 1, 0, false),
+            ];
+            let sorted = sort(rows);
+            assert_eq!(sorted[0].repo.as_str(), "github.com/a/repo");
+            assert_eq!(sorted[1].repo.as_str(), "github.com/z/repo");
+        }
+
+        #[test]
         fn repos_with_tasks_sort_before_empty_repos() {
             let rows = vec![
-                row("github.com/me/no-tasks", 0, 0),
-                row("github.com/me/has-open", 1, 0),
+                row("github.com/me/no-tasks", 0, 0, false),
+                row("github.com/me/has-open", 1, 0, false),
             ];
             let sorted = sort(rows);
             assert_eq!(sorted[0].repo.as_str(), "github.com/me/has-open");
@@ -336,55 +382,39 @@ mod tests {
         }
 
         #[test]
-        fn repos_with_only_parked_tasks_sort_before_empty_repos() {
+        fn detached_empty_repos_sort_before_plain_empty_repos() {
             let rows = vec![
-                row("github.com/me/no-tasks", 0, 0),
-                row("github.com/me/has-parked", 0, 2),
+                row("github.com/me/plain", 0, 0, false),
+                row("github.com/me/detached", 0, 0, true),
             ];
             let sorted = sort(rows);
-            assert_eq!(sorted[0].repo.as_str(), "github.com/me/has-parked");
-            assert_eq!(sorted[1].repo.as_str(), "github.com/me/no-tasks");
+            assert_eq!(sorted[0].repo.as_str(), "github.com/me/detached");
+            assert_eq!(sorted[1].repo.as_str(), "github.com/me/plain");
         }
 
         #[test]
-        fn alphabetical_within_has_tasks_group() {
+        fn full_composite_sort() {
             let rows = vec![
-                row("github.com/z/repo", 1, 0),
-                row("github.com/a/repo", 0, 1),
-                row("github.com/m/repo", 2, 1),
+                row("github.com/d/empty", 0, 0, false),
+                row("github.com/b/busy", 3, 1, false),
+                row("github.com/c/moderate", 1, 0, false),
+                row("github.com/a/empty-det", 0, 0, true),
+                row("github.com/e/parked-only", 0, 2, false),
+                row("github.com/f/also-busy", 3, 1, true),
             ];
             let sorted = sort(rows);
-            assert_eq!(sorted[0].repo.as_str(), "github.com/a/repo");
-            assert_eq!(sorted[1].repo.as_str(), "github.com/m/repo");
-            assert_eq!(sorted[2].repo.as_str(), "github.com/z/repo");
-        }
-
-        #[test]
-        fn alphabetical_within_empty_repos_group() {
-            let rows = vec![
-                row("github.com/z/empty", 0, 0),
-                row("github.com/a/empty", 0, 0),
-            ];
-            let sorted = sort(rows);
-            assert_eq!(sorted[0].repo.as_str(), "github.com/a/empty");
-            assert_eq!(sorted[1].repo.as_str(), "github.com/z/empty");
-        }
-
-        #[test]
-        fn mixed_groups_are_correctly_partitioned_and_ordered() {
-            let rows = vec![
-                row("github.com/d/empty", 0, 0),
-                row("github.com/b/has-tasks", 2, 1),
-                row("github.com/c/has-tasks", 1, 0),
-                row("github.com/a/empty", 0, 0),
-            ];
-            let sorted = sort(rows);
-            // has-tasks group (alphabetical)
-            assert_eq!(sorted[0].repo.as_str(), "github.com/b/has-tasks");
-            assert_eq!(sorted[1].repo.as_str(), "github.com/c/has-tasks");
-            // empty group (alphabetical)
-            assert_eq!(sorted[2].repo.as_str(), "github.com/a/empty");
-            assert_eq!(sorted[3].repo.as_str(), "github.com/d/empty");
+            // 3 open, 1 parked, detached → first
+            assert_eq!(sorted[0].repo.as_str(), "github.com/f/also-busy");
+            // 3 open, 1 parked, not detached
+            assert_eq!(sorted[1].repo.as_str(), "github.com/b/busy");
+            // 1 open
+            assert_eq!(sorted[2].repo.as_str(), "github.com/c/moderate");
+            // 0 open, 2 parked
+            assert_eq!(sorted[3].repo.as_str(), "github.com/e/parked-only");
+            // 0 tasks, detached
+            assert_eq!(sorted[4].repo.as_str(), "github.com/a/empty-det");
+            // 0 tasks, not detached
+            assert_eq!(sorted[5].repo.as_str(), "github.com/d/empty");
         }
 
         #[test]
