@@ -470,62 +470,55 @@ fn render_help(frame: &mut Frame, state: &mut UiState, theme: &Theme) {
         ))
     };
 
-    let key_style = Style::default().fg(theme.text);
+    let pad_h: u16 = 4;
+    let inner_w = popup.width.saturating_sub(pad_h * 2) as usize;
+
+    let cmd_style = Style::default().fg(theme.text);
     let hk = move |key: &str, desc: &str| -> Line<'static> {
+        let gap = inner_w.saturating_sub(desc.chars().count() + key.chars().count());
         Line::from(vec![
-            Span::styled(format!("{key:<11}"), key_style),
-            Span::styled(desc.to_string(), desc_style),
+            Span::styled(desc.to_string(), cmd_style),
+            Span::raw(" ".repeat(gap)),
+            Span::styled(key.to_string(), desc_style),
         ])
     };
 
     let mut lines = vec![
-        section("All Views", normal_c),
-        hk("↑/k", "move up"),
-        hk("↓/j", "move down"),
-        hk("PgUp", "page up"),
-        hk("PgDn", "page down"),
-        hk("Home", "jump to first"),
-        hk("End", "jump to last"),
-        hk("tab", "switch tasks/repos view"),
-        hk("ctrl+p", "commands"),
-        hk("q/ctrl-c", "quit"),
+        section("All views", normal_c),
+        hk("tab", "Switch tasks/repos view"),
+        hk("/", "Enter filter mode"),
+        hk("ctrl+p", "Commands"),
+        hk("q/ctrl-c", "Quit"),
         Line::from(""),
-        section("Tasks View", normal_c),
-        hk("enter", "open selected task"),
-        hk("esc", "back to repos (when scoped)"),
-        hk("/", "enter filter mode"),
-        hk("t", "create new task"),
-        hk("p", "park selected task"),
-        hk("f", "finish selected task"),
-        hk("r", "refresh tasks"),
+        section("Tasks view", normal_c),
+        hk("enter", "Open selected task"),
+        hk("esc", "Back to repos (when scoped)"),
+        hk("t", "Create new task"),
+        hk("p", "Park selected task"),
+        hk("f", "Finish selected task"),
+        hk("r", "Refresh tasks"),
         Line::from(""),
-        section("Repos View", normal_c),
-        hk("enter", "open selected repo tasks"),
-        hk("/", "enter filter mode"),
-        hk("t", "create new task"),
-        hk("c", "clone repo interactively"),
-        hk("d", "toggle detached worktree"),
-        hk("r", "refresh repos"),
+        section("Repos view", normal_c),
+        hk("enter", "Open selected repo tasks"),
+        hk("t", "Create new task"),
+        hk("c", "Clone repo interactively"),
+        hk("d", "Toggle detached worktree"),
+        hk("r", "Refresh repos"),
         Line::from(""),
         section("Filter", filter_c),
-        hk("tab", "switch tasks/repos view"),
-        hk("ctrl-u", "clear filter"),
-        hk("enter", "apply and return to normal"),
-        hk("esc", "return to normal"),
+        hk("tab", "Switch tasks/repos view"),
+        hk("ctrl-u", "Clear filter"),
+        hk("esc", "Return to view"),
         Line::from(""),
-        section("Create Task", create_c),
-        hk("ctrl-u", "clear branch name"),
-        hk("enter", "create and open new task"),
-        hk("esc", "return to normal"),
+        section("Create task", create_c),
+        hk("ctrl-u", "Clear branch name"),
+        hk("esc", "Return to view"),
         Line::from(""),
-        section("Clone Repo", clone_c),
-        hk("ctrl-u", "clear input"),
-        hk("enter", "clone repository"),
-        hk("esc", "return to normal"),
+        section("Clone repo", clone_c),
+        hk("ctrl-u", "Clear input"),
+        hk("esc", "Return to view"),
     ];
 
-    let pad_h: u16 = 4;
-    let inner_w = popup.width.saturating_sub(pad_h * 2) as usize;
     let left = "Commands";
     let right = "esc";
     let gap = inner_w.saturating_sub(left.len() + right.len());
