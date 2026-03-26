@@ -260,7 +260,8 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
             .end_symbol(None)
             .track_style(theme.border_style())
             .thumb_style(theme.muted_style());
-        let mut sb_state = ScrollbarState::new(row_count).position(state.task_selected);
+        let content_len = row_count.max(visible_rows * 10);
+        let mut sb_state = ScrollbarState::new(content_len).position(state.task_selected);
         let sb_area = Rect {
             x: area.x,
             y: area.y + 2, // below border + header
@@ -350,7 +351,8 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
             .end_symbol(None)
             .track_style(theme.border_style())
             .thumb_style(theme.muted_style());
-        let mut sb_state = ScrollbarState::new(row_count).position(state.repo_selected);
+        let content_len = row_count.max(visible_rows * 10);
+        let mut sb_state = ScrollbarState::new(content_len).position(state.repo_selected);
         let sb_area = Rect {
             x: area.x,
             y: area.y + 2,
