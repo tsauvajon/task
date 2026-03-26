@@ -4,7 +4,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        Block, Cell, Clear, Padding, Paragraph, Row, Scrollbar, ScrollbarOrientation,
         ScrollbarState, Table, TableState,
     },
 };
@@ -56,15 +56,18 @@ fn render_body(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
         InputMode::CloneRepo => "CLONE REPO",
     };
 
-    let details_panel = Paragraph::new(actions).block(
+    // Actions panel — side panel shade with padding.
+    let mut action_lines = vec![Line::from(Span::styled(
+        mode_label,
+        theme.mode_style(state.mode),
+    ))];
+    action_lines.push(Line::from(""));
+    action_lines.extend(actions);
+
+    let details_panel = Paragraph::new(action_lines).block(
         Block::default()
-            .title(Line::from(Span::styled(
-                mode_label,
-                theme.mode_style(state.mode),
-            )))
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(theme.border_style()),
+            .padding(Padding::new(2, 1, 1, 0))
+            .style(Style::default().bg(theme.panel_side)),
     );
     frame.render_widget(details_panel, details_chunks[0]);
     render_activity(frame, details_chunks[1], state, theme);
@@ -105,32 +108,34 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &The
         spans.push(Span::styled(msg, theme.muted_style()));
     }
 
-    let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.surface));
+    let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.panel_bar));
     frame.render_widget(bar, area);
 }
 
 // ── Activity panel ───────────────────────────────────────────────────────────
 
 fn render_activity(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
-    let lines: Vec<Line> = if state.activity_lines.is_empty() {
-        vec![Line::from(Span::styled(
+    let mut lines = vec![Line::from(Span::styled("Activity", theme.title_style()))];
+    lines.push(Line::from(""));
+
+    if state.activity_lines.is_empty() {
+        lines.push(Line::from(Span::styled(
             "No recent activity",
             theme.muted_style(),
-        ))]
+        )));
     } else {
-        state
-            .activity_lines
-            .iter()
-            .map(|line| Line::from(Span::styled(line.clone(), theme.muted_style())))
-            .collect()
-    };
+        lines.extend(
+            state
+                .activity_lines
+                .iter()
+                .map(|line| Line::from(Span::styled(line.clone(), theme.muted_style()))),
+        );
+    }
 
     let panel = Paragraph::new(lines).block(
         Block::default()
-            .title(Span::styled("Activity", theme.title_style()))
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(theme.border_style()),
+            .padding(Padding::new(2, 1, 1, 0))
+            .style(Style::default().bg(theme.panel_side)),
     );
     frame.render_widget(panel, area);
 }
@@ -147,6 +152,24 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     let task_title = task_view_title(state.task_repo_scope.as_deref(), &state.filter_text);
 
     let scoped = state.task_repo_scope.is_some();
+
+    // Split into title row + table content.
+    let panel_chunks = UiLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .split(area);
+
+    // Title bar.
+    let title_line = Line::from(vec![
+        Span::styled(format!(" {task_title}"), theme.title_style()),
+        Span::raw("  "),
+        Span::styled(
+            format!("{open_count} open / {total_count} total"),
+            theme.title_counter_style(),
+        ),
+    ]);
+    let title_para = Paragraph::new(vec![title_line]).style(Style::default().bg(theme.panel_main));
+    frame.render_widget(title_para, panel_chunks[0]);
 
     let header = if scoped {
         Row::new(vec!["STATUS", "BRANCH", "PATH"])
@@ -216,21 +239,14 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
         ]
     };
 
+    let table_area = panel_chunks[1];
+
     let table = Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
-                .title(Span::styled(task_title, theme.title_style()))
-                .title(
-                    Line::from(Span::styled(
-                        format!("{open_count} open / {total_count} total"),
-                        theme.title_counter_style(),
-                    ))
-                    .right_aligned(),
-                )
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(theme.border_active_style()),
+                .padding(Padding::new(1, 1, 0, 0))
+                .style(Style::default().bg(theme.panel_main)),
         )
         .row_highlight_style(theme.row_highlight_style())
         .highlight_symbol("▶ ");
@@ -239,28 +255,29 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     if !state.task_filtered_indices.is_empty() {
         table_state.select(Some(state.task_selected));
     }
-    frame.render_stateful_widget(table, area, &mut table_state);
+    frame.render_stateful_widget(table, table_area, &mut table_state);
 
     // Scrollbar — only when content overflows the visible area.
-    let visible_rows = area.height.saturating_sub(3) as usize;
+    // Account for padding (1 top) + header row (1) = 2 rows overhead.
+    let visible_rows = table_area.height.saturating_sub(2) as usize;
     if row_count > visible_rows {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .track_symbol(Some("│"))
             .thumb_symbol("┃")
             .begin_symbol(None)
             .end_symbol(None)
-            .track_style(theme.border_style())
-            .thumb_style(theme.muted_style());
+            .track_style(Style::default().fg(theme.scrollbar_track))
+            .thumb_style(Style::default().fg(theme.scrollbar_thumb));
         let content_len = row_count.max(visible_rows * 10);
         let scaled_pos = (state.task_selected * content_len.saturating_sub(1))
             .checked_div(row_count.saturating_sub(1))
             .unwrap_or(0);
         let mut sb_state = ScrollbarState::new(content_len).position(scaled_pos);
         let sb_area = Rect {
-            x: area.x,
-            y: area.y + 2, // below border + header
-            width: area.width,
-            height: area.height.saturating_sub(3),
+            x: table_area.x,
+            y: table_area.y + 1, // below header
+            width: table_area.width,
+            height: table_area.height.saturating_sub(1),
         };
         frame.render_stateful_widget(scrollbar, sb_area, &mut sb_state);
     }
@@ -272,6 +289,24 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     let filtered_count = state.repo_filtered_indices.len();
     let repos_count = state.repo_rows.len();
     let repo_title = view_title("Repos", &state.filter_text);
+
+    // Split into title row + table content.
+    let panel_chunks = UiLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .split(area);
+
+    // Title bar.
+    let title_line = Line::from(vec![
+        Span::styled(format!(" {repo_title}"), theme.title_style()),
+        Span::raw("  "),
+        Span::styled(
+            format!("{filtered_count} shown / {repos_count} total"),
+            theme.title_counter_style(),
+        ),
+    ]);
+    let title_para = Paragraph::new(vec![title_line]).style(Style::default().bg(theme.panel_main));
+    frame.render_widget(title_para, panel_chunks[0]);
 
     let header = Row::new(vec!["REPO", "OPEN", "PARKED", "DET"])
         .style(theme.header_style())
@@ -301,6 +336,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
         .collect();
 
     let row_count = rows.len();
+    let table_area = panel_chunks[1];
 
     let table = Table::new(
         rows,
@@ -314,17 +350,8 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     .header(header)
     .block(
         Block::default()
-            .title(Span::styled(repo_title, theme.title_style()))
-            .title(
-                Line::from(Span::styled(
-                    format!("{filtered_count} shown / {repos_count} total"),
-                    theme.title_counter_style(),
-                ))
-                .right_aligned(),
-            )
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(theme.border_active_style()),
+            .padding(Padding::new(1, 1, 0, 0))
+            .style(Style::default().bg(theme.panel_main)),
     )
     .row_highlight_style(theme.row_highlight_style())
     .highlight_symbol("▶ ");
@@ -333,28 +360,28 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     if !state.repo_filtered_indices.is_empty() {
         table_state.select(Some(state.repo_selected));
     }
-    frame.render_stateful_widget(table, area, &mut table_state);
+    frame.render_stateful_widget(table, table_area, &mut table_state);
 
     // Scrollbar — only when content overflows the visible area.
-    let visible_rows = area.height.saturating_sub(3) as usize;
+    let visible_rows = table_area.height.saturating_sub(2) as usize;
     if row_count > visible_rows {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .track_symbol(Some("│"))
             .thumb_symbol("┃")
             .begin_symbol(None)
             .end_symbol(None)
-            .track_style(theme.border_style())
-            .thumb_style(theme.muted_style());
+            .track_style(Style::default().fg(theme.scrollbar_track))
+            .thumb_style(Style::default().fg(theme.scrollbar_thumb));
         let content_len = row_count.max(visible_rows * 10);
         let scaled_pos = (state.repo_selected * content_len.saturating_sub(1))
             .checked_div(row_count.saturating_sub(1))
             .unwrap_or(0);
         let mut sb_state = ScrollbarState::new(content_len).position(scaled_pos);
         let sb_area = Rect {
-            x: area.x,
-            y: area.y + 2,
-            width: area.width,
-            height: area.height.saturating_sub(3),
+            x: table_area.x,
+            y: table_area.y + 1,
+            width: table_area.width,
+            height: table_area.height.saturating_sub(1),
         };
         frame.render_stateful_widget(scrollbar, sb_area, &mut sb_state);
     }
@@ -515,12 +542,10 @@ fn render_help(frame: &mut Frame, theme: &Theme) {
     let help = Paragraph::new(lines)
         .block(
             Block::default()
-                .title(Span::styled(" Help ", theme.title_style()))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(theme.border_active_style()),
+                .padding(Padding::new(2, 2, 1, 1))
+                .style(Style::default().bg(theme.overlay_bg)),
         )
-        .style(Style::default().fg(theme.text).bg(theme.overlay_bg));
+        .style(Style::default().fg(theme.text));
 
     frame.render_widget(Clear, popup);
     frame.render_widget(help, popup);
@@ -712,7 +737,6 @@ mod tests {
         fn returns_inner_rect_within_bounds() {
             let outer = Rect::new(0, 0, 100, 100);
             let inner = centered_rect(50, 50, outer);
-            // Inner rect should be contained within outer
             assert!(inner.x >= outer.x);
             assert!(inner.y >= outer.y);
             assert!(inner.x + inner.width <= outer.x + outer.width);
@@ -723,7 +747,6 @@ mod tests {
         fn full_percent_covers_most_of_area() {
             let outer = Rect::new(0, 0, 100, 100);
             let inner = centered_rect(100, 100, outer);
-            // With 100% should cover nearly all the area
             assert!(inner.width >= outer.width / 2);
             assert!(inner.height >= outer.height / 2);
         }
@@ -814,8 +837,6 @@ mod tests {
 
         #[test]
         fn filter_mode_same_actions_regardless_of_view() {
-            // Filter mode actions must not vary by view — they always show the
-            // same six lines regardless of whether Tasks or Repos is active.
             let theme = Theme::dark();
             let tasks_state = state_with_mode(InputMode::Filter, ViewMode::Tasks);
             let repos_state = state_with_mode(InputMode::Filter, ViewMode::Repos);

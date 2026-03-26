@@ -5,7 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 /// Every color used in rendering is sourced from this struct so that swapping
 /// themes is a single-point change.
 pub(super) struct Theme {
-    /// Primary accent (selection highlights, active borders, key hints).
+    /// Primary accent (selection highlights, key hints).
     pub accent: Color,
     /// Secondary accent (status indicators, counters).
     pub secondary: Color,
@@ -13,14 +13,8 @@ pub(super) struct Theme {
     pub text: Color,
     /// Dimmed / muted text (paths, descriptions, inactive items).
     pub muted: Color,
-    /// Panel / overlay background (slightly off-black).
-    pub surface: Color,
     /// Row highlight background.
     pub highlight_bg: Color,
-    /// Default border color.
-    pub border: Color,
-    /// Border color for the active / focused panel.
-    pub border_active: Color,
     /// "Open" / success state.
     pub success: Color,
     /// "Parked" / warning state.
@@ -30,27 +24,42 @@ pub(super) struct Theme {
     pub error: Color,
     /// Informational / cyan accent (detach indicator, create mode).
     pub info: Color,
+
+    // ── Panel backgrounds (graduated depth) ──────────────────────────────
+    /// Main content panel background (slightly lighter).
+    pub panel_main: Color,
+    /// Side panel background (actions, activity — slightly darker).
+    pub panel_side: Color,
+    /// Status bar background (darkest).
+    pub panel_bar: Color,
     /// Help overlay background.
     pub overlay_bg: Color,
+    /// Scrollbar track color.
+    pub scrollbar_track: Color,
+    /// Scrollbar thumb color.
+    pub scrollbar_thumb: Color,
 }
 
 impl Theme {
     /// Tokyo-Night-inspired dark palette — the default.
     pub fn dark() -> Self {
         Self {
-            accent: Color::Rgb(122, 162, 247),        // soft blue
-            secondary: Color::Rgb(187, 154, 247),     // purple
-            text: Color::Rgb(192, 202, 227),          // light grey-blue
-            muted: Color::Rgb(100, 112, 140),         // dim blue-grey
-            surface: Color::Rgb(22, 22, 35),          // near-black
-            highlight_bg: Color::Rgb(32, 35, 55),     // subtle navy
-            border: Color::Rgb(55, 60, 80),           // muted border
-            border_active: Color::Rgb(122, 162, 247), // matches accent
-            success: Color::Rgb(115, 218, 157),       // green
-            warning: Color::Rgb(224, 175, 104),       // amber
-            error: Color::Rgb(247, 118, 142),         // salmon-red
-            info: Color::Rgb(125, 207, 255),          // sky blue
-            overlay_bg: Color::Rgb(18, 18, 28),       // darker than surface
+            accent: Color::Rgb(122, 162, 247),    // soft blue
+            secondary: Color::Rgb(187, 154, 247), // purple
+            text: Color::Rgb(192, 202, 227),      // light grey-blue
+            muted: Color::Rgb(100, 112, 140),     // dim blue-grey
+            highlight_bg: Color::Rgb(32, 35, 55), // subtle navy
+            success: Color::Rgb(115, 218, 157),   // green
+            warning: Color::Rgb(224, 175, 104),   // amber
+            error: Color::Rgb(247, 118, 142),     // salmon-red
+            info: Color::Rgb(125, 207, 255),      // sky blue
+
+            panel_main: Color::Rgb(24, 25, 38), // main content area
+            panel_side: Color::Rgb(18, 19, 30), // side panels
+            panel_bar: Color::Rgb(14, 14, 22),  // status bar
+            overlay_bg: Color::Rgb(20, 20, 32), // help overlay
+            scrollbar_track: Color::Rgb(30, 32, 48), // subtle track
+            scrollbar_thumb: Color::Rgb(60, 65, 90), // visible thumb
         }
     }
 
@@ -90,17 +99,7 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
-    /// Block border (inactive).
-    pub fn border_style(&self) -> Style {
-        Style::default().fg(self.border)
-    }
-
-    /// Block border (active / focused).
-    pub fn border_active_style(&self) -> Style {
-        Style::default().fg(self.border_active)
-    }
-
-    /// Title on a block (non-focused).
+    /// Title on a panel (rendered as a line, not a block title).
     pub fn title_style(&self) -> Style {
         Style::default().fg(self.text).add_modifier(Modifier::BOLD)
     }
