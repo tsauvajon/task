@@ -385,7 +385,7 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
                 lines
             }
             ViewMode::Repos => vec![
-                keybind_line("enter", "open selected repo tasks", kc, theme),
+                keybind_line("enter", "view selected repo tasks", kc, theme),
                 keybind_line("tab", "switch to tasks view", kc, theme),
                 keybind_line("/", "enter filter mode", kc, theme),
                 keybind_line("t", "create new task", kc, theme),
@@ -499,7 +499,7 @@ fn render_help(frame: &mut Frame, state: &mut UiState, theme: &Theme) {
         hk("esc", "Back to repos (when scoped)"),
         Line::from(""),
         section("Repos view", normal_c),
-        hk("enter", "Open selected repo tasks"),
+        hk("enter", "View selected repo tasks"),
         hk("t", "Create new task"),
         hk("c", "Clone repo interactively"),
         hk("d", "Toggle detached worktree"),
