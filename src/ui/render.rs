@@ -1,92 +1,161 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout as UiLayout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
+    widgets::{
+        Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table, TableState,
+    },
 };
 
-use super::state::{InputMode, UiState, ViewMode};
+use super::{
+    state::{InputMode, UiState, ViewMode},
+    theme::Theme,
+};
 use crate::runtime::task_rows::TaskStatus;
 
 pub(super) fn render(frame: &mut Frame, state: &UiState) {
+    let theme = Theme::dark();
+
     let outer = UiLayout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(10)])
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(frame.area());
 
-    render_body(frame, outer[0], state);
+    render_body(frame, outer[0], state, &theme);
+    render_status_bar(frame, outer[1], state, &theme);
 
     if state.show_help {
-        render_help(frame);
+        render_help(frame, &theme);
     }
 }
 
-fn render_body(frame: &mut Frame, area: Rect, state: &UiState) {
+fn render_body(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     let chunks = UiLayout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(area);
 
     match state.view {
-        ViewMode::Tasks => render_tasks(frame, chunks[0], state),
-        ViewMode::Repos => render_repos(frame, chunks[0], state),
+        ViewMode::Tasks => render_tasks(frame, chunks[0], state, theme),
+        ViewMode::Repos => render_repos(frame, chunks[0], state, theme),
     }
 
-    let mode = match state.mode {
-        InputMode::Normal => "NORMAL",
-        InputMode::Filter => "FILTER",
-        InputMode::CreateTask => "CREATE TASK",
-        InputMode::CloneRepo => "CLONE REPO",
-    };
-    let mode_style = match state.mode {
-        InputMode::Normal => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        InputMode::Filter => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-        InputMode::CreateTask => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-        InputMode::CloneRepo => Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD),
-    };
-
-    let actions = actions_for_mode(state);
+    let actions = actions_for_mode(state, theme);
 
     let details_chunks = UiLayout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(chunks[1]);
 
+    let mode_label = match state.mode {
+        InputMode::Normal => "NORMAL",
+        InputMode::Filter => "FILTER",
+        InputMode::CreateTask => "CREATE TASK",
+        InputMode::CloneRepo => "CLONE REPO",
+    };
+
     let details_panel = Paragraph::new(actions).block(
         Block::default()
-            .title(Line::from(Span::styled(mode, mode_style)))
-            .borders(Borders::ALL),
+            .title(Line::from(Span::styled(
+                mode_label,
+                theme.mode_style(state.mode),
+            )))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(theme.border_style()),
     );
     frame.render_widget(details_panel, details_chunks[0]);
-    render_activity(frame, details_chunks[1], state);
+    render_activity(frame, details_chunks[1], state, theme);
 }
 
-fn render_activity(frame: &mut Frame, area: Rect, state: &UiState) {
-    let lines = if state.activity_lines.is_empty() {
-        vec![Line::from("No recent activity")]
+// ── Status bar ───────────────────────────────────────────────────────────────
+
+fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
+    let mode_span = Span::styled(
+        format!(
+            " {} ",
+            match state.mode {
+                InputMode::Normal => "NORMAL",
+                InputMode::Filter => "FILTER",
+                InputMode::CreateTask => "CREATE",
+                InputMode::CloneRepo => "CLONE",
+            }
+        ),
+        theme.mode_style(state.mode),
+    );
+
+    let separator = Span::styled(" │ ", theme.muted_style());
+
+    let mut spans = vec![mode_span];
+
+    // Show input text for interactive modes.
+    match state.mode {
+        InputMode::Filter if !state.filter_text.is_empty() => {
+            spans.push(separator.clone());
+            spans.push(Span::styled("filter: ", theme.muted_style()));
+            spans.push(Span::styled(&state.filter_text, theme.text_style()));
+        }
+        InputMode::CreateTask => {
+            spans.push(separator.clone());
+            spans.push(Span::styled("branch: ", theme.muted_style()));
+            spans.push(Span::styled(&state.create_branch, theme.text_style()));
+            spans.push(Span::styled("▎", theme.key_style()));
+        }
+        InputMode::CloneRepo => {
+            spans.push(separator.clone());
+            spans.push(Span::styled("url: ", theme.muted_style()));
+            spans.push(Span::styled(&state.clone_input, theme.text_style()));
+            spans.push(Span::styled("▎", theme.key_style()));
+        }
+        _ => {}
+    }
+
+    // Right-aligned message.
+    let msg = &state.message;
+    if !msg.is_empty() {
+        let left_len: usize = spans.iter().map(|s| s.content.len()).sum();
+        let pad = (area.width as usize).saturating_sub(left_len + msg.len() + 1);
+        if pad > 0 {
+            spans.push(Span::raw(" ".repeat(pad)));
+        }
+        spans.push(Span::styled(msg, theme.muted_style()));
+    }
+
+    let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme.surface));
+    frame.render_widget(bar, area);
+}
+
+// ── Activity panel ───────────────────────────────────────────────────────────
+
+fn render_activity(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
+    let lines: Vec<Line> = if state.activity_lines.is_empty() {
+        vec![Line::from(Span::styled(
+            "No recent activity",
+            theme.muted_style(),
+        ))]
     } else {
         state
             .activity_lines
             .iter()
-            .map(|line| Line::from(line.clone()))
+            .map(|line| Line::from(Span::styled(line.clone(), theme.muted_style())))
             .collect()
     };
 
-    let panel =
-        Paragraph::new(lines).block(Block::default().title("Activity").borders(Borders::ALL));
+    let panel = Paragraph::new(lines).block(
+        Block::default()
+            .title(Span::styled("Activity", theme.title_style()))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(theme.border_style()),
+    );
     frame.render_widget(panel, area);
 }
 
-fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
+// ── Tasks table ──────────────────────────────────────────────────────────────
+
+fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     let open_count = state
         .task_rows
         .iter()
@@ -102,70 +171,77 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
     } else {
         Row::new(vec!["STATUS", "REPO", "BRANCH", "PATH"])
     }
-    .style(
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    );
+    .style(theme.header_style())
+    .bottom_margin(0);
 
-    let rows = state.task_filtered_indices.iter().filter_map(|index| {
-        let row = state.task_rows.get(*index)?;
-        let status_style = match row.status {
-            TaskStatus::Open => Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-            TaskStatus::Parked => Style::default().fg(Color::Yellow),
-        };
-        if scoped {
-            Some(Row::new(vec![
-                Cell::from(status_label(row.status)).style(status_style),
-                Cell::from(row.branch.to_string()),
-                Cell::from(row.path.to_string_lossy().to_string()),
-            ]))
-        } else {
-            Some(Row::new(vec![
-                Cell::from(status_label(row.status)).style(status_style),
-                Cell::from(row.repo.to_string()),
-                Cell::from(row.branch.to_string()),
-                Cell::from(row.path.to_string_lossy().to_string()),
-            ]))
-        }
-    });
+    let rows: Vec<Row> = state
+        .task_filtered_indices
+        .iter()
+        .filter_map(|index| {
+            let row = state.task_rows.get(*index)?;
+            let status_style = match row.status {
+                TaskStatus::Open => Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+                TaskStatus::Parked => Style::default().fg(theme.warning),
+            };
+            let repo_style = theme.text_style();
+            let branch_style = Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD);
+            let path_style = theme.muted_style();
 
-    let widths: &[Constraint] = if scoped {
-        &[
+            if scoped {
+                Some(Row::new(vec![
+                    Cell::from(status_label(row.status)).style(status_style),
+                    Cell::from(row.branch.to_string()).style(branch_style),
+                    Cell::from(row.path.to_string_lossy().to_string()).style(path_style),
+                ]))
+            } else {
+                Some(Row::new(vec![
+                    Cell::from(status_label(row.status)).style(status_style),
+                    Cell::from(row.repo.to_string()).style(repo_style),
+                    Cell::from(row.branch.to_string()).style(branch_style),
+                    Cell::from(row.path.to_string_lossy().to_string()).style(path_style),
+                ]))
+            }
+        })
+        .collect();
+
+    let row_count = rows.len();
+
+    let widths: Vec<Constraint> = if scoped {
+        vec![
             Constraint::Length(8),
-            Constraint::Length(24),
-            Constraint::Min(10),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
         ]
     } else {
-        &[
+        vec![
             Constraint::Length(8),
-            Constraint::Length(28),
-            Constraint::Length(24),
-            Constraint::Min(10),
+            Constraint::Fill(2),
+            Constraint::Fill(2),
+            Constraint::Fill(3),
         ]
     };
 
-    let table = Table::new(rows, widths.to_vec())
+    let table = Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
-                .title(task_title)
+                .title(Span::styled(task_title, theme.title_style()))
                 .title(
                     Line::from(Span::styled(
-                        format!("{} open / {} total", open_count, total_count),
-                        Style::default().fg(Color::Gray),
+                        format!("{open_count} open / {total_count} total"),
+                        theme.title_counter_style(),
                     ))
                     .right_aligned(),
                 )
-                .borders(Borders::ALL),
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(theme.border_active_style()),
         )
-        .row_highlight_style(
-            Style::default()
-                .bg(Color::Rgb(25, 25, 40))
-                .add_modifier(Modifier::BOLD),
-        )
+        .row_highlight_style(theme.row_highlight_style())
         .highlight_symbol("▶ ");
 
     let mut table_state = TableState::default();
@@ -173,46 +249,64 @@ fn render_tasks(frame: &mut Frame, area: Rect, state: &UiState) {
         table_state.select(Some(state.task_selected));
     }
     frame.render_stateful_widget(table, area, &mut table_state);
+
+    // Scrollbar.
+    if row_count > 0 {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(theme.border_style())
+            .thumb_style(theme.muted_style());
+        let mut sb_state = ScrollbarState::new(row_count).position(state.task_selected);
+        // Render inside the block border (shrink by 1 on each side).
+        let sb_area = Rect {
+            x: area.x,
+            y: area.y + 2, // below border + header
+            width: area.width,
+            height: area.height.saturating_sub(3),
+        };
+        frame.render_stateful_widget(scrollbar, sb_area, &mut sb_state);
+    }
 }
 
-fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
+// ── Repos table ──────────────────────────────────────────────────────────────
+
+fn render_repos(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     let filtered_count = state.repo_filtered_indices.len();
     let repos_count = state.repo_rows.len();
     let repo_title = view_title("Repos", &state.filter_text);
 
-    let header = Row::new(vec!["REPO", "OPEN", "PARKED", "DET"]).style(
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    );
+    let header = Row::new(vec!["REPO", "OPEN", "PARKED", "DET"])
+        .style(theme.header_style())
+        .bottom_margin(0);
 
-    let rows = state.repo_filtered_indices.iter().filter_map(|index| {
-        let row = state.repo_rows.get(*index)?;
-        let det_cell = if row.is_detached {
-            Cell::from("✓").style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Cell::from("·").style(Style::default().fg(Color::DarkGray))
-        };
-        Some(Row::new(vec![
-            Cell::from(row.repo.to_string()),
-            Cell::from(row.open_tasks.to_string()).style(
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Cell::from(row.parked_tasks.to_string()).style(Style::default().fg(Color::Yellow)),
-            det_cell,
-        ]))
-    });
+    let rows: Vec<Row> = state
+        .repo_filtered_indices
+        .iter()
+        .filter_map(|index| {
+            let row = state.repo_rows.get(*index)?;
+            let det_cell = if row.is_detached {
+                Cell::from("✓").style(Style::default().fg(theme.info).add_modifier(Modifier::BOLD))
+            } else {
+                Cell::from("·").style(theme.muted_style())
+            };
+            Some(Row::new(vec![
+                Cell::from(row.repo.to_string()).style(theme.text_style()),
+                Cell::from(row.open_tasks.to_string()).style(
+                    Style::default()
+                        .fg(theme.success)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Cell::from(row.parked_tasks.to_string()).style(Style::default().fg(theme.warning)),
+                det_cell,
+            ]))
+        })
+        .collect();
+
+    let row_count = rows.len();
 
     let table = Table::new(
         rows,
         [
-            Constraint::Min(20),
+            Constraint::Fill(1),
             Constraint::Length(8),
             Constraint::Length(8),
             Constraint::Length(5),
@@ -221,21 +315,19 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
     .header(header)
     .block(
         Block::default()
-            .title(repo_title)
+            .title(Span::styled(repo_title, theme.title_style()))
             .title(
                 Line::from(Span::styled(
-                    format!("{} shown / {} total", filtered_count, repos_count),
-                    Style::default().fg(Color::Gray),
+                    format!("{filtered_count} shown / {repos_count} total"),
+                    theme.title_counter_style(),
                 ))
                 .right_aligned(),
             )
-            .borders(Borders::ALL),
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(theme.border_active_style()),
     )
-    .row_highlight_style(
-        Style::default()
-            .bg(Color::Rgb(25, 25, 40))
-            .add_modifier(Modifier::BOLD),
-    )
+    .row_highlight_style(theme.row_highlight_style())
     .highlight_symbol("▶ ");
 
     let mut table_state = TableState::default();
@@ -243,119 +335,190 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &UiState) {
         table_state.select(Some(state.repo_selected));
     }
     frame.render_stateful_widget(table, area, &mut table_state);
-}
 
-fn actions_for_mode(state: &UiState) -> Vec<Line<'static>> {
-    match state.mode {
-        InputMode::Normal => match state.view {
-            ViewMode::Tasks => vec![
-                Line::from("Tab     switch to repos view"),
-                Line::from("Enter  open selected task"),
-                Line::from("c      create new task"),
-                Line::from("p      park selected task"),
-                Line::from("f      finish selected task"),
-                Line::from("/      enter filter mode"),
-                Line::from("r      refresh tasks"),
-                Line::from("?      toggle help"),
-                Line::from("q      quit"),
-            ],
-            ViewMode::Repos => vec![
-                Line::from("Tab     switch to tasks view"),
-                Line::from("Enter  open selected repo tasks"),
-                Line::from("c      clone repo interactively"),
-                Line::from("d      toggle detached worktree"),
-                Line::from("/      enter filter mode"),
-                Line::from("r      refresh repos"),
-                Line::from("?      toggle help"),
-                Line::from("q      quit"),
-            ],
-        },
-        InputMode::Filter => vec![
-            Line::from("Tab    switch Tasks/Repos"),
-            Line::from("Type   append filter text"),
-            Line::from("Backsp delete character"),
-            Line::from("Ctrl-U clear filter"),
-            Line::from("Enter  apply and return"),
-            Line::from("Esc    return to normal"),
-        ],
-        InputMode::CreateTask => vec![
-            Line::from("Type   set new branch name"),
-            Line::from("Backsp delete character"),
-            Line::from("Enter  create and open task"),
-            Line::from("Esc    return to normal"),
-        ],
-        InputMode::CloneRepo => vec![
-            Line::from("Type   <repo-url> [repo-key]"),
-            Line::from("Backsp delete character"),
-            Line::from("Ctrl-U clear input"),
-            Line::from("Enter  clone repository"),
-            Line::from("Esc    return to normal"),
-            Line::from(format!("Input: {}", state.clone_input)),
-        ],
+    // Scrollbar.
+    if row_count > 0 {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(theme.border_style())
+            .thumb_style(theme.muted_style());
+        let mut sb_state = ScrollbarState::new(row_count).position(state.repo_selected);
+        let sb_area = Rect {
+            x: area.x,
+            y: area.y + 2,
+            width: area.width,
+            height: area.height.saturating_sub(3),
+        };
+        frame.render_stateful_widget(scrollbar, sb_area, &mut sb_state);
     }
 }
 
-fn render_help(frame: &mut Frame) {
-    let popup = centered_rect(85, 85, frame.area());
-    let lines = vec![
+// ── Actions / keybind panel ──────────────────────────────────────────────────
+
+fn keybind_line(key: &str, desc: &str, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{key:<7}"), theme.key_style()),
+        Span::styled(format!(" {desc}"), theme.key_desc_style()),
+    ])
+}
+
+fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
+    match state.mode {
+        InputMode::Normal => match state.view {
+            ViewMode::Tasks => vec![
+                keybind_line("Tab", "switch to repos view", theme),
+                keybind_line("Enter", "open selected task", theme),
+                keybind_line("c", "create new task", theme),
+                keybind_line("p", "park selected task", theme),
+                keybind_line("f", "finish selected task", theme),
+                keybind_line("/", "enter filter mode", theme),
+                keybind_line("r", "refresh tasks", theme),
+                keybind_line("?", "toggle help", theme),
+                keybind_line("q", "quit", theme),
+            ],
+            ViewMode::Repos => vec![
+                keybind_line("Tab", "switch to tasks view", theme),
+                keybind_line("Enter", "open selected repo tasks", theme),
+                keybind_line("c", "clone repo interactively", theme),
+                keybind_line("d", "toggle detached worktree", theme),
+                keybind_line("/", "enter filter mode", theme),
+                keybind_line("r", "refresh repos", theme),
+                keybind_line("?", "toggle help", theme),
+                keybind_line("q", "quit", theme),
+            ],
+        },
+        InputMode::Filter => vec![
+            keybind_line("Tab", "switch Tasks/Repos", theme),
+            keybind_line("Type", "append filter text", theme),
+            keybind_line("Backsp", "delete character", theme),
+            keybind_line("Ctrl-U", "clear filter", theme),
+            keybind_line("Enter", "apply and return", theme),
+            keybind_line("Esc", "return to normal", theme),
+        ],
+        InputMode::CreateTask => {
+            let mut lines = vec![
+                keybind_line("Type", "set new branch name", theme),
+                keybind_line("Backsp", "delete character", theme),
+                keybind_line("Enter", "create and open task", theme),
+                keybind_line("Esc", "return to normal", theme),
+            ];
+            if !state.create_branch.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Branch: ", theme.muted_style()),
+                    Span::styled(
+                        state.create_branch.clone(),
+                        Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+            lines
+        }
+        InputMode::CloneRepo => {
+            let mut lines = vec![
+                keybind_line("Type", "<repo-url> [repo-key]", theme),
+                keybind_line("Backsp", "delete character", theme),
+                keybind_line("Ctrl-U", "clear input", theme),
+                keybind_line("Enter", "clone repository", theme),
+                keybind_line("Esc", "return to normal", theme),
+            ];
+            if !state.clone_input.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Input: ", theme.muted_style()),
+                    Span::styled(
+                        state.clone_input.clone(),
+                        Style::default()
+                            .fg(theme.secondary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+            lines
+        }
+    }
+}
+
+// ── Help overlay ─────────────────────────────────────────────────────────────
+
+fn render_help(frame: &mut Frame, theme: &Theme) {
+    let popup = centered_rect(80, 80, frame.area());
+
+    let section = |title: &str| -> Line<'static> {
         Line::from(Span::styled(
-            "Keybindings",
+            title.to_string(),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
-        )),
+        ))
+    };
+
+    let hk = |key: &str, desc: &str| -> Line<'static> {
+        Line::from(vec![
+            Span::styled(format!("  {key:<11}"), theme.key_style()),
+            Span::styled(desc.to_string(), theme.key_desc_style()),
+        ])
+    };
+
+    let lines = vec![
+        section("Normal mode (all views)"),
+        hk("↑/k", "move up"),
+        hk("↓/j", "move down"),
+        hk("Tab", "switch Tasks/Repos view"),
+        hk("?", "toggle help"),
+        hk("q/Ctrl-C", "quit"),
         Line::from(""),
-        Line::from("Normal mode (all views):"),
-        Line::from("↑/k       move up"),
-        Line::from("↓/j       move down"),
-        Line::from("Tab       switch Tasks/Repos view"),
-        Line::from("?         toggle help"),
-        Line::from("q/Ctrl-C  quit"),
+        section("Tasks view"),
+        hk("Enter", "open selected task"),
+        hk("p", "park selected task"),
+        hk("f", "finish selected task"),
+        hk("c", "create new task"),
+        hk("r", "refresh tasks"),
+        hk("/", "enter filter mode"),
         Line::from(""),
-        Line::from("Tasks view:"),
-        Line::from("Enter     open selected task"),
-        Line::from("p         park selected task"),
-        Line::from("f         finish selected task"),
-        Line::from("c         create new task"),
-        Line::from("r         refresh tasks"),
-        Line::from("/         enter filter mode"),
+        section("Repos view"),
+        hk("Enter", "open selected repo tasks"),
+        hk("c", "clone repo interactively"),
+        hk("d", "toggle detached worktree"),
+        hk("/", "enter filter mode"),
+        hk("r", "refresh repos"),
         Line::from(""),
-        Line::from("Repos view:"),
-        Line::from("Enter     open selected repo tasks"),
-        Line::from("c         clone repo interactively"),
-        Line::from("d         toggle detached worktree (add/remove)"),
-        Line::from("/         enter filter mode"),
-        Line::from("r         refresh repos"),
+        section("Filter mode"),
+        hk("Tab", "switch Tasks/Repos view"),
+        hk("Type", "append filter text"),
+        hk("Backspace", "delete character"),
+        hk("Ctrl-U", "clear filter"),
+        hk("Enter", "apply and return to normal"),
+        hk("Esc", "return to normal"),
         Line::from(""),
-        Line::from("Filter mode:"),
-        Line::from("Tab       switch Tasks/Repos view"),
-        Line::from("Type      append filter text"),
-        Line::from("Backspace delete character"),
-        Line::from("Ctrl-U    clear filter"),
-        Line::from("Enter     apply and return to normal"),
-        Line::from("Esc       return to normal"),
+        section("Create task mode"),
+        hk("Type", "set new branch name"),
+        hk("Backspace", "delete character"),
+        hk("Enter", "create and open new task"),
+        hk("Esc", "return to normal"),
         Line::from(""),
-        Line::from("Create task mode:"),
-        Line::from("Type      set new branch name"),
-        Line::from("Backspace delete character"),
-        Line::from("Enter     create and open new task"),
-        Line::from("Esc       return to normal"),
-        Line::from(""),
-        Line::from("Clone repo mode:"),
-        Line::from("Type      <repo-url> [repo-key]"),
-        Line::from("Backspace delete character"),
-        Line::from("Ctrl-U    clear input"),
-        Line::from("Enter     clone repository"),
-        Line::from("Esc       return to normal"),
+        section("Clone repo mode"),
+        hk("Type", "<repo-url> [repo-key]"),
+        hk("Backspace", "delete character"),
+        hk("Ctrl-U", "clear input"),
+        hk("Enter", "clone repository"),
+        hk("Esc", "return to normal"),
     ];
 
     let help = Paragraph::new(lines)
-        .block(Block::default().title("Help").borders(Borders::ALL))
-        .style(Style::default().fg(Color::White).bg(Color::Black));
+        .block(
+            Block::default()
+                .title(Span::styled(" Help ", theme.title_style()))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(theme.border_active_style()),
+        )
+        .style(Style::default().fg(theme.text).bg(theme.overlay_bg));
 
     frame.render_widget(Clear, popup);
     frame.render_widget(help, popup);
 }
+
+// ── Utilities ────────────────────────────────────────────────────────────────
 
 fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
     let vertical = UiLayout::default()
@@ -413,10 +576,13 @@ fn task_view_title(repo_scope: Option<&str>, filter: &str) -> String {
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::{actions_for_mode, centered_rect, status_label, task_view_title, view_title};
+    use super::{centered_rect, status_label, task_view_title, view_title};
     use crate::{
         runtime::task_rows::TaskStatus,
-        ui::state::{InputMode, UiState, ViewMode},
+        ui::{
+            state::{InputMode, UiState, ViewMode},
+            theme::Theme,
+        },
     };
 
     mod view_title_tests {
@@ -564,7 +730,7 @@ mod tests {
     }
 
     mod actions_for_mode_tests {
-        use super::*;
+        use super::{super::actions_for_mode, *};
 
         fn state_with_mode(mode: InputMode, view: ViewMode) -> UiState {
             let mut state = UiState::new(Vec::new(), Vec::new(), None);
@@ -575,8 +741,9 @@ mod tests {
 
         #[test]
         fn normal_tasks_lists_task_actions() {
+            let theme = Theme::dark();
             let state = state_with_mode(InputMode::Normal, ViewMode::Tasks);
-            let lines = actions_for_mode(&state);
+            let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(text.contains("open selected task"));
             assert!(text.contains("park"));
@@ -586,8 +753,9 @@ mod tests {
 
         #[test]
         fn normal_repos_lists_repo_actions() {
+            let theme = Theme::dark();
             let state = state_with_mode(InputMode::Normal, ViewMode::Repos);
-            let lines = actions_for_mode(&state);
+            let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(text.contains("clone repo"));
             assert!(text.contains("switch to tasks view"));
@@ -595,8 +763,9 @@ mod tests {
 
         #[test]
         fn filter_mode_lists_filter_actions() {
+            let theme = Theme::dark();
             let state = state_with_mode(InputMode::Filter, ViewMode::Tasks);
-            let lines = actions_for_mode(&state);
+            let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(text.contains("filter text"));
             assert!(text.contains("Esc"));
@@ -604,8 +773,9 @@ mod tests {
 
         #[test]
         fn create_task_mode_lists_create_actions() {
+            let theme = Theme::dark();
             let state = state_with_mode(InputMode::CreateTask, ViewMode::Tasks);
-            let lines = actions_for_mode(&state);
+            let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(text.contains("branch name"));
             assert!(text.contains("create and open"));
@@ -613,8 +783,9 @@ mod tests {
 
         #[test]
         fn clone_repo_mode_lists_clone_actions() {
+            let theme = Theme::dark();
             let state = state_with_mode(InputMode::CloneRepo, ViewMode::Repos);
-            let lines = actions_for_mode(&state);
+            let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(text.contains("repo-url"));
             assert!(text.contains("clone repository"));
@@ -622,9 +793,10 @@ mod tests {
 
         #[test]
         fn clone_repo_mode_interpolates_input_text() {
+            let theme = Theme::dark();
             let mut state = state_with_mode(InputMode::CloneRepo, ViewMode::Repos);
             state.clone_input = "git@github.com:me/app.git".to_string();
-            let lines = actions_for_mode(&state);
+            let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(
                 text.contains("git@github.com:me/app.git"),
@@ -636,13 +808,14 @@ mod tests {
         fn filter_mode_same_actions_regardless_of_view() {
             // Filter mode actions must not vary by view — they always show the
             // same six lines regardless of whether Tasks or Repos is active.
+            let theme = Theme::dark();
             let tasks_state = state_with_mode(InputMode::Filter, ViewMode::Tasks);
             let repos_state = state_with_mode(InputMode::Filter, ViewMode::Repos);
-            let tasks_lines: Vec<String> = actions_for_mode(&tasks_state)
+            let tasks_lines: Vec<String> = actions_for_mode(&tasks_state, &theme)
                 .iter()
                 .map(|l| l.to_string())
                 .collect();
-            let repos_lines: Vec<String> = actions_for_mode(&repos_state)
+            let repos_lines: Vec<String> = actions_for_mode(&repos_state, &theme)
                 .iter()
                 .map(|l| l.to_string())
                 .collect();
@@ -654,8 +827,9 @@ mod tests {
 
         #[test]
         fn normal_tasks_does_not_include_repo_specific_actions() {
+            let theme = Theme::dark();
             let state = state_with_mode(InputMode::Normal, ViewMode::Tasks);
-            let lines = actions_for_mode(&state);
+            let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(
                 !text.contains("clone repo"),
@@ -665,8 +839,9 @@ mod tests {
 
         #[test]
         fn normal_repos_does_not_include_task_specific_actions() {
+            let theme = Theme::dark();
             let state = state_with_mode(InputMode::Normal, ViewMode::Repos);
-            let lines = actions_for_mode(&state);
+            let lines = actions_for_mode(&state, &theme);
             let text: String = lines.iter().map(|l| l.to_string()).collect();
             assert!(
                 !text.contains("park"),

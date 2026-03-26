@@ -19,6 +19,7 @@ mod render;
 mod state;
 mod tasks;
 mod terminal;
+mod theme;
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     context.tasks().ensure_layout()?;
