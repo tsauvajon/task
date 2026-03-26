@@ -208,6 +208,12 @@ impl UiState {
         self.mode = InputMode::Normal;
     }
 
+    pub(super) fn clear_repo_scope(&mut self) {
+        self.task_repo_scope = None;
+        self.task_selected = 0;
+        self.apply_filters();
+    }
+
     pub(super) fn append_activity_lines(&mut self, lines: Vec<String>) {
         if lines.is_empty() {
             return;
@@ -611,6 +617,52 @@ mod tests {
             );
             assert_eq!(state.view, ViewMode::Tasks);
             assert_eq!(state.mode, InputMode::Normal);
+        }
+    }
+
+    mod clear_repo_scope {
+        use std::path::PathBuf;
+
+        use super::*;
+        use crate::runtime::{BranchName, RepoKey, task_rows::TaskStatus};
+
+        fn task_row(repo: &str, branch: &str) -> crate::runtime::task_rows::TaskRow {
+            crate::runtime::task_rows::TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(repo),
+                branch: BranchName::new(branch),
+                path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
+            }
+        }
+
+        #[test]
+        fn clears_scope_and_resets_selection() {
+            let mut state = UiState::new(
+                vec![
+                    task_row("github.com/org/a", "feat-1"),
+                    task_row("github.com/org/b", "feat-2"),
+                ],
+                vec![],
+                Some("github.com/org/a".to_string()),
+            );
+            state.task_selected = 1;
+
+            state.clear_repo_scope();
+
+            assert!(state.task_repo_scope.is_none());
+            assert_eq!(state.task_selected, 0);
+            assert_eq!(state.task_filtered_indices.len(), 2);
+        }
+
+        #[test]
+        fn noop_when_already_unscoped() {
+            let mut state =
+                UiState::new(vec![task_row("github.com/org/a", "feat-1")], vec![], None);
+
+            state.clear_repo_scope();
+
+            assert!(state.task_repo_scope.is_none());
+            assert_eq!(state.task_filtered_indices.len(), 1);
         }
     }
 

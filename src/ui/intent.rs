@@ -16,6 +16,7 @@ pub(super) enum UiIntent {
     RefreshCurrentView,
     ParkSelected,
     ToggleDetach,
+    ClearScope,
     FilterCancel,
     FilterApply,
     FilterBackspace,
@@ -60,6 +61,7 @@ fn from_key_normal(key: KeyEvent) -> UiIntent {
         KeyCode::Char('r') => UiIntent::RefreshCurrentView,
         KeyCode::Char('p') => UiIntent::ParkSelected,
         KeyCode::Enter => UiIntent::OpenSelected,
+        KeyCode::Esc => UiIntent::ClearScope,
         _ => UiIntent::Noop,
     }
 }
@@ -184,6 +186,14 @@ mod tests {
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Char('p'))),
                 UiIntent::ParkSelected
+            );
+        }
+
+        #[test]
+        fn esc_maps_to_clear_scope() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Esc)),
+                UiIntent::ClearScope
             );
         }
 

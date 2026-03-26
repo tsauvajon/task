@@ -386,17 +386,23 @@ fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'static>> {
 
     match state.mode {
         InputMode::Normal => match state.view {
-            ViewMode::Tasks => vec![
-                keybind_line("tab", "switch to repos view", kc, theme),
-                keybind_line("enter", "open selected task", kc, theme),
-                keybind_line("c", "create new task", kc, theme),
-                keybind_line("p", "park selected task", kc, theme),
-                keybind_line("f", "finish selected task", kc, theme),
-                keybind_line("/", "enter filter mode", kc, theme),
-                keybind_line("r", "refresh tasks", kc, theme),
-                keybind_line("?", "toggle help", kc, theme),
-                keybind_line("q", "quit", kc, theme),
-            ],
+            ViewMode::Tasks => {
+                let mut lines = vec![
+                    keybind_line("tab", "switch to repos view", kc, theme),
+                    keybind_line("enter", "open selected task", kc, theme),
+                    keybind_line("c", "create new task", kc, theme),
+                    keybind_line("p", "park selected task", kc, theme),
+                    keybind_line("f", "finish selected task", kc, theme),
+                    keybind_line("/", "enter filter mode", kc, theme),
+                    keybind_line("r", "refresh tasks", kc, theme),
+                    keybind_line("?", "toggle help", kc, theme),
+                    keybind_line("q", "quit", kc, theme),
+                ];
+                if state.task_repo_scope.is_some() {
+                    lines.insert(0, keybind_line("esc", "show all tasks", kc, theme));
+                }
+                lines
+            }
             ViewMode::Repos => vec![
                 keybind_line("tab", "switch to tasks view", kc, theme),
                 keybind_line("enter", "open selected repo tasks", kc, theme),
@@ -489,6 +495,7 @@ fn render_help(frame: &mut Frame, theme: &Theme) {
         Line::from(""),
         section("tasks view"),
         hk("enter", "open selected task"),
+        hk("esc", "exit repo scope (when scoped)"),
         hk("p", "park selected task"),
         hk("f", "finish selected task"),
         hk("c", "create new task"),

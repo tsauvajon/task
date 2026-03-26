@@ -211,6 +211,16 @@ fn apply_intent(
             }
             Ok(None)
         }
+        UiIntent::ClearScope => {
+            if state.task_repo_scope.is_some() {
+                state.clear_repo_scope();
+                match refresh_task_rows(context, state) {
+                    Ok(()) => state.message = "Showing all tasks".to_string(),
+                    Err(err) => state.message = err.to_string(),
+                }
+            }
+            Ok(None)
+        }
         UiIntent::FilterCancel => {
             state.mode = InputMode::Normal;
             state.message = "Returned to normal mode".to_string();
