@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::{
     error::Result,
     runtime::{
-        config::{TaskConfig, is_interactive_terminal},
+        config::{InstallEntry, TaskConfig, is_interactive_terminal},
         paths::WorkspacePaths,
         tasks::TaskResolver,
     },
@@ -13,6 +13,7 @@ use crate::{
 pub struct RuntimeEnvironment {
     layout: WorkspacePaths,
     tasks: TaskResolver,
+    install_entries: Vec<InstallEntry>,
 }
 
 impl RuntimeEnvironment {
@@ -28,7 +29,11 @@ impl RuntimeEnvironment {
             config.codium_trusted_roots,
             is_interactive_terminal(),
         );
-        Self { layout, tasks }
+        Self {
+            layout,
+            tasks,
+            install_entries: config.install_entries,
+        }
     }
 
     pub fn try_new_if_configured() -> Result<Option<Self>> {
@@ -45,7 +50,11 @@ impl RuntimeEnvironment {
     ) -> Self {
         let layout = WorkspacePaths::new(repos_dir, wt_dir, detached_dir);
         let tasks = TaskResolver::new(layout.clone(), Vec::new(), is_interactive_terminal());
-        Self { layout, tasks }
+        Self {
+            layout,
+            tasks,
+            install_entries: Vec::new(),
+        }
     }
 
     pub fn layout(&self) -> &WorkspacePaths {
@@ -54,6 +63,10 @@ impl RuntimeEnvironment {
 
     pub fn tasks(&self) -> &TaskResolver {
         &self.tasks
+    }
+
+    pub fn install_entries(&self) -> &[InstallEntry] {
+        &self.install_entries
     }
 }
 
@@ -114,6 +127,7 @@ mod tests {
                     std::path::PathBuf::from("/tmp/wt/github.com/me"),
                     std::path::PathBuf::from("/tmp/wt/github.com/team"),
                 ],
+                install_entries: Vec::new(),
             };
             let env = RuntimeEnvironment::from_config(config);
             assert_eq!(env.tasks().codium_trusted_roots().len(), 2);
@@ -134,6 +148,7 @@ mod tests {
                 wt_dir: std::path::PathBuf::from("/tmp/wt"),
                 detached_dir: std::path::PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
             };
             let env = RuntimeEnvironment::from_config(config);
             assert_eq!(env.layout().repos_dir(), env.tasks().layout().repos_dir());

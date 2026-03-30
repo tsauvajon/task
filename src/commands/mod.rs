@@ -418,7 +418,6 @@ mod tests {
                 Some(Command::Detach {
                     command: DetachCommand::Update {
                         repo: Some("myrepo".to_string()),
-                        all: false,
                     },
                 })
             );
@@ -430,23 +429,30 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Detach {
-                    command: DetachCommand::Update {
-                        repo: None,
-                        all: false,
-                    },
+                    command: DetachCommand::Update { repo: None },
                 })
             );
         }
 
         #[test]
-        fn parses_detach_update_all_flag() {
-            let cli = Cli::parse_from(["task", "detach", "update", "--all"]);
+        fn parses_detach_install_without_repo() {
+            let cli = Cli::parse_from(["task", "detach", "install"]);
             assert_eq!(
                 cli.command,
                 Some(Command::Detach {
-                    command: DetachCommand::Update {
-                        repo: None,
-                        all: true,
+                    command: DetachCommand::Install { repo: None },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_detach_install_with_repo() {
+            let cli = Cli::parse_from(["task", "detach", "install", "myrepo"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::Install {
+                        repo: Some("myrepo".to_string()),
                     },
                 })
             );
