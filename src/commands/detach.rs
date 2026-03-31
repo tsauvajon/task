@@ -295,7 +295,7 @@ fn find_install_entry<'a>(
     None
 }
 
-/// Run `cargo install --path <install_path> --locked` for a single install entry.
+/// Run `cargo install --path <install_path> --locked [extra_flags...]` for a single install entry.
 fn run_cargo_install(
     detached_dir: &std::path::Path,
     entry: &crate::runtime::config::InstallEntry,
@@ -325,7 +325,12 @@ fn run_cargo_install(
 
     let path_str = install_path.to_string_lossy();
     process::log(&format!("Installing {} from {path_str}", entry.repo));
-    process::run_status("cargo", &["install", "--path", &path_str, "--locked"], None)
+
+    let mut args = vec!["install", "--path", &path_str, "--locked"];
+    let extra: Vec<&str> = entry.extra_flags.iter().map(String::as_str).collect();
+    args.extend(extra);
+
+    process::run_status("cargo", &args, None)
 }
 
 /// Returns true when `path` is the root of a git worktree (has a `.git` file
@@ -771,10 +776,12 @@ mod tests {
                 InstallEntry {
                     repo: "github.com/org/tool".to_string(),
                     path: None,
+                    extra_flags: vec![],
                 },
                 InstallEntry {
                     repo: "gitlab.com/team/app".to_string(),
                     path: Some("crates/cli".to_string()),
+                    extra_flags: vec![],
                 },
             ]
         }
@@ -805,10 +812,12 @@ mod tests {
                 InstallEntry {
                     repo: "github.com/a/cli".to_string(),
                     path: None,
+                    extra_flags: vec![],
                 },
                 InstallEntry {
                     repo: "gitlab.com/b/cli".to_string(),
                     path: None,
+                    extra_flags: vec![],
                 },
             ];
             assert!(find_install_entry(&entries, "cli").is_none());
@@ -837,6 +846,7 @@ mod tests {
             let entry = InstallEntry {
                 repo: "github.com/org/missing".to_string(),
                 path: None,
+                extra_flags: vec![],
             };
 
             let result = run_cargo_install(dir.path(), &entry);
@@ -857,6 +867,7 @@ mod tests {
             let entry = InstallEntry {
                 repo: "github.com/org/nocargo".to_string(),
                 path: None,
+                extra_flags: vec![],
             };
 
             let result = run_cargo_install(dir.path(), &entry);
@@ -877,6 +888,7 @@ mod tests {
             let entry = InstallEntry {
                 repo: "github.com/org/workspace".to_string(),
                 path: Some("crates/cli".to_string()),
+                extra_flags: vec![],
             };
 
             let result = run_cargo_install(dir.path(), &entry);
@@ -885,6 +897,29 @@ mod tests {
             assert!(
                 msg.contains("Cargo.toml"),
                 "expected Cargo.toml error: {msg}"
+            );
+        }
+
+        #[test]
+        fn extra_flags_do_not_suppress_missing_cargo_toml_error() {
+            // Even with extra_flags set, the Cargo.toml validation fires before
+            // the cargo invocation.
+            let dir = TempDir::new("install-extra-flags-no-cargo");
+            let wt = dir.path().join("github.com/org/tool");
+            fs::create_dir_all(&wt).unwrap();
+
+            let entry = InstallEntry {
+                repo: "github.com/org/tool".to_string(),
+                path: None,
+                extra_flags: vec!["--all-features".to_string()],
+            };
+
+            let result = run_cargo_install(dir.path(), &entry);
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("Cargo.toml"),
+                "expected Cargo.toml error even with extra_flags: {msg}"
             );
         }
     }

@@ -14,6 +14,9 @@ pub struct InstallEntry {
     pub repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Extra flags appended to `cargo install`, e.g. `["--all-features"]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_flags: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -326,10 +329,12 @@ mod tests {
                 InstallEntry {
                     repo: "github.com/org/tool".to_string(),
                     path: None,
+                    extra_flags: vec![],
                 },
                 InstallEntry {
                     repo: "gitlab.com/team/app".to_string(),
                     path: Some("crates/cli".to_string()),
+                    extra_flags: vec![],
                 },
             ];
             let config = to_runtime_config(TaskConfigFile {
@@ -518,6 +523,31 @@ path = "crates/cli"
         }
 
         #[test]
+        fn loads_extra_flags_for_install_entry() {
+            let dir = TempDir::new("load-extra-flags");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                r#"repos_dir = "/tmp/repos"
+wt_dir = "/tmp/wt"
+detached_dir = "/tmp/detached"
+
+[[install]]
+repo = "github.com/org/tool"
+extra_flags = ["--all-features"]
+
+[[install]]
+repo = "github.com/org/other"
+"#,
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load extra_flags config");
+            assert_eq!(config.install_entries[0].extra_flags, ["--all-features"]);
+            assert!(config.install_entries[1].extra_flags.is_empty());
+        }
+
+        #[test]
         fn loads_config_without_install_section() {
             let dir = TempDir::new("load-no-install");
             let config_path = dir.path().join("config.toml");
@@ -659,10 +689,12 @@ path = "crates/cli"
                     super::super::InstallEntry {
                         repo: "github.com/org/tool".to_string(),
                         path: None,
+                        extra_flags: vec![],
                     },
                     super::super::InstallEntry {
                         repo: "gitlab.com/team/app".to_string(),
                         path: Some("crates/cli".to_string()),
+                        extra_flags: vec![],
                     },
                 ],
             };
@@ -677,6 +709,70 @@ path = "crates/cli"
             assert_eq!(
                 loaded.install_entries[1].path.as_deref(),
                 Some("crates/cli")
+            );
+        }
+
+        #[test]
+        fn round_trips_extra_flags() {
+            let dir = TempDir::new("write-extra-flags");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: vec![
+                    super::super::InstallEntry {
+                        repo: "github.com/org/tool".to_string(),
+                        path: None,
+                        extra_flags: vec!["--all-features".to_string(), "--locked".to_string()],
+                    },
+                    super::super::InstallEntry {
+                        repo: "github.com/org/other".to_string(),
+                        path: None,
+                        extra_flags: vec![],
+                    },
+                ],
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let loaded = load_config(&config_path).expect("load written config");
+
+            assert_eq!(
+                loaded.install_entries[0].extra_flags,
+                ["--all-features", "--locked"]
+            );
+            assert!(loaded.install_entries[1].extra_flags.is_empty());
+
+            // Verify entries with no extra_flags don't emit extra_flags key in TOML.
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(
+                content.contains("extra_flags"),
+                "extra_flags should appear for entry with flags"
+            );
+        }
+
+        #[test]
+        fn omits_extra_flags_when_empty() {
+            let dir = TempDir::new("write-no-extra-flags");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: vec![super::super::InstallEntry {
+                    repo: "github.com/org/tool".to_string(),
+                    path: None,
+                    extra_flags: vec![],
+                }],
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(
+                !content.contains("extra_flags"),
+                "extra_flags should be omitted when empty"
             );
         }
 
