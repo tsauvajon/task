@@ -1,5 +1,5 @@
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     path::Path,
     process::{Command, Stdio},
     sync::{Mutex, OnceLock},
@@ -162,14 +162,14 @@ pub fn run_capture(
     let program_str = program.as_ref().to_string_lossy();
     let plan = CommandPlan::from_program(&program_str, args);
     let plan_args = plan.args_refs();
-    run_capture_raw(plan.program(), &plan_args, cwd)
+    run_capture_raw(plan.program(), &plan_args, cwd, None)
 }
 
 pub fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
     let program_str = program.as_ref().to_string_lossy();
     let plan = CommandPlan::from_program(&program_str, args);
     let plan_args = plan.args_refs();
-    run_status_raw(plan.program(), &plan_args, cwd)
+    run_status_raw(plan.program(), &plan_args, cwd, None)
 }
 
 pub fn run_status_quiet(
@@ -180,7 +180,39 @@ pub fn run_status_quiet(
     let program_str = program.as_ref().to_string_lossy();
     let plan = CommandPlan::from_program(&program_str, args);
     let plan_args = plan.args_refs();
-    run_status_quiet_raw(plan.program(), &plan_args, cwd)
+    run_status_quiet_raw(plan.program(), &plan_args, cwd, None)
+}
+
+/// Like `run_capture`, but prepends `extra_bin_dir` to the child process's
+/// `PATH`. Used by `NixRunner` so that Nix store binaries can find sibling
+/// binaries in the same store path.
+pub fn run_capture_with_bin_dir(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    cwd: Option<&Path>,
+    extra_bin_dir: Option<&Path>,
+) -> Result<String> {
+    run_capture_raw(program, args, cwd, extra_bin_dir)
+}
+
+/// Like `run_status`, but prepends `extra_bin_dir` to the child's `PATH`.
+pub fn run_status_with_bin_dir(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    cwd: Option<&Path>,
+    extra_bin_dir: Option<&Path>,
+) -> Result<()> {
+    run_status_raw(program, args, cwd, extra_bin_dir)
+}
+
+/// Like `run_status_quiet`, but prepends `extra_bin_dir` to the child's `PATH`.
+pub fn run_status_quiet_with_bin_dir(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    cwd: Option<&Path>,
+    extra_bin_dir: Option<&Path>,
+) -> Result<()> {
+    run_status_quiet_raw(program, args, cwd, extra_bin_dir)
 }
 
 pub fn spawn_detached(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
@@ -190,13 +222,32 @@ pub fn spawn_detached(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Pa
     spawn_detached_raw(plan.program(), &plan_args, cwd)
 }
 
+/// Build a `PATH` value with `extra_dir` prepended to the current `PATH`.
+fn prepend_to_path(extra_dir: &Path) -> Option<OsString> {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![extra_dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&current));
+    std::env::join_paths(&paths).ok()
+}
+
+/// If `extra_bin_dir` is `Some`, prepend it to the command's `PATH`.
+fn apply_extra_bin_dir(cmd: &mut Command, extra_bin_dir: Option<&Path>) {
+    if let Some(dir) = extra_bin_dir
+        && let Some(new_path) = prepend_to_path(dir)
+    {
+        cmd.env("PATH", new_path);
+    }
+}
+
 fn run_capture_raw(
     program: impl AsRef<OsStr>,
     args: &[&str],
     cwd: Option<&Path>,
+    extra_bin_dir: Option<&Path>,
 ) -> Result<String> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    apply_extra_bin_dir(&mut cmd, extra_bin_dir);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
@@ -213,9 +264,15 @@ fn run_capture_raw(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn run_status_raw(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+fn run_status_raw(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    cwd: Option<&Path>,
+    extra_bin_dir: Option<&Path>,
+) -> Result<()> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    apply_extra_bin_dir(&mut cmd, extra_bin_dir);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
@@ -232,9 +289,11 @@ fn run_status_quiet_raw(
     program: impl AsRef<OsStr>,
     args: &[&str],
     cwd: Option<&Path>,
+    extra_bin_dir: Option<&Path>,
 ) -> Result<()> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    apply_extra_bin_dir(&mut cmd, extra_bin_dir);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
@@ -308,7 +367,7 @@ fn capture_log_line(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandPlan, ManagedTool, command_exists};
+    use super::{CommandPlan, ManagedTool, command_exists, prepend_to_path};
 
     mod managed_tool {
         use super::*;
@@ -495,6 +554,44 @@ mod tests {
         fn slash_in_name_triggers_filesystem_check() {
             // A relative path that contains a slash but doesn't exist
             assert!(!command_exists("relative/path/to/nothing"));
+        }
+    }
+
+    mod prepend_to_path {
+        use std::path::Path;
+
+        use super::*;
+
+        #[test]
+        fn prepends_directory_to_path() {
+            let result = prepend_to_path(Path::new("/nix/store/abc/bin")).unwrap();
+            let result_str = result.to_string_lossy();
+            assert!(
+                result_str.starts_with("/nix/store/abc/bin:"),
+                "PATH should start with the prepended dir, got: {result_str}"
+            );
+        }
+
+        #[test]
+        fn preserves_existing_path_entries() {
+            let current = std::env::var("PATH").unwrap_or_default();
+            let result = prepend_to_path(Path::new("/extra/bin")).unwrap();
+            let result_str = result.to_string_lossy();
+            assert!(
+                result_str.contains(&current),
+                "existing PATH entries should be preserved"
+            );
+        }
+
+        #[test]
+        fn extra_dir_appears_first() {
+            let result = prepend_to_path(Path::new("/my/extra/dir")).unwrap();
+            let paths: Vec<_> = std::env::split_paths(&result).collect();
+            assert_eq!(
+                paths[0],
+                Path::new("/my/extra/dir"),
+                "extra dir should be the first entry"
+            );
         }
     }
 }

@@ -47,16 +47,43 @@ impl NixRunner {
         }
     }
 
+    /// The `bin/` directory containing the resolved binary, used to prepend
+    /// to `PATH` so child processes can find sibling binaries in the same
+    /// Nix store path (e.g. `corepack enable` needs to find itself via `which`).
+    fn bin_dir(&self) -> Result<&Path> {
+        self.binary()?
+            .parent()
+            .ok_or_else(|| Error::failed("resolved nix binary has no parent directory"))
+    }
+
     pub fn capture(&self, args: &[&str], cwd: Option<&Path>) -> Result<String> {
-        crate::runtime::process::run_capture(self.binary()?.as_os_str(), args, cwd)
+        let bin_dir = self.bin_dir()?;
+        crate::runtime::process::run_capture_with_bin_dir(
+            self.binary()?.as_os_str(),
+            args,
+            cwd,
+            Some(bin_dir),
+        )
     }
 
     pub fn status(&self, args: &[&str], cwd: Option<&Path>) -> Result<()> {
-        crate::runtime::process::run_status(self.binary()?.as_os_str(), args, cwd)
+        let bin_dir = self.bin_dir()?;
+        crate::runtime::process::run_status_with_bin_dir(
+            self.binary()?.as_os_str(),
+            args,
+            cwd,
+            Some(bin_dir),
+        )
     }
 
     pub fn status_quiet(&self, args: &[&str], cwd: Option<&Path>) -> Result<()> {
-        crate::runtime::process::run_status_quiet(self.binary()?.as_os_str(), args, cwd)
+        let bin_dir = self.bin_dir()?;
+        crate::runtime::process::run_status_quiet_with_bin_dir(
+            self.binary()?.as_os_str(),
+            args,
+            cwd,
+            Some(bin_dir),
+        )
     }
 
     pub fn available(&self) -> bool {
