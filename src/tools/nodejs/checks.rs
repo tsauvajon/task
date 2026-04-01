@@ -1,17 +1,11 @@
 use std::path::Path;
 
-use super::runtime::{
-    Runner, corepack_available, corepack_status, enable_corepack, pnpm_status, resolve_runner,
-};
+use super::runtime::{Runner, corepack_status, pnpm_status, resolve_runner};
 use crate::error::Result;
 
 type RunFn = fn(&[&str], Option<&Path>) -> Result<()>;
 
 pub fn run_project_checks(path: &Path) -> Result<bool> {
-    if corepack_available() {
-        let _ = enable_corepack();
-    }
-
     let Some(runner) = resolve_runner() else {
         return Ok(false);
     };
