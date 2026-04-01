@@ -3,10 +3,7 @@ use dialoguer::{Confirm, theme::ColorfulTheme};
 use crate::{
     error::{Error, Result},
     runtime::{config::is_interactive_terminal, environment::RuntimeEnvironment, process, state},
-    tools::{
-        asdf,
-        nodejs::runtime::{corepack_available, enable_corepack, node_available},
-    },
+    tools::asdf,
 };
 
 pub enum SetupApproval<'a> {
@@ -87,11 +84,6 @@ pub fn run_full_setup(env: &RuntimeEnvironment) -> Result<()> {
         }
     }
 
-    if should_enable_corepack(node_available(), corepack_available()) {
-        let _ = enable_corepack();
-        process::log("Enabled corepack");
-    }
-
     state::mark_onboarding_complete()?;
     process::log("Bootstrap complete");
     Ok(())
@@ -127,16 +119,9 @@ where
     }
 }
 
-fn should_enable_corepack(node_installed: bool, corepack_installed: bool) -> bool {
-    node_installed && corepack_installed
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        SetupApproval, ensure_interactive_terminal, resolve_setup_approval_with,
-        should_enable_corepack,
-    };
+    use super::{SetupApproval, ensure_interactive_terminal, resolve_setup_approval_with};
 
     mod ensure_interactive_terminal {
         use super::*;
@@ -184,25 +169,6 @@ mod tests {
             })
             .expect_err("expected prompt error");
             assert!(err.to_string().contains("prompt failed"));
-        }
-    }
-
-    mod should_enable_corepack {
-        use super::*;
-
-        #[test]
-        fn true_when_node_and_corepack_are_available() {
-            assert!(should_enable_corepack(true, true));
-        }
-
-        #[test]
-        fn false_when_node_is_missing() {
-            assert!(!should_enable_corepack(false, true));
-        }
-
-        #[test]
-        fn false_when_corepack_is_missing() {
-            assert!(!should_enable_corepack(true, false));
         }
     }
 }
