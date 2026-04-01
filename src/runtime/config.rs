@@ -9,12 +9,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallEntry {
+    pub repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Extra flags appended to `cargo install`, e.g. `["--all-features"]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_flags: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TaskConfig {
     pub repos_dir: PathBuf,
     pub wt_dir: PathBuf,
     pub detached_dir: PathBuf,
     pub codium_trusted_roots: Vec<PathBuf>,
+    pub install_entries: Vec<InstallEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,6 +35,8 @@ struct TaskConfigFile {
     detached_dir: String,
     #[serde(default)]
     vscodium: Option<VscodiumConfigFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    install: Vec<InstallEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -100,6 +113,7 @@ fn bootstrap_config(config_path: &Path) -> Result<TaskConfig> {
         wt_dir,
         detached_dir,
         vscodium: None,
+        install: Vec::new(),
     })?;
     write_config(config_path, &config)?;
     Ok(config)
@@ -130,6 +144,7 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<()> {
                     .collect(),
             })
         },
+        install: config.install_entries.clone(),
     };
     let text = toml::to_string_pretty(&file)?;
     fs::write(config_path, text).map_err(|err| {
@@ -159,6 +174,7 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig> {
         wt_dir,
         detached_dir,
         codium_trusted_roots,
+        install_entries: file.install,
     })
 }
 
@@ -183,10 +199,19 @@ pub fn config_file_path() -> Result<PathBuf> {
 }
 
 pub fn config_dir_path() -> Result<PathBuf> {
-    if let Ok(base) = std::env::var("XDG_CONFIG_HOME") {
+    resolve_config_dir(
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+fn resolve_config_dir(xdg_config_home: Option<&str>, home: Option<&str>) -> Result<PathBuf> {
+    // Per XDG spec, empty $XDG_CONFIG_HOME is treated as unset.
+    if let Some(base) = xdg_config_home.filter(|s| !s.is_empty()) {
         return Ok(PathBuf::from(base).join("task"));
     }
-    Ok(home_dir()?.join(".config/task"))
+    let home = home.ok_or_else(|| Error::failed("HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".config/task"))
 }
 
 fn home_dir() -> Result<PathBuf> {
@@ -203,7 +228,7 @@ pub fn is_interactive_terminal() -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
+    use super::{InstallEntry, TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
 
     mod expand_path {
         use super::*;
@@ -258,6 +283,7 @@ mod tests {
                 wt_dir: "~/dev/wt".to_string(),
                 detached_dir: "~/dev/detached".to_string(),
                 vscodium: None,
+                install: Vec::new(),
             })
             .expect("runtime config");
 
@@ -273,6 +299,7 @@ mod tests {
                 vscodium: Some(VscodiumConfigFile {
                     trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_string()],
                 }),
+                install: Vec::new(),
             })
             .expect("runtime config");
 
@@ -287,6 +314,7 @@ mod tests {
                 wt_dir: "~/wt".to_string(),
                 detached_dir: "~/detached".to_string(),
                 vscodium: None,
+                install: Vec::new(),
             })
             .expect("runtime config");
 
@@ -294,54 +322,75 @@ mod tests {
             assert!(config.wt_dir.ends_with("wt"));
             assert!(config.detached_dir.ends_with("detached"));
         }
+
+        #[test]
+        fn passes_through_install_entries() {
+            let entries = vec![
+                InstallEntry {
+                    repo: "github.com/org/tool".to_string(),
+                    path: None,
+                    extra_flags: vec![],
+                },
+                InstallEntry {
+                    repo: "gitlab.com/team/app".to_string(),
+                    path: Some("crates/cli".to_string()),
+                    extra_flags: vec![],
+                },
+            ];
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "/tmp/repos".to_string(),
+                wt_dir: "/tmp/wt".to_string(),
+                detached_dir: "/tmp/detached".to_string(),
+                vscodium: None,
+                install: entries.clone(),
+            })
+            .expect("runtime config");
+
+            assert_eq!(config.install_entries, entries);
+        }
+
+        #[test]
+        fn empty_install_entries_by_default() {
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "/tmp/repos".to_string(),
+                wt_dir: "/tmp/wt".to_string(),
+                detached_dir: "/tmp/detached".to_string(),
+                vscodium: None,
+                install: Vec::new(),
+            })
+            .expect("runtime config");
+
+            assert!(config.install_entries.is_empty());
+        }
     }
 
     mod config_dir_path {
-        use super::super::config_dir_path;
+        use super::super::resolve_config_dir;
 
         #[test]
         fn uses_xdg_config_home_when_set() {
-            // Temporarily set XDG_CONFIG_HOME for this test.
-            let prev = std::env::var_os("XDG_CONFIG_HOME");
-            // SAFETY: single-threaded test binary section; no other thread reads this var.
-            unsafe {
-                std::env::set_var("XDG_CONFIG_HOME", "/tmp/custom-xdg");
-            }
-            let path = config_dir_path().expect("config_dir_path");
-            // Restore
-            unsafe {
-                match prev {
-                    Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                    None => std::env::remove_var("XDG_CONFIG_HOME"),
-                }
-            }
+            let path = resolve_config_dir(Some("/tmp/custom-xdg"), Some("/home/user")).expect("ok");
             assert_eq!(path, std::path::PathBuf::from("/tmp/custom-xdg/task"));
         }
 
         #[test]
         fn falls_back_to_home_dot_config_task_without_xdg() {
-            let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
-            let prev_home = std::env::var_os("HOME");
-            // SAFETY: single-threaded test binary section.
-            unsafe {
-                std::env::remove_var("XDG_CONFIG_HOME");
-                std::env::set_var("HOME", "/home/testuser");
-            }
-            let path = config_dir_path().expect("config_dir_path");
-            unsafe {
-                match prev_xdg {
-                    Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                    None => std::env::remove_var("XDG_CONFIG_HOME"),
-                }
-                match prev_home {
-                    Some(v) => std::env::set_var("HOME", v),
-                    None => std::env::remove_var("HOME"),
-                }
-            }
+            let path = resolve_config_dir(None, Some("/home/testuser")).expect("ok");
             assert_eq!(
                 path,
                 std::path::PathBuf::from("/home/testuser/.config/task")
             );
+        }
+
+        #[test]
+        fn errors_when_both_xdg_and_home_are_missing() {
+            assert!(resolve_config_dir(None, None).is_err());
+        }
+
+        #[test]
+        fn xdg_takes_priority_over_home() {
+            let path = resolve_config_dir(Some("/xdg/config"), Some("/home/user")).expect("ok");
+            assert_eq!(path, std::path::PathBuf::from("/xdg/config/task"));
         }
     }
 
@@ -443,6 +492,76 @@ mod tests {
         }
 
         #[test]
+        fn loads_config_with_install_entries() {
+            let dir = TempDir::new("load-install");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                r#"repos_dir = "/tmp/repos"
+wt_dir = "/tmp/wt"
+detached_dir = "/tmp/detached"
+
+[[install]]
+repo = "github.com/org/tool"
+
+[[install]]
+repo = "gitlab.com/team/app"
+path = "crates/cli"
+"#,
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load install config");
+            assert_eq!(config.install_entries.len(), 2);
+            assert_eq!(config.install_entries[0].repo, "github.com/org/tool");
+            assert!(config.install_entries[0].path.is_none());
+            assert_eq!(config.install_entries[1].repo, "gitlab.com/team/app");
+            assert_eq!(
+                config.install_entries[1].path.as_deref(),
+                Some("crates/cli")
+            );
+        }
+
+        #[test]
+        fn loads_extra_flags_for_install_entry() {
+            let dir = TempDir::new("load-extra-flags");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                r#"repos_dir = "/tmp/repos"
+wt_dir = "/tmp/wt"
+detached_dir = "/tmp/detached"
+
+[[install]]
+repo = "github.com/org/tool"
+extra_flags = ["--all-features"]
+
+[[install]]
+repo = "github.com/org/other"
+"#,
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load extra_flags config");
+            assert_eq!(config.install_entries[0].extra_flags, ["--all-features"]);
+            assert!(config.install_entries[1].extra_flags.is_empty());
+        }
+
+        #[test]
+        fn loads_config_without_install_section() {
+            let dir = TempDir::new("load-no-install");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n",
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load config without install");
+            assert!(config.install_entries.is_empty());
+        }
+
+        #[test]
         fn errors_on_invalid_toml() {
             let dir = TempDir::new("load-invalid");
             let config_path = dir.path().join("config.toml");
@@ -511,6 +630,7 @@ mod tests {
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: vec![PathBuf::from("/tmp/trusted")],
+                install_entries: Vec::new(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -520,6 +640,7 @@ mod tests {
             assert_eq!(loaded.wt_dir, config.wt_dir);
             assert_eq!(loaded.detached_dir, config.detached_dir);
             assert_eq!(loaded.codium_trusted_roots, config.codium_trusted_roots);
+            assert_eq!(loaded.install_entries, config.install_entries);
         }
 
         #[test]
@@ -531,6 +652,7 @@ mod tests {
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -546,11 +668,224 @@ mod tests {
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
             };
 
             write_config(&config_path, &config).expect("write config");
             let content = fs::read_to_string(&config_path).unwrap();
             assert!(!content.contains("[vscodium]"));
+        }
+
+        #[test]
+        fn round_trips_install_entries() {
+            let dir = TempDir::new("write-install-round-trip");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: vec![
+                    super::super::InstallEntry {
+                        repo: "github.com/org/tool".to_string(),
+                        path: None,
+                        extra_flags: vec![],
+                    },
+                    super::super::InstallEntry {
+                        repo: "gitlab.com/team/app".to_string(),
+                        path: Some("crates/cli".to_string()),
+                        extra_flags: vec![],
+                    },
+                ],
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let loaded = load_config(&config_path).expect("load written config");
+
+            assert_eq!(loaded.install_entries.len(), 2);
+            assert_eq!(loaded.install_entries[0].repo, "github.com/org/tool");
+            assert!(loaded.install_entries[0].path.is_none());
+            assert_eq!(loaded.install_entries[1].repo, "gitlab.com/team/app");
+            assert_eq!(
+                loaded.install_entries[1].path.as_deref(),
+                Some("crates/cli")
+            );
+        }
+
+        #[test]
+        fn round_trips_extra_flags() {
+            let dir = TempDir::new("write-extra-flags");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: vec![
+                    super::super::InstallEntry {
+                        repo: "github.com/org/tool".to_string(),
+                        path: None,
+                        extra_flags: vec!["--all-features".to_string(), "--locked".to_string()],
+                    },
+                    super::super::InstallEntry {
+                        repo: "github.com/org/other".to_string(),
+                        path: None,
+                        extra_flags: vec![],
+                    },
+                ],
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let loaded = load_config(&config_path).expect("load written config");
+
+            assert_eq!(
+                loaded.install_entries[0].extra_flags,
+                ["--all-features", "--locked"]
+            );
+            assert!(loaded.install_entries[1].extra_flags.is_empty());
+
+            // Verify entries with no extra_flags don't emit extra_flags key in TOML.
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(
+                content.contains("extra_flags"),
+                "extra_flags should appear for entry with flags"
+            );
+        }
+
+        #[test]
+        fn omits_extra_flags_when_empty() {
+            let dir = TempDir::new("write-no-extra-flags");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: vec![super::super::InstallEntry {
+                    repo: "github.com/org/tool".to_string(),
+                    path: None,
+                    extra_flags: vec![],
+                }],
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(
+                !content.contains("extra_flags"),
+                "extra_flags should be omitted when empty"
+            );
+        }
+
+        #[test]
+        fn omits_install_section_when_empty() {
+            let dir = TempDir::new("write-no-install");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(
+                !content.contains("[[install]]"),
+                "empty install should be omitted from config"
+            );
+        }
+    }
+
+    mod expand_path_edge_cases {
+        use super::*;
+
+        #[test]
+        fn tilde_without_slash_is_passthrough() {
+            // "~user/repos" is NOT expanded -- it falls through to the literal path.
+            // This pins the current behavior; if this changes, this test should be updated.
+            let home = Path::new("/home/me");
+            let result = expand_path("~user/repos", home).unwrap();
+            assert_eq!(result, std::path::PathBuf::from("~user/repos"));
+        }
+    }
+
+    mod to_runtime_config_edge_cases {
+        use super::*;
+
+        #[test]
+        fn trims_whitespace_around_paths() {
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "  /tmp/repos  ".to_string(),
+                wt_dir: "  /tmp/wt  ".to_string(),
+                detached_dir: "  /tmp/detached  ".to_string(),
+                vscodium: None,
+                install: Vec::new(),
+            })
+            .expect("runtime config");
+
+            assert_eq!(config.repos_dir, std::path::PathBuf::from("/tmp/repos"));
+            assert_eq!(config.wt_dir, std::path::PathBuf::from("/tmp/wt"));
+            assert_eq!(
+                config.detached_dir,
+                std::path::PathBuf::from("/tmp/detached")
+            );
+        }
+    }
+
+    mod resolve_config_dir_edge_cases {
+        use super::super::resolve_config_dir;
+
+        #[test]
+        fn empty_xdg_string_falls_back_to_home() {
+            // Per XDG spec, empty $XDG_CONFIG_HOME is treated as unset and
+            // should fall back to $HOME/.config.
+            let path = resolve_config_dir(Some(""), Some("/home/user")).expect("ok");
+            assert_eq!(path, std::path::PathBuf::from("/home/user/.config/task"));
+        }
+    }
+
+    mod load_config_edge_cases {
+        use std::{env, fs, path::PathBuf};
+
+        use super::super::load_config;
+
+        struct TempDir(PathBuf);
+
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = env::temp_dir().join(format!("task-rs-config-edge-{name}"));
+                let _ = fs::remove_dir_all(&path);
+                fs::create_dir_all(&path).expect("create temp dir");
+                Self(path)
+            }
+
+            fn path(&self) -> &PathBuf {
+                &self.0
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[test]
+        fn errors_on_empty_repos_dir() {
+            let dir = TempDir::new("empty-repos-dir");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n",
+            )
+            .unwrap();
+
+            let err = load_config(&config_path).unwrap_err();
+            assert!(
+                err.to_string().contains("empty"),
+                "expected 'empty' in error: {err}"
+            );
         }
     }
 }

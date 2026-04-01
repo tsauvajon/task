@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use self::{
     effects::{
@@ -19,6 +19,7 @@ mod render;
 mod state;
 mod tasks;
 mod terminal;
+mod theme;
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     context.tasks().ensure_layout()?;
@@ -68,14 +69,52 @@ fn run_event_loop(
 ) -> Result<UiAction> {
     loop {
         state.append_activity_lines(crate::runtime::process::take_captured_logs());
-        terminal.draw(|frame| render(frame, state))?;
+        terminal.draw(|frame| render(frame, &mut *state))?;
 
         let event = event::read()?;
-        if let Event::Key(key) = event {
-            let intent = from_key(state.mode, key);
-            if let Some(action) = apply_intent(context, state, intent)? {
-                return Ok(action);
+
+        // While the commands overlay is open, only allow closing it or quitting.
+        if state.show_help {
+            match event {
+                Event::Key(key) => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c')
+                    {
+                        return Ok(UiAction::Quit);
+                    }
+                    if (key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('p'))
+                        || key.code == KeyCode::Esc
+                    {
+                        state.show_help = false;
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                        let outside = state
+                            .help_area
+                            .is_none_or(|a| !a.contains((mouse.column, mouse.row).into()));
+                        if outside {
+                            state.show_help = false;
+                        }
+                    }
+                }
+                _ => {}
             }
+            continue;
+        }
+
+        let intent = match event {
+            Event::Key(key) => from_key(state.mode, key),
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollDown => UiIntent::MoveNext,
+                MouseEventKind::ScrollUp => UiIntent::MovePrev,
+                _ => UiIntent::Noop,
+            },
+            _ => UiIntent::Noop,
+        };
+        if let Some(action) = apply_intent(context, state, intent)? {
+            return Ok(action);
         }
     }
 }
@@ -112,6 +151,22 @@ fn apply_intent(
             state.move_prev();
             Ok(None)
         }
+        UiIntent::PageDown => {
+            state.move_page_down();
+            Ok(None)
+        }
+        UiIntent::PageUp => {
+            state.move_page_up();
+            Ok(None)
+        }
+        UiIntent::MoveFirst => {
+            state.move_first();
+            Ok(None)
+        }
+        UiIntent::MoveLast => {
+            state.move_last();
+            Ok(None)
+        }
         UiIntent::ToggleHelp => {
             state.show_help = !state.show_help;
             Ok(None)
@@ -126,8 +181,12 @@ fn apply_intent(
                 ViewMode::Repos => {
                     if let Some(repo) = state.selected_repo_row().map(|row| row.repo.to_string()) {
                         state.select_repo_for_tasks(repo);
-                        refresh_task_rows(context, state)?;
-                        state.message = "Opened selected repository tasks".to_string();
+                        match refresh_task_rows(context, state) {
+                            Ok(()) => {
+                                state.message = "Opened selected repository tasks".to_string()
+                            }
+                            Err(err) => state.message = err.to_string(),
+                        }
                     }
                 }
             }
@@ -149,11 +208,27 @@ fn apply_intent(
                     state.message = "Create mode: type branch name".to_string();
                 }
                 ViewMode::Repos => {
-                    state.mode = InputMode::CloneRepo;
-                    state.clone_input.clear();
-                    state.message = "Clone mode: type '<repo-url> [repo-key]'".to_string();
+                    let Some(row) = state.selected_repo_row().cloned() else {
+                        state.message = "No repo selected".to_string();
+                        return Ok(None);
+                    };
+                    let repo_key_str = row.repo.to_string();
+                    state.task_repo_scope = Some(repo_key_str.clone());
+                    let _ = refresh_task_rows(context, state);
+                    state.mode = InputMode::CreateTask;
+                    state.create_branch.clear();
+                    state.message = format!("Start task on {repo_key_str}: type branch name");
                 }
             }
+            Ok(None)
+        }
+        UiIntent::EnterCloneMode => {
+            if state.view != ViewMode::Repos {
+                return Ok(None);
+            }
+            state.mode = InputMode::CloneRepo;
+            state.clone_input.clear();
+            state.message = "Clone mode: type '<repo-url> [repo-key]'".to_string();
             Ok(None)
         }
         UiIntent::FinishSelected => {
@@ -161,19 +236,21 @@ fn apply_intent(
                 state.message = "Finish is only available in Tasks view".to_string();
                 return Ok(None);
             }
-            finish_and_refresh(context, state)?;
+            if let Err(err) = finish_and_refresh(context, state) {
+                state.message = err.to_string();
+            }
             Ok(None)
         }
         UiIntent::RefreshCurrentView => {
             match state.view {
-                ViewMode::Tasks => {
-                    refresh_task_rows(context, state)?;
-                    state.message = "Refreshed task list".to_string();
-                }
-                ViewMode::Repos => {
-                    refresh_repo_rows(context, state)?;
-                    state.message = "Refreshed repo list".to_string();
-                }
+                ViewMode::Tasks => match refresh_task_rows(context, state) {
+                    Ok(()) => state.message = "Refreshed task list".to_string(),
+                    Err(err) => state.message = err.to_string(),
+                },
+                ViewMode::Repos => match refresh_repo_rows(context, state) {
+                    Ok(()) => state.message = "Refreshed repo list".to_string(),
+                    Err(err) => state.message = err.to_string(),
+                },
             }
             Ok(None)
         }
@@ -182,7 +259,9 @@ fn apply_intent(
                 state.message = "Park is only available in Tasks view".to_string();
                 return Ok(None);
             }
-            park_and_refresh(context, state)?;
+            if let Err(err) = park_and_refresh(context, state) {
+                state.message = err.to_string();
+            }
             Ok(None)
         }
         UiIntent::ToggleDetach => {
@@ -193,6 +272,17 @@ fn apply_intent(
             match toggle_detach_and_refresh(context, state) {
                 Ok(msg) => state.message = msg,
                 Err(err) => state.message = err.to_string(),
+            }
+            Ok(None)
+        }
+
+        UiIntent::ClearScope => {
+            if state.task_repo_scope.is_some() {
+                state.clear_repo_scope();
+                match refresh_task_rows(context, state) {
+                    Ok(()) => state.message = "Returned to repos view".to_string(),
+                    Err(err) => state.message = err.to_string(),
+                }
             }
             Ok(None)
         }
@@ -245,6 +335,10 @@ fn apply_intent(
         },
         UiIntent::CreateBackspace => {
             state.create_branch.pop();
+            Ok(None)
+        }
+        UiIntent::CreateClear => {
+            state.create_branch.clear();
             Ok(None)
         }
         UiIntent::CreateAppend(ch) => {
@@ -446,6 +540,106 @@ mod tests {
         assert_eq!(state.task_selected, 0);
     }
 
+    // ── PageDown / PageUp / MoveFirst / MoveLast ────────────────────────────
+
+    #[test]
+    fn page_down_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..30)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.visible_rows = 10;
+        assert_eq!(state.task_selected, 0);
+        apply_intent(&ctx, &mut state, UiIntent::PageDown).unwrap();
+        assert_eq!(state.task_selected, 10);
+    }
+
+    #[test]
+    fn page_up_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..30)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.visible_rows = 10;
+        state.task_selected = 20;
+        apply_intent(&ctx, &mut state, UiIntent::PageUp).unwrap();
+        assert_eq!(state.task_selected, 10);
+    }
+
+    #[test]
+    fn move_first_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..10)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.task_selected = 7;
+        apply_intent(&ctx, &mut state, UiIntent::MoveFirst).unwrap();
+        assert_eq!(state.task_selected, 0);
+    }
+
+    #[test]
+    fn move_last_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..10)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.task_selected = 3;
+        apply_intent(&ctx, &mut state, UiIntent::MoveLast).unwrap();
+        assert_eq!(state.task_selected, 9);
+    }
+
     // ── EnterFilterMode ──────────────────────────────────────────────────────
 
     #[test]
@@ -493,20 +687,54 @@ mod tests {
     }
 
     #[test]
-    fn enter_create_mode_in_repos_view_enters_clone_mode() {
+    fn enter_create_task_mode_in_repos_view_scopes_to_selected_repo() {
+        use crate::{runtime::RepoKey, ui::state::RepoRow};
+
+        let ctx = test_env();
+        let repo_rows = vec![
+            RepoRow {
+                repo: RepoKey::new("github.com/acme/app"),
+                open_tasks: 1,
+                parked_tasks: 0,
+                is_detached: false,
+            },
+            RepoRow {
+                repo: RepoKey::new("github.com/acme/ops"),
+                open_tasks: 0,
+                parked_tasks: 0,
+                is_detached: false,
+            },
+        ];
+        let mut state = UiState::new(vec![], repo_rows, None);
+        state.view = ViewMode::Repos;
+        state.create_branch = "leftover".to_string();
+        state.repo_selected = 1;
+
+        let result = apply_intent(&ctx, &mut state, UiIntent::EnterCreateTaskMode).unwrap();
+        assert!(result.is_none());
+        assert_eq!(state.mode, InputMode::CreateTask);
+        assert!(state.create_branch.is_empty(), "branch should be cleared");
+        assert_eq!(
+            state.task_repo_scope,
+            Some("github.com/acme/ops".to_string())
+        );
+        assert!(
+            state.message.contains("github.com/acme/ops"),
+            "message should mention selected repo: {}",
+            state.message
+        );
+    }
+
+    #[test]
+    fn enter_create_task_mode_in_repos_view_with_no_selection() {
         let ctx = test_env();
         let mut state = empty_state();
         state.view = ViewMode::Repos;
-        state.clone_input = "leftover".to_string();
-        apply_intent(&ctx, &mut state, UiIntent::EnterCreateTaskMode).unwrap();
-        assert_eq!(state.mode, InputMode::CloneRepo);
+        let result = apply_intent(&ctx, &mut state, UiIntent::EnterCreateTaskMode).unwrap();
+        assert!(result.is_none());
         assert!(
-            state.clone_input.is_empty(),
-            "clone_input should be cleared"
-        );
-        assert!(
-            state.message.contains("Clone"),
-            "message should mention Clone: {}",
+            state.message.contains("No repo selected"),
+            "message should mention 'No repo selected': {}",
             state.message
         );
     }
@@ -662,6 +890,15 @@ mod tests {
         assert_eq!(state.create_branch, "fe");
     }
 
+    #[test]
+    fn create_clear_empties_branch() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        state.create_branch = "some-branch".to_string();
+        apply_intent(&ctx, &mut state, UiIntent::CreateClear).unwrap();
+        assert!(state.create_branch.is_empty());
+    }
+
     // ── CloneCancel / CloneAppend / CloneBackspace / CloneClear ─────────────
 
     #[test]
@@ -703,6 +940,39 @@ mod tests {
         state.clone_input = "something".to_string();
         apply_intent(&ctx, &mut state, UiIntent::CloneClear).unwrap();
         assert!(state.clone_input.is_empty());
+    }
+
+    // ── EnterCloneMode ────────────────────────────────────────────────────
+
+    #[test]
+    fn enter_clone_mode_in_tasks_view_is_silent_noop() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        assert_eq!(state.view, ViewMode::Tasks);
+        let old_message = state.message.clone();
+        let result = apply_intent(&ctx, &mut state, UiIntent::EnterCloneMode).unwrap();
+        assert!(result.is_none());
+        assert_eq!(state.mode, InputMode::Normal, "mode should stay Normal");
+        assert_eq!(state.message, old_message, "message should not change");
+    }
+
+    #[test]
+    fn enter_clone_mode_in_repos_view_enters_clone_mode() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        state.view = ViewMode::Repos;
+        state.clone_input = "leftover".to_string();
+        apply_intent(&ctx, &mut state, UiIntent::EnterCloneMode).unwrap();
+        assert_eq!(state.mode, InputMode::CloneRepo);
+        assert!(
+            state.clone_input.is_empty(),
+            "clone_input should be cleared"
+        );
+        assert!(
+            state.message.contains("Clone"),
+            "message should mention Clone: {}",
+            state.message
+        );
     }
 
     // ── FinishSelected / ParkSelected guard in non-Tasks view ────────────────

@@ -1,4 +1,3 @@
 - (?) multi repo tasks?
-- fix visual glitches
 - perf improvement with many repos (maybe some cache or gradual loading)
 - errors are shown instead of killing the tui

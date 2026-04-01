@@ -3,6 +3,8 @@ use std::path::Path;
 use super::{gitdir::GitDir, run::capture};
 use crate::error::Result;
 
+const ORIGIN_FETCH_REFSPEC: &str = "+refs/heads/*:refs/remotes/origin/*";
+
 /// Parse the branch name from the output of `git ls-remote --symref origin HEAD`.
 ///
 /// Returns the branch name (e.g. `"main"`) if a symref line like
@@ -47,12 +49,21 @@ pub fn detect_default_base(gitdir: &Path) -> String {
 }
 
 pub fn fetch_origin_refs(gitdir: &Path) -> Result<()> {
-    GitDir::new(gitdir).status(&[
-        "fetch",
-        "origin",
-        "--prune",
-        "+refs/heads/*:refs/remotes/origin/*",
-    ])
+    // Ensure the bare repo has the correct fetch refspec so that plain
+    // `git fetch` also works (repairs repos cloned before this fix).
+    ensure_origin_fetch_refspec(gitdir)?;
+
+    GitDir::new(gitdir).status(&["fetch", "origin", "--prune", ORIGIN_FETCH_REFSPEC])
+}
+
+/// Set `remote.origin.fetch` to the standard non-bare refspec.
+///
+/// Bare clones map into `refs/heads/*` by default, which means a plain
+/// `git fetch origin` inside a linked worktree updates nothing under
+/// `refs/remotes/origin/*`. This one-liner fixes that. The call is
+/// idempotent — `git config` replaces the existing value.
+pub fn ensure_origin_fetch_refspec(gitdir: &Path) -> Result<()> {
+    GitDir::new(gitdir).status(&["config", "remote.origin.fetch", ORIGIN_FETCH_REFSPEC])
 }
 
 pub fn ref_exists(gitdir: &Path, reference: &str) -> bool {
@@ -92,12 +103,14 @@ mod tests {
 
     use super::{current_branch, parse_ls_remote_branch, ref_exists, rev_exists};
 
-    /// Create a temporary bare git repository.
+    /// Create a temporary bare git repository, isolated from user config.
     fn make_bare_repo(name: &str) -> std::path::PathBuf {
         let dir = env::temp_dir().join(format!("task-rs-refs-bare-{name}.git"));
         let _ = fs::remove_dir_all(&dir);
         let status = Command::new("git")
             .args(["init", "--bare", dir.to_str().expect("valid utf-8")])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", env::temp_dir())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -108,6 +121,9 @@ mod tests {
 
     /// Create a regular git repo with an initial commit on `main` and return
     /// its path (the working tree root, which is also the `.git` parent).
+    ///
+    /// Git subprocesses are isolated from the user's global config to avoid
+    /// races with parallel tests that mutate `HOME`.
     fn make_regular_repo_with_commit(name: &str) -> std::path::PathBuf {
         let dir = env::temp_dir().join(format!("task-rs-refs-regular-{name}"));
         let _ = fs::remove_dir_all(&dir);
@@ -117,6 +133,8 @@ mod tests {
             let status = Command::new("git")
                 .args(args)
                 .current_dir(&dir)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", &dir)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()

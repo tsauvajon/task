@@ -20,22 +20,23 @@ pub fn cmdline_matches_user_data_dir(args: &[String], user_data_dir: &Path) -> b
 
 fn is_codium_binary(arg0: &str) -> bool {
     // On Linux, argv[0] is typically the `codium` wrapper script or binary.
-    // On macOS (nix), VSCodium launches as the `Electron` binary inside the
-    // VSCodium.app bundle, so we also match "Electron" when it appears under
-    // a vscodium nix store path.
+    // On macOS (nix), VSCodium launches as `VSCodium` (note the capital C)
+    // inside the .app bundle, so we use case-insensitive matching.
+    // It can also appear as the `Electron` binary under a vscodium nix store
+    // path.
     let path = Path::new(arg0);
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("");
 
-    if file_name.contains("codium") {
+    if file_name.to_ascii_lowercase().contains("codium") {
         return true;
     }
 
     if file_name == "Electron" {
-        let path_str = path.to_string_lossy();
-        return path_str.contains("vscodium") || path_str.contains("VSCodium");
+        let lower = path.to_string_lossy().to_ascii_lowercase();
+        return lower.contains("vscodium");
     }
 
     false
@@ -200,6 +201,22 @@ mod tests {
             "/tmp/task/codium/a".to_string(),
         ];
         assert!(!cmdline_matches_user_data_dir(
+            &args,
+            Path::new("/tmp/task/codium/a")
+        ));
+    }
+
+    #[test]
+    fn cmdline_matches_macos_vscodium_binary() {
+        // On macOS the main process binary is named "VSCodium" (capital C),
+        // not "codium" as on Linux.
+        let args = vec![
+            "/nix/store/abc-vscodium-1.2.3/Applications/VSCodium.app/Contents/MacOS/VSCodium"
+                .to_string(),
+            "--user-data-dir".to_string(),
+            "/tmp/task/codium/a".to_string(),
+        ];
+        assert!(cmdline_matches_user_data_dir(
             &args,
             Path::new("/tmp/task/codium/a")
         ));

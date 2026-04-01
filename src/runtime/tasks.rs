@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     ffi::OsStr,
     fs,
-    io::{self, IsTerminal},
     path::{Path, PathBuf},
 };
 
@@ -42,18 +41,29 @@ use crate::{
 pub struct TaskResolver {
     layout: WorkspacePaths,
     codium_trusted_roots: Vec<PathBuf>,
+    interactive: bool,
 }
 
 impl TaskResolver {
-    pub fn new(layout: WorkspacePaths, codium_trusted_roots: Vec<PathBuf>) -> Self {
+    pub fn new(
+        layout: WorkspacePaths,
+        codium_trusted_roots: Vec<PathBuf>,
+        interactive: bool,
+    ) -> Self {
         Self {
             layout,
             codium_trusted_roots,
+            interactive,
         }
     }
 
     pub fn layout(&self) -> &WorkspacePaths {
         &self.layout
+    }
+
+    #[cfg(test)]
+    pub fn codium_trusted_roots(&self) -> &[PathBuf] {
+        &self.codium_trusted_roots
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
@@ -103,7 +113,7 @@ impl TaskResolver {
         match resolve_repo_query(&normalized, &key_strs) {
             ResolveResult::Resolved(key) => Ok(RepoKey::new(key)),
             ResolveResult::Ambiguous(choices) => {
-                choose_repo_key_interactive(repo_arg, &choices).map(RepoKey::new)
+                choose_repo_key_interactive(repo_arg, &choices, self.interactive).map(RepoKey::new)
             }
         }
     }
@@ -146,7 +156,7 @@ impl TaskResolver {
                 }
             }
             ResolveResult::Ambiguous(choices) => {
-                choose_repo_key_interactive(repo_arg, &choices).map(RepoKey::new)
+                choose_repo_key_interactive(repo_arg, &choices, self.interactive).map(RepoKey::new)
             }
         }
     }
@@ -300,7 +310,7 @@ impl TaskResolver {
             return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
         }
         if !matches.is_empty() {
-            return choose_task_interactive(query, &matches);
+            return choose_task_interactive(query, &matches, self.interactive);
         }
 
         let mut matches: Vec<&TaskRow> =
@@ -310,7 +320,7 @@ impl TaskResolver {
             return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
         }
         if !matches.is_empty() {
-            return choose_task_interactive(query, &matches);
+            return choose_task_interactive(query, &matches, self.interactive);
         }
 
         let mut matches: Vec<&TaskRow> = tasks.iter().filter(|r| r.repo.contains(query)).collect();
@@ -323,7 +333,7 @@ impl TaskResolver {
             return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
         }
 
-        choose_task_interactive(query, &matches)
+        choose_task_interactive(query, &matches, self.interactive)
     }
 
     pub fn print_task_rows_table(&self, rows: &[TaskRow]) {
@@ -443,7 +453,7 @@ fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>> {
             }
             let path = entry.path();
             let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
-            if name.ends_with(".git") {
+            if name.ends_with(".git") && name != ".git" {
                 gitdirs.push(path);
             } else {
                 stack.push(path);
@@ -455,8 +465,12 @@ fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(gitdirs)
 }
 
-fn choose_repo_key_interactive(query: &str, choices: &[String]) -> Result<String> {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+fn choose_repo_key_interactive(
+    query: &str,
+    choices: &[String],
+    interactive: bool,
+) -> Result<String> {
+    if !interactive {
         return Err(Error::failed(format!(
             "Multiple repositories match '{query}': {}. Please use a full repo key.",
             choices.join(" ")
@@ -474,13 +488,17 @@ fn choose_repo_key_interactive(query: &str, choices: &[String]) -> Result<String
     index.map(|i| choices[i].clone()).ok_or(Error::Cancelled)
 }
 
-fn choose_task_interactive(query: &str, choices: &[&TaskRow]) -> Result<(RepoKey, BranchName)> {
+fn choose_task_interactive(
+    query: &str,
+    choices: &[&TaskRow],
+    interactive: bool,
+) -> Result<(RepoKey, BranchName)> {
     let items: Vec<String> = choices
         .iter()
         .map(|row| format!("{}/{}", row.repo, row.branch))
         .collect();
 
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+    if !interactive {
         return Err(Error::failed(format!(
             "Multiple tasks match '{query}': {}. Please specify repo and branch.",
             items.join(" ")
@@ -535,6 +553,8 @@ mod tests {
         let status = std::process::Command::new("git")
             .args(["init", "--bare"])
             .arg(path)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", std::env::temp_dir())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -545,7 +565,7 @@ mod tests {
     /// Build a `TaskResolver` from temp repos, wt, and detached dirs.
     fn resolver_for(repos_dir: &std::path::Path, wt_dir: &std::path::Path) -> TaskResolver {
         let layout = WorkspacePaths::new(repos_dir, wt_dir, std::path::Path::new("/tmp/detached"));
-        TaskResolver::new(layout, Vec::new())
+        TaskResolver::new(layout, Vec::new(), false)
     }
 
     mod collect_gitdirs {
@@ -623,6 +643,20 @@ mod tests {
             let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
             assert_eq!(results.len(), 1);
             assert!(results[0].ends_with("deep.git"));
+        }
+
+        #[test]
+        fn ignores_dot_git_directories() {
+            let dir = TempDir::new("dot-git");
+            // A real bare repo that should be collected.
+            fs::create_dir_all(dir.path().join("github.com/me/app.git")).unwrap();
+            // A .git metadata directory (e.g. created by opencode) at a namespace
+            // level — must NOT be treated as a bare repo.
+            fs::create_dir_all(dir.path().join("github.com/me/.git")).unwrap();
+
+            let results = collect_gitdirs(dir.path()).expect("collect gitdirs");
+            assert_eq!(results.len(), 1);
+            assert!(results[0].ends_with("app.git"));
         }
     }
 
@@ -934,6 +968,48 @@ mod tests {
             // Bare repo has no worktrees, so falls back to computed path
             assert_eq!(path, wt_dir.join("github.com/me/app/feature-y"));
         }
+
+        #[test]
+        fn returns_actual_worktree_path_when_branch_exists() {
+            let dir = TempDir::new("resolve-wt-path-found");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let repo_slug = "github.com/me/app";
+            let gitdir = repos_dir.join(format!("{repo_slug}.git"));
+            init_bare_repo(&gitdir);
+
+            // Create a real worktree at the expected path
+            let wt_path = wt_dir.join(repo_slug).join("feat-login");
+            fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+            let status = std::process::Command::new("git")
+                .args([
+                    "--git-dir",
+                    gitdir.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "--orphan",
+                    "-b",
+                    "feat-login",
+                    wt_path.to_str().unwrap(),
+                ])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", std::env::temp_dir())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("git worktree add");
+            assert!(status.success(), "git worktree add failed");
+
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+            let repo_key = RepoKey::new(repo_slug);
+            let branch = BranchName::new("feat-login");
+            let path = resolver.resolve_worktree_path(&repo_key, &branch);
+            // Compare canonicalized paths to handle macOS /var → /private/var symlinks
+            assert_eq!(
+                path.canonicalize().unwrap(),
+                wt_path.canonicalize().unwrap()
+            );
+        }
     }
 
     mod resolve_repo_branch_inputs {
@@ -1029,7 +1105,7 @@ mod tests {
         use super::*;
 
         /// Creates a bare repo with a single worktree at the expected wt path.
-        fn setup_worktree(
+        pub(super) fn setup_worktree(
             repos_dir: &std::path::Path,
             wt_dir: &std::path::Path,
             repo_slug: &str,
@@ -1050,6 +1126,8 @@ mod tests {
                     branch,
                     wt_path.to_str().unwrap(),
                 ])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", std::env::temp_dir())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -1184,6 +1262,8 @@ mod tests {
                     "main",
                     wt_path.to_str().unwrap(),
                 ])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", std::env::temp_dir())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -1258,6 +1338,90 @@ mod tests {
             assert!(
                 result.is_ok(),
                 "no_open=true should skip tools and succeed even in an interactive terminal"
+            );
+        }
+    }
+
+    mod ambiguous_repo_resolution {
+        use super::*;
+
+        #[test]
+        fn resolve_repo_key_input_errors_on_ambiguous_match() {
+            // In a non-terminal environment (test harness), ambiguous matches
+            // produce an error listing the choices.
+            let dir = TempDir::new("resolve-ambiguous-input");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            // Two repos with the same short name under different orgs
+            init_bare_repo(&repos_dir.join("github.com/org-a/tool.git"));
+            init_bare_repo(&repos_dir.join("github.com/org-b/tool.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver.resolve_repo_key_input("tool").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("org-a/tool") && msg.contains("org-b/tool"),
+                "error should list both choices: {msg}"
+            );
+        }
+
+        #[test]
+        fn resolve_existing_repo_key_errors_on_ambiguous_match() {
+            let dir = TempDir::new("rerk-ambiguous");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            init_bare_repo(&repos_dir.join("github.com/org-a/service.git"));
+            init_bare_repo(&repos_dir.join("github.com/org-b/service.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            let err = resolver.resolve_existing_repo_key("service").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("org-a/service") && msg.contains("org-b/service"),
+                "error should list both choices: {msg}"
+            );
+        }
+    }
+
+    mod resolve_task_from_query_multi_match {
+        use super::{resolve_task_from_query::setup_worktree, *};
+
+        #[test]
+        fn errors_with_choices_on_partial_branch_match() {
+            let dir = TempDir::new("resolve-query-multi-partial");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            setup_worktree(&repos_dir, &wt_dir, "github.com/me/app", "feat-alpha");
+            setup_worktree(&repos_dir, &wt_dir, "github.com/me/lib", "feat-beta");
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            // "feat" partially matches both branches
+            let err = resolver.resolve_task_from_query("feat").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("feat-alpha") && msg.contains("feat-beta"),
+                "error should list both matching tasks: {msg}"
+            );
+        }
+    }
+
+    mod clone_bare_repo_method {
+        use super::*;
+
+        #[test]
+        fn returns_ok_when_valid_bare_repo_already_exists() {
+            let dir = TempDir::new("clone-idempotent");
+            let repos_dir = dir.path().join("repos");
+            let wt_dir = dir.path().join("wt");
+            let repo_key = RepoKey::new("github.com/me/app");
+            init_bare_repo(&repos_dir.join("github.com/me/app.git"));
+            let resolver = resolver_for(&repos_dir, &wt_dir);
+
+            // Should return Ok without doing anything (no network needed)
+            let result = resolver.clone_bare_repo("https://example.com/fake.git", &repo_key);
+            assert!(
+                result.is_ok(),
+                "should skip clone when valid bare repo exists"
             );
         }
     }

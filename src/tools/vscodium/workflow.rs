@@ -3,7 +3,8 @@ use std::{fs, path::Path, thread, time::Duration};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, Signal, System, UpdateKind};
 
 use super::{
-    naming::user_data_dir, process_match::cmdline_matches_user_data_dir, trust::seed_trusted_roots,
+    naming::user_data_dir, process_match::cmdline_matches_user_data_dir,
+    settings::seed_default_settings, trust::seed_trusted_roots,
 };
 use crate::{error::Result, runtime::process};
 
@@ -22,6 +23,12 @@ pub fn open_window(
     if let Err(err) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
         process::warn(&format!(
             "Could not seed VSCodium trusted roots for {}: {err}",
+            user_data_dir.display()
+        ));
+    }
+    if let Err(err) = seed_default_settings(&user_data_dir) {
+        process::warn(&format!(
+            "Could not seed VSCodium settings for {}: {err}",
             user_data_dir.display()
         ));
     }
@@ -48,6 +55,12 @@ pub fn seed_task_trusted_roots(
     if let Err(err) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
         process::warn(&format!(
             "Could not seed VSCodium trusted roots for {}: {err}",
+            user_data_dir.display()
+        ));
+    }
+    if let Err(err) = seed_default_settings(&user_data_dir) {
+        process::warn(&format!(
+            "Could not seed VSCodium settings for {}: {err}",
             user_data_dir.display()
         ));
     }

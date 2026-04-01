@@ -82,6 +82,7 @@ fn resolve_nix_binary(tool: ManagedTool) -> Result<PathBuf> {
 
     let output = Command::new("nix")
         .args(["build", package, "--no-link", "--print-out-paths"])
+        .current_dir("/")
         .output()
         .map_err(|err| Error::failed(format!("Could not resolve nix package {package}: {err}")))?;
 

@@ -8,14 +8,20 @@ pub(super) enum UiIntent {
     SwitchView,
     MoveNext,
     MovePrev,
+    PageDown,
+    PageUp,
+    MoveFirst,
+    MoveLast,
     ToggleHelp,
     OpenSelected,
     EnterFilterMode,
     EnterCreateTaskMode,
+    EnterCloneMode,
     FinishSelected,
     RefreshCurrentView,
     ParkSelected,
     ToggleDetach,
+    ClearScope,
     FilterCancel,
     FilterApply,
     FilterBackspace,
@@ -24,6 +30,7 @@ pub(super) enum UiIntent {
     CreateCancel,
     CreateSubmit,
     CreateBackspace,
+    CreateClear,
     CreateAppend(char),
     CloneCancel,
     CloneSubmit,
@@ -36,6 +43,9 @@ pub(super) enum UiIntent {
 pub(super) fn from_key(mode: InputMode, key: KeyEvent) -> UiIntent {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return UiIntent::Quit;
+    }
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
+        return UiIntent::ToggleHelp;
     }
 
     match mode {
@@ -52,14 +62,19 @@ fn from_key_normal(key: KeyEvent) -> UiIntent {
         KeyCode::Tab => UiIntent::SwitchView,
         KeyCode::Down | KeyCode::Char('j') => UiIntent::MoveNext,
         KeyCode::Up | KeyCode::Char('k') => UiIntent::MovePrev,
+        KeyCode::PageDown => UiIntent::PageDown,
+        KeyCode::PageUp => UiIntent::PageUp,
+        KeyCode::Home => UiIntent::MoveFirst,
+        KeyCode::End => UiIntent::MoveLast,
         KeyCode::Char('/') => UiIntent::EnterFilterMode,
-        KeyCode::Char('?') => UiIntent::ToggleHelp,
-        KeyCode::Char('c') => UiIntent::EnterCreateTaskMode,
+        KeyCode::Char('t') => UiIntent::EnterCreateTaskMode,
+        KeyCode::Char('c') => UiIntent::EnterCloneMode,
         KeyCode::Char('d') => UiIntent::ToggleDetach,
         KeyCode::Char('f') => UiIntent::FinishSelected,
         KeyCode::Char('r') => UiIntent::RefreshCurrentView,
         KeyCode::Char('p') => UiIntent::ParkSelected,
         KeyCode::Enter => UiIntent::OpenSelected,
+        KeyCode::Esc => UiIntent::ClearScope,
         _ => UiIntent::Noop,
     }
 }
@@ -85,6 +100,9 @@ fn from_key_create(key: KeyEvent) -> UiIntent {
         KeyCode::Esc => UiIntent::CreateCancel,
         KeyCode::Enter => UiIntent::CreateSubmit,
         KeyCode::Backspace => UiIntent::CreateBackspace,
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            UiIntent::CreateClear
+        }
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CreateAppend(ch)
         }
@@ -162,12 +180,12 @@ mod tests {
                 UiIntent::EnterFilterMode
             );
             assert_eq!(
-                from_key(InputMode::Normal, key(KeyCode::Char('?'))),
-                UiIntent::ToggleHelp
+                from_key(InputMode::Normal, key(KeyCode::Char('t'))),
+                UiIntent::EnterCreateTaskMode
             );
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Char('c'))),
-                UiIntent::EnterCreateTaskMode
+                UiIntent::EnterCloneMode
             );
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Char('d'))),
@@ -184,6 +202,42 @@ mod tests {
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Char('p'))),
                 UiIntent::ParkSelected
+            );
+        }
+
+        #[test]
+        fn maps_page_and_home_end_keys() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::PageDown)),
+                UiIntent::PageDown
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::PageUp)),
+                UiIntent::PageUp
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Home)),
+                UiIntent::MoveFirst
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::End)),
+                UiIntent::MoveLast
+            );
+        }
+
+        #[test]
+        fn esc_maps_to_clear_scope() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Esc)),
+                UiIntent::ClearScope
+            );
+        }
+
+        #[test]
+        fn question_mark_is_noop_after_ctrl_p_migration() {
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('?'))),
+                UiIntent::Noop
             );
         }
 
@@ -270,6 +324,15 @@ mod tests {
         }
 
         #[test]
+        fn ctrl_u_maps_to_create_clear() {
+            let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+            assert_eq!(
+                from_key(InputMode::CreateTask, ctrl_u),
+                UiIntent::CreateClear
+            );
+        }
+
+        #[test]
         fn ctrl_char_maps_to_noop_not_append() {
             let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
             assert_eq!(from_key(InputMode::CreateTask, ctrl_a), UiIntent::Noop);
@@ -328,6 +391,15 @@ mod tests {
             assert_eq!(from_key(InputMode::Filter, key), UiIntent::Quit);
             assert_eq!(from_key(InputMode::CreateTask, key), UiIntent::Quit);
             assert_eq!(from_key(InputMode::CloneRepo, key), UiIntent::Quit);
+        }
+
+        #[test]
+        fn ctrl_p_toggles_help_in_any_mode() {
+            let key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::Normal, key), UiIntent::ToggleHelp);
+            assert_eq!(from_key(InputMode::Filter, key), UiIntent::ToggleHelp);
+            assert_eq!(from_key(InputMode::CreateTask, key), UiIntent::ToggleHelp);
+            assert_eq!(from_key(InputMode::CloneRepo, key), UiIntent::ToggleHelp);
         }
     }
 }

@@ -28,7 +28,7 @@ use crate::{
 };
 
 #[derive(Debug, Parser, PartialEq, Eq)]
-#[command(name = "task", about = "Task workflow helper")]
+#[command(name = "task", about = "Task workflow helper", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -87,8 +87,6 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
-    #[command(about = "Prune stale worktree metadata")]
-    Prune { repo: Option<String> },
     #[command(about = "Run project checks for current task", alias = "done")]
     Check { worktree_path: Option<String> },
     #[command(about = "Run Rust test coverage via cargo-llvm-cov")]
@@ -103,7 +101,10 @@ pub enum Command {
     #[command(about = "Generate shell completion scripts")]
     Completions { shell: CompletionShell },
     #[command(name = "__complete", hide = true, trailing_var_arg = true)]
-    Complete { words: Vec<String> },
+    Complete {
+        #[arg(allow_hyphen_values = true)]
+        words: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
@@ -115,6 +116,8 @@ pub enum RepoCommand {
         repo_url: String,
         repo_key: Option<String>,
     },
+    #[command(about = "Prune stale worktree metadata")]
+    Prune { repo: Option<String> },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -168,7 +171,6 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
             branch,
             force,
         }) => finish::run(&context, repo.as_deref(), branch.as_deref(), force),
-        Some(Command::Prune { repo }) => prune::run(&context, repo.as_deref()),
         Some(Command::Check { worktree_path }) => check::run(&context, worktree_path.as_deref()),
         Some(Command::Coverage { worktree_path }) => {
             coverage::run(&context, worktree_path.as_deref())
@@ -296,9 +298,14 @@ mod tests {
         }
 
         #[test]
-        fn parses_prune_without_repo() {
-            let cli = Cli::parse_from(["task", "prune"]);
-            assert_eq!(cli.command, Some(Command::Prune { repo: None }));
+        fn parses_repo_prune_without_repo() {
+            let cli = Cli::parse_from(["task", "repo", "prune"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Repo {
+                    command: RepoCommand::Prune { repo: None },
+                })
+            );
         }
 
         #[test]
@@ -411,7 +418,6 @@ mod tests {
                 Some(Command::Detach {
                     command: DetachCommand::Update {
                         repo: Some("myrepo".to_string()),
-                        all: false,
                     },
                 })
             );
@@ -423,23 +429,30 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Detach {
-                    command: DetachCommand::Update {
-                        repo: None,
-                        all: false,
-                    },
+                    command: DetachCommand::Update { repo: None },
                 })
             );
         }
 
         #[test]
-        fn parses_detach_update_all_flag() {
-            let cli = Cli::parse_from(["task", "detach", "update", "--all"]);
+        fn parses_detach_install_without_repo() {
+            let cli = Cli::parse_from(["task", "detach", "install"]);
             assert_eq!(
                 cli.command,
                 Some(Command::Detach {
-                    command: DetachCommand::Update {
-                        repo: None,
-                        all: true,
+                    command: DetachCommand::Install { repo: None },
+                })
+            );
+        }
+
+        #[test]
+        fn parses_detach_install_with_repo() {
+            let cli = Cli::parse_from(["task", "detach", "install", "myrepo"]);
+            assert_eq!(
+                cli.command,
+                Some(Command::Detach {
+                    command: DetachCommand::Install {
+                        repo: Some("myrepo".to_string()),
                     },
                 })
             );
@@ -549,8 +562,10 @@ mod tests {
         }
 
         #[test]
-        fn requires_onboard_for_prune() {
-            assert!(should_auto_onboard(Some(&Command::Prune { repo: None })));
+        fn requires_onboard_for_repo_prune() {
+            assert!(should_auto_onboard(Some(&Command::Repo {
+                command: RepoCommand::Prune { repo: None },
+            })));
         }
 
         #[test]
@@ -670,12 +685,14 @@ mod tests {
         }
 
         #[test]
-        fn parses_prune_with_repo() {
-            let cli = Cli::parse_from(["task", "prune", "goto"]);
+        fn parses_repo_prune_with_repo() {
+            let cli = Cli::parse_from(["task", "repo", "prune", "goto"]);
             assert_eq!(
                 cli.command,
-                Some(Command::Prune {
-                    repo: Some("goto".to_string()),
+                Some(Command::Repo {
+                    command: RepoCommand::Prune {
+                        repo: Some("goto".to_string()),
+                    },
                 })
             );
         }

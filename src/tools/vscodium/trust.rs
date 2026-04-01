@@ -91,11 +91,9 @@ fn merge_trust_model(existing: Option<&str>, trusted_roots: &[String]) -> Result
 fn trusted_entry(root: &str) -> Value {
     json!({
         "uri": {
-            "$mid": 1,
             "scheme": "file",
             "path": root,
             "fsPath": root,
-            "external": format!("file://{root}"),
         },
         "trusted": true,
     })
@@ -209,7 +207,6 @@ mod tests {
             assert_eq!(entry["uri"]["scheme"], "file");
             assert_eq!(entry["uri"]["path"], "/mnt/work");
             assert_eq!(entry["uri"]["fsPath"], "/mnt/work");
-            assert_eq!(entry["uri"]["external"], "file:///mnt/work");
         }
     }
 

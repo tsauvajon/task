@@ -19,13 +19,13 @@ pub enum DetachCommand {
     #[command(about = "Create or update a detached default-branch worktree")]
     Add { repo: String },
     /// Update one or all detached worktrees by fetching and hard-resetting to origin/HEAD.
+    ///
+    /// Repos with a matching [[install]] entry in config are automatically reinstalled
+    /// after a successful update.
     #[command(about = "Fetch and reset a detached worktree to the latest remote default branch")]
     Update {
         /// Repo to update. Omit to update all detached worktrees.
         repo: Option<String>,
-        /// Update all detached worktrees (alias for omitting <repo>).
-        #[arg(long, conflicts_with = "repo")]
-        all: bool,
     },
     /// Remove a detached worktree from disk.
     #[command(about = "Remove a detached worktree")]
@@ -33,6 +33,15 @@ pub enum DetachCommand {
         repo: String,
         #[arg(long)]
         force: bool,
+    },
+    /// Install one or all configured detached repos via `cargo install --path <path> --locked`.
+    ///
+    /// Installable repos are defined in the [[install]] section of config.toml.
+    /// Without arguments, installs all configured entries.
+    #[command(about = "Install configured detached repos via cargo")]
+    Install {
+        /// Repo to install. Omit to install all configured repos.
+        repo: Option<String>,
     },
     /// List all detached worktrees with their HEAD commit.
     #[command(about = "List all detached worktrees")]
@@ -42,11 +51,15 @@ pub enum DetachCommand {
 pub fn run(env: &RuntimeEnvironment, command: DetachCommand) -> Result<()> {
     match command {
         DetachCommand::Add { repo } => add(env, &repo),
-        DetachCommand::Update { repo, all: _ } => match repo {
+        DetachCommand::Update { repo } => match repo {
             Some(repo) => update_one(env, &repo),
             None => update_all(env),
         },
         DetachCommand::Remove { repo, force } => remove(env, &repo, force),
+        DetachCommand::Install { repo } => match repo {
+            Some(repo) => install_one(env, &repo),
+            None => install_all(env),
+        },
         DetachCommand::List => list(env),
     }
 }
@@ -94,7 +107,10 @@ pub(crate) fn update_one(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()>
     }
 
     process::log(&format!("Updating detached worktree: {}", path.display()));
-    update_detached(&path)
+    update_detached(&path)?;
+
+    try_install(env, &repo_key);
+    Ok(())
 }
 
 pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
@@ -127,6 +143,9 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
         if let Err(err) = update_detached(path) {
             process::warn(&format!("Failed to update {}: {err}", path.display()));
             errors.push(format!("{}: {err}", path.display()));
+        } else {
+            let repo_key = repo_key_from_detached_path(detached_dir, path);
+            try_install(env, &repo_key);
         }
     }
 
@@ -195,7 +214,124 @@ pub(crate) fn list(env: &RuntimeEnvironment) -> Result<()> {
     Ok(())
 }
 
+// ── Install ───────────────────────────────────────────────────────────────
+
+pub(crate) fn install_one(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
+    let entries = env.install_entries();
+    let entry = find_install_entry(entries, repo_arg).ok_or_else(|| {
+        Error::failed(format!(
+            "No [[install]] entry for '{repo_arg}' in config.toml. \
+             Add one to enable cargo install for this repo."
+        ))
+    })?;
+
+    let detached_dir = env.layout().detached_dir();
+    run_cargo_install(detached_dir, entry)
+}
+
+pub(crate) fn install_all(env: &RuntimeEnvironment) -> Result<()> {
+    let entries = env.install_entries();
+    if entries.is_empty() {
+        process::log("No [[install]] entries in config.toml");
+        return Ok(());
+    }
+
+    let detached_dir = env.layout().detached_dir();
+    let mut errors: Vec<String> = Vec::new();
+
+    for entry in entries {
+        if let Err(err) = run_cargo_install(detached_dir, entry) {
+            process::warn(&format!("Failed to install {}: {err}", entry.repo));
+            errors.push(format!("{}: {err}", entry.repo));
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(Error::failed(format!("{} install(s) failed", errors.len())));
+    }
+
+    Ok(())
+}
+
+/// Try to install a repo if it has a matching [[install]] entry.
+/// Failures are logged as warnings and do not propagate.
+fn try_install(env: &RuntimeEnvironment, repo_key: &RepoKey) {
+    let entries = env.install_entries();
+    let Some(entry) = find_install_entry(entries, repo_key.as_ref()) else {
+        return;
+    };
+
+    let detached_dir = env.layout().detached_dir();
+    if let Err(err) = run_cargo_install(detached_dir, entry) {
+        process::warn(&format!("Failed to install {}: {err}", entry.repo));
+    }
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Find an [[install]] entry whose `repo` field matches the given argument.
+///
+/// Matches against the full repo key, or against the trailing repo name
+/// (the last path component) when there is exactly one match.
+fn find_install_entry<'a>(
+    entries: &'a [crate::runtime::config::InstallEntry],
+    query: &str,
+) -> Option<&'a crate::runtime::config::InstallEntry> {
+    // Exact match on full repo key.
+    if let Some(entry) = entries.iter().find(|e| e.repo == query) {
+        return Some(entry);
+    }
+
+    // Short-name suffix match: compare against last path component.
+    let matches: Vec<_> = entries
+        .iter()
+        .filter(|e| e.repo.rsplit('/').next().is_some_and(|name| name == query))
+        .collect();
+
+    if matches.len() == 1 {
+        return Some(matches[0]);
+    }
+
+    None
+}
+
+/// Run `cargo install --path <install_path> --locked [extra_flags...]` for a single install entry.
+fn run_cargo_install(
+    detached_dir: &std::path::Path,
+    entry: &crate::runtime::config::InstallEntry,
+) -> Result<()> {
+    let repo_key = RepoKey::new(&entry.repo);
+    let base_path = detached_dir.join(AsRef::<std::path::Path>::as_ref(&repo_key));
+
+    if !base_path.exists() {
+        return Err(Error::failed(format!(
+            "Detached worktree not found at {}. Run 'task detach add {}' first.",
+            base_path.display(),
+            entry.repo
+        )));
+    }
+
+    let install_path = match &entry.path {
+        Some(sub) => base_path.join(sub),
+        None => base_path,
+    };
+
+    if !install_path.join("Cargo.toml").exists() {
+        return Err(Error::failed(format!(
+            "No Cargo.toml found at {}",
+            install_path.display()
+        )));
+    }
+
+    let path_str = install_path.to_string_lossy();
+    process::log(&format!("Installing {} from {path_str}", entry.repo));
+
+    let mut args = vec!["install", "--path", &path_str, "--locked"];
+    let extra: Vec<&str> = entry.extra_flags.iter().map(String::as_str).collect();
+    args.extend(extra);
+
+    process::run_status("cargo", &args, None)
+}
 
 /// Returns true when `path` is the root of a git worktree (has a `.git` file
 /// as created by `git worktree add`, or is a bare/worktree with `HEAD`).
@@ -261,10 +397,10 @@ mod tests {
     use std::{fs, path::Path};
 
     use super::{
-        collect_detached_worktrees, is_detached_worktree, read_head_sha,
-        repo_key_from_detached_path,
+        collect_detached_worktrees, find_install_entry, is_detached_worktree, read_head_sha,
+        repo_key_from_detached_path, run_cargo_install,
     };
-    use crate::runtime::{RepoKey, environment::RuntimeEnvironment};
+    use crate::runtime::{RepoKey, config::InstallEntry, environment::RuntimeEnvironment};
 
     struct TempDir(std::path::PathBuf);
 
@@ -408,6 +544,8 @@ mod tests {
         let ok = std::process::Command::new("git")
             .args(["init", "--bare"])
             .arg(path)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", std::env::temp_dir())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -626,6 +764,196 @@ mod tests {
                     .map(|mut d| d.next().is_none())
                     .unwrap_or(false),
                 "org dir should be empty after worktree removal"
+            );
+        }
+    }
+
+    mod find_install_entry_tests {
+        use super::*;
+
+        fn entries() -> Vec<InstallEntry> {
+            vec![
+                InstallEntry {
+                    repo: "github.com/org/tool".to_string(),
+                    path: None,
+                    extra_flags: vec![],
+                },
+                InstallEntry {
+                    repo: "gitlab.com/team/app".to_string(),
+                    path: Some("crates/cli".to_string()),
+                    extra_flags: vec![],
+                },
+            ]
+        }
+
+        #[test]
+        fn matches_full_repo_key() {
+            let e = entries();
+            let found = find_install_entry(&e, "github.com/org/tool");
+            assert_eq!(found.unwrap().repo, "github.com/org/tool");
+        }
+
+        #[test]
+        fn matches_short_name() {
+            let e = entries();
+            let found = find_install_entry(&e, "tool");
+            assert_eq!(found.unwrap().repo, "github.com/org/tool");
+        }
+
+        #[test]
+        fn returns_none_when_no_match() {
+            let e = entries();
+            assert!(find_install_entry(&e, "nonexistent").is_none());
+        }
+
+        #[test]
+        fn returns_none_when_ambiguous_short_name() {
+            let entries = vec![
+                InstallEntry {
+                    repo: "github.com/a/cli".to_string(),
+                    path: None,
+                    extra_flags: vec![],
+                },
+                InstallEntry {
+                    repo: "gitlab.com/b/cli".to_string(),
+                    path: None,
+                    extra_flags: vec![],
+                },
+            ];
+            assert!(find_install_entry(&entries, "cli").is_none());
+        }
+
+        #[test]
+        fn returns_entry_with_sub_path() {
+            let e = entries();
+            let found = find_install_entry(&e, "gitlab.com/team/app");
+            assert_eq!(found.unwrap().path.as_deref(), Some("crates/cli"));
+        }
+
+        #[test]
+        fn returns_none_for_empty_entries() {
+            let empty: Vec<InstallEntry> = Vec::new();
+            assert!(find_install_entry(&empty, "anything").is_none());
+        }
+    }
+
+    mod run_cargo_install_tests {
+        use super::*;
+
+        #[test]
+        fn errors_when_detached_worktree_missing() {
+            let dir = TempDir::new("install-no-wt");
+            let entry = InstallEntry {
+                repo: "github.com/org/missing".to_string(),
+                path: None,
+                extra_flags: vec![],
+            };
+
+            let result = run_cargo_install(dir.path(), &entry);
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("not found") || msg.contains("Detached worktree"),
+                "expected worktree-missing error: {msg}"
+            );
+        }
+
+        #[test]
+        fn errors_when_no_cargo_toml() {
+            let dir = TempDir::new("install-no-cargo");
+            let wt = dir.path().join("github.com/org/nocargo");
+            fs::create_dir_all(&wt).unwrap();
+
+            let entry = InstallEntry {
+                repo: "github.com/org/nocargo".to_string(),
+                path: None,
+                extra_flags: vec![],
+            };
+
+            let result = run_cargo_install(dir.path(), &entry);
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("Cargo.toml"),
+                "expected Cargo.toml error: {msg}"
+            );
+        }
+
+        #[test]
+        fn errors_when_sub_path_has_no_cargo_toml() {
+            let dir = TempDir::new("install-subpath-no-cargo");
+            let wt = dir.path().join("github.com/org/workspace/crates/cli");
+            fs::create_dir_all(&wt).unwrap();
+
+            let entry = InstallEntry {
+                repo: "github.com/org/workspace".to_string(),
+                path: Some("crates/cli".to_string()),
+                extra_flags: vec![],
+            };
+
+            let result = run_cargo_install(dir.path(), &entry);
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("Cargo.toml"),
+                "expected Cargo.toml error: {msg}"
+            );
+        }
+
+        #[test]
+        fn extra_flags_do_not_suppress_missing_cargo_toml_error() {
+            // Even with extra_flags set, the Cargo.toml validation fires before
+            // the cargo invocation.
+            let dir = TempDir::new("install-extra-flags-no-cargo");
+            let wt = dir.path().join("github.com/org/tool");
+            fs::create_dir_all(&wt).unwrap();
+
+            let entry = InstallEntry {
+                repo: "github.com/org/tool".to_string(),
+                path: None,
+                extra_flags: vec!["--all-features".to_string()],
+            };
+
+            let result = run_cargo_install(dir.path(), &entry);
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("Cargo.toml"),
+                "expected Cargo.toml error even with extra_flags: {msg}"
+            );
+        }
+    }
+
+    mod install_all_tests {
+        use super::{super::install_all, *};
+
+        #[test]
+        fn returns_ok_when_no_install_entries() {
+            let dir = TempDir::new("install-all-empty");
+            let env = make_env(dir.path());
+
+            let result = install_all(&env);
+            assert!(
+                result.is_ok(),
+                "should succeed with no install entries: {result:?}"
+            );
+        }
+    }
+
+    mod install_one_tests {
+        use super::{super::install_one, *};
+
+        #[test]
+        fn errors_when_no_install_entry_configured() {
+            let dir = TempDir::new("install-one-no-entry");
+            let env = make_env(dir.path());
+
+            let result = install_one(&env, "github.com/org/unconfigured");
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("No [[install]] entry"),
+                "expected config-missing error: {msg}"
             );
         }
     }
