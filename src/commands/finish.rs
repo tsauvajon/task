@@ -4,7 +4,7 @@ use crate::{
     error::{Error, Result},
     runtime::{environment::RuntimeEnvironment, process},
     tools::{
-        git::worktrees::{prune, remove, status_porcelain},
+        git::worktrees::{self, prune, remove, status_porcelain},
         tmux::workflow::finish_session,
         vscodium::workflow::cleanup,
     },
@@ -58,8 +58,9 @@ pub fn run(
         }
     }
 
-    finish_session(&repo_key, &branch, &gitdir)?;
-    if let Err(err) = cleanup(&repo_key, &branch) {
+    let wt_name = worktrees::worktree_name(context.layout().wt_dir(), &repo_key, &worktree);
+    finish_session(&repo_key, &wt_name, &gitdir)?;
+    if let Err(err) = cleanup(&repo_key, &wt_name) {
         process::warn(&format!(
             "Failed to remove task editor state for {repo_key} {branch}: {err}"
         ));

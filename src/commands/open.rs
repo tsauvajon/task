@@ -208,6 +208,7 @@ mod tests {
                 status: TaskStatus::Parked,
                 repo: RepoKey::new("github.com/acme/tool"),
                 branch: BranchName::new(branch),
+                worktree_name: branch.to_string(),
                 path: PathBuf::from("/tmp/wt/tool/feat/login"),
             }
         }
@@ -240,6 +241,7 @@ mod tests {
                 status: TaskStatus::Parked,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new("feat/login"),
+                worktree_name: "feat/login".to_string(),
                 path: PathBuf::from("/tmp/wt/tool/feat/login"),
             }
         }
@@ -281,6 +283,7 @@ mod tests {
                 status: TaskStatus::Parked,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
+                worktree_name: branch.to_string(),
                 path: PathBuf::from(format!("/tmp/wt/{repo}/{branch}")),
             }
         }
@@ -405,6 +408,7 @@ mod tests {
                 status: TaskStatus::Parked,
                 repo: RepoKey::new("github.com/acme/tool"),
                 branch: BranchName::new(branch),
+                worktree_name: branch.to_string(),
                 path: PathBuf::from("/tmp/wt/tool/feat"),
             }
         }
@@ -437,6 +441,7 @@ mod tests {
                 status: TaskStatus::Parked,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new("feat/login"),
+                worktree_name: "feat/login".to_string(),
                 path: PathBuf::from("/tmp/wt/tool/feat/login"),
             }
         }

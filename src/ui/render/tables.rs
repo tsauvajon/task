@@ -234,6 +234,7 @@ mod tests {
                 status: TaskStatus::Parked,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
+                worktree_name: branch.to_string(),
                 path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
             }
         }

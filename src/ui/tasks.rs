@@ -121,7 +121,8 @@ pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) 
         ));
     }
 
-    match park(&row.repo, &row.branch, &row.path)? {
+    let title = format!("{} {}", row.repo, row.branch);
+    match park(&row.repo, &row.worktree_name, &row.path, &title)? {
         ParkResult::Parked => state.message = format!("Parked task: {} {}", row.repo, row.branch),
         ParkResult::AlreadyParked => {
             state.message = format!("Task already parked: {} {}", row.repo, row.branch)
@@ -242,6 +243,7 @@ mod tests {
                 status,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
+                worktree_name: branch.to_string(),
                 path: PathBuf::from("/tmp"),
             }
         }

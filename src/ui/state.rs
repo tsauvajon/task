@@ -319,6 +319,7 @@ mod tests {
             status: TaskStatus::Open,
             repo: RepoKey::new("github.com/acme/app"),
             branch: BranchName::new("main"),
+            worktree_name: "main".to_string(),
             path: PathBuf::from("/tmp/dev/wt/github.com/acme/app/main"),
         }
     }
@@ -329,6 +330,7 @@ mod tests {
             status: TaskStatus::Open,
             repo: RepoKey::new(repo),
             branch: BranchName::new("main"),
+            worktree_name: "main".to_string(),
             path: PathBuf::from(format!("/tmp/dev/wt/{repo}/main")),
         }
     }
@@ -711,6 +713,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
+                worktree_name: branch.to_string(),
                 path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
             }
         }
@@ -762,12 +765,14 @@ mod tests {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/acme/app"),
                         branch: BranchName::new("feature-x"),
+                        worktree_name: "feature-x".to_string(),
                         path: PathBuf::from("/tmp/a"),
                     },
                     crate::runtime::task_rows::TaskRow {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/acme/app"),
                         branch: BranchName::new("main"),
+                        worktree_name: "main".to_string(),
                         path: PathBuf::from("/tmp/b"),
                     },
                 ],
@@ -791,12 +796,14 @@ mod tests {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/acme/app"),
                         branch: BranchName::new("main"),
+                        worktree_name: "main".to_string(),
                         path: PathBuf::from("/projects/special/path"),
                     },
                     crate::runtime::task_rows::TaskRow {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/acme/app"),
                         branch: BranchName::new("main"),
+                        worktree_name: "main".to_string(),
                         path: PathBuf::from("/other/path"),
                     },
                 ],

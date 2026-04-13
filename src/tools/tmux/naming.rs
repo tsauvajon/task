@@ -1,5 +1,10 @@
-pub fn session_name(repo_key: &str, branch: &str) -> String {
-    let raw = format!("{repo_key}-{branch}");
+/// Build a sanitized tmux session name from a repo key and a stable
+/// worktree identity (the directory name under `wt/<repo>/`).
+///
+/// Use the worktree name — not the current Git branch — so that branch
+/// renames don't break session lookup during park/finish.
+pub fn session_name(repo_key: &str, worktree_name: &str) -> String {
+    let raw = format!("{repo_key}-{worktree_name}");
     let mut output = String::with_capacity(raw.len());
 
     for ch in raw.chars() {

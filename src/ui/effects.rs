@@ -150,6 +150,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/acme/app"),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
             };
             let mut state = UiState::new(vec![row], vec![], None);
@@ -179,6 +180,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/acme/app"),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
             };
             let mut state = UiState::new(vec![row], vec![], None);

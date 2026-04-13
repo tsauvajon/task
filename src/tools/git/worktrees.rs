@@ -140,6 +140,36 @@ pub fn branch_from_worktree_path(
     Some(relative.to_string_lossy().into_owned())
 }
 
+/// Extract the stable worktree identity from a worktree path.
+///
+/// Returns the path relative to `wt_dir/repo_key` — this is the directory
+/// name chosen at `task start` time and never changed by Git branch renames.
+/// Use it (instead of the current Git branch name) for session/profile
+/// identity so that renames don't break teardown.
+///
+/// Both `wt_dir` and `worktree_path` are canonicalized internally so that
+/// symlinked layouts (e.g. macOS `/var` → `/private/var`) resolve correctly.
+/// Falls back to the raw paths, then to the last path component.
+pub fn worktree_name(wt_dir: &Path, repo_key: &str, worktree_path: &Path) -> String {
+    // Try canonical paths first (handles symlinks like /var → /private/var).
+    let real_wt = std::fs::canonicalize(wt_dir).ok();
+    let real_path = std::fs::canonicalize(worktree_path).ok();
+    if let (Some(rw), Some(rp)) = (&real_wt, &real_path)
+        && let Some(name) = branch_from_worktree_path(rw, repo_key, rp)
+    {
+        return name;
+    }
+
+    // Fall back to raw (non-canonical) paths.
+    branch_from_worktree_path(wt_dir, repo_key, worktree_path)
+        .or_else(|| {
+            worktree_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Create a detached worktree at `path` pinned to `base_ref` (e.g. `origin/HEAD`).
 /// Equivalent to: git --git-dir <gitdir> worktree add --detach <path> <base_ref>
 pub fn add_detached(gitdir: &Path, path: &Path, base_ref: &str) -> Result<()> {
@@ -558,6 +588,86 @@ branch refs/heads/main\n\
             let head = git_output(&["rev-parse", "HEAD"], detached.as_path());
             let origin_main = git_output(&["rev-parse", "origin/main"], detached.as_path());
             assert_eq!(head, origin_main, "detached HEAD should match origin/main");
+        }
+    }
+
+    mod worktree_name {
+        use std::path::Path;
+
+        use super::super::worktree_name;
+
+        #[test]
+        fn extracts_relative_path() {
+            let wt_dir = Path::new("/tmp/dev/wt");
+            let path = Path::new("/tmp/dev/wt/github.com/org/repo/feat-login");
+            assert_eq!(
+                worktree_name(wt_dir, "github.com/org/repo", path),
+                "feat-login"
+            );
+        }
+
+        #[test]
+        fn preserves_slashes_in_branch_style_directory() {
+            let wt_dir = Path::new("/tmp/dev/wt");
+            let path = Path::new("/tmp/dev/wt/github.com/org/repo/feat/login");
+            assert_eq!(
+                worktree_name(wt_dir, "github.com/org/repo", path),
+                "feat/login"
+            );
+        }
+
+        #[test]
+        fn falls_back_to_last_component_when_not_under_wt_dir() {
+            let wt_dir = Path::new("/tmp/dev/wt");
+            let path = Path::new("/somewhere/else/bump-deps");
+            assert_eq!(
+                worktree_name(wt_dir, "github.com/org/repo", path),
+                "bump-deps"
+            );
+        }
+
+        #[test]
+        fn returns_unknown_for_root_path() {
+            let wt_dir = Path::new("/tmp/dev/wt");
+            let path = Path::new("/");
+            assert_eq!(
+                worktree_name(wt_dir, "github.com/org/repo", path),
+                "unknown"
+            );
+        }
+
+        /// On macOS `/var` is a symlink to `/private/var`. When wt_dir uses
+        /// the symlink form and worktree_path uses the canonical form (or
+        /// vice versa), the raw `strip_prefix` fails. Canonicalization inside
+        /// `worktree_name` must handle this so nested branches like
+        /// `feat/login` don't collapse to just `login`.
+        #[test]
+        fn resolves_through_symlinks_for_nested_branch() {
+            // Create a real directory tree, then symlink so paths diverge.
+            let dir = super::TempDir::new("wt-name-symlink");
+            let real_wt = dir.path().join("real_wt");
+            let repo_tree = real_wt.join("org/repo/feat/login");
+            std::fs::create_dir_all(&repo_tree).unwrap();
+
+            // Symlink: <tmp>/link_wt → <tmp>/real_wt
+            let link_wt = dir.path().join("link_wt");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&real_wt, &link_wt).unwrap();
+
+            // wt_dir uses the symlink, worktree_path uses the real path.
+            let result = worktree_name(&link_wt, "org/repo", &repo_tree);
+            assert_eq!(
+                result, "feat/login",
+                "should resolve through symlink and preserve nested path"
+            );
+
+            // Reverse: wt_dir is real, worktree_path uses symlink.
+            let link_path = link_wt.join("org/repo/feat/login");
+            let result = worktree_name(&real_wt, "org/repo", &link_path);
+            assert_eq!(
+                result, "feat/login",
+                "should resolve through symlink in the other direction too"
+            );
         }
     }
 }

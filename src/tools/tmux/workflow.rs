@@ -81,19 +81,19 @@ fn new_session_args(session: &str, path: &Path, startup: SessionStartup) -> Vec<
 /// If codium is not running, a new window is opened.
 fn ensure_codium_running(
     repo_key: &str,
-    branch: &str,
+    worktree_name: &str,
     path: &Path,
     codium_trusted_roots: &[PathBuf],
 ) {
     // Always seed trusted roots so they're ready for the current or next launch.
-    seed_task_trusted_roots(repo_key, branch, codium_trusted_roots);
+    seed_task_trusted_roots(repo_key, worktree_name, codium_trusted_roots);
 
-    match codium_state(repo_key, branch) {
+    match codium_state(repo_key, worktree_name) {
         Ok(CodiumState::Running) => {}
         Ok(CodiumState::NotRunning) | Err(_) => {
-            if let Err(err) = open_window(repo_key, branch, path, codium_trusted_roots) {
+            if let Err(err) = open_window(repo_key, worktree_name, path, codium_trusted_roots) {
                 process::warn(&format!(
-                    "Failed to open VSCodium for {repo_key} {branch}: {err}"
+                    "Failed to open VSCodium for {repo_key} {worktree_name}: {err}"
                 ));
             }
         }
@@ -114,7 +114,7 @@ fn is_inside_tmux() -> bool {
 
 pub fn open_session(
     repo_key: &str,
-    branch: &str,
+    worktree_name: &str,
     path: &Path,
     codium_trusted_roots: &[PathBuf],
 ) -> Result<OpenResult> {
@@ -122,9 +122,9 @@ pub fn open_session(
         return Ok(OpenResult::Unavailable);
     }
 
-    ensure_codium_running(repo_key, branch, path, codium_trusted_roots);
+    ensure_codium_running(repo_key, worktree_name, path, codium_trusted_roots);
 
-    let session = session_name(repo_key, branch);
+    let session = session_name(repo_key, worktree_name);
     if !has_session(&session) {
         let startup = if process::command_exists("opencode") {
             SessionStartup::WithOpencode(opencode::launch_command(path))
@@ -161,22 +161,21 @@ pub fn open_session(
     Ok(OpenResult::Attached)
 }
 
-pub fn park(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
-    let session = session_name(repo_key, branch);
+pub fn park(repo_key: &str, worktree_name: &str, path: &Path, title: &str) -> Result<ParkResult> {
+    let session = session_name(repo_key, worktree_name);
     let has_tmux_session = has_session_in(&session, Some(path));
     let mut result = ParkResult::AlreadyParked;
-    let title = format!("{repo_key} {branch}");
 
-    if let Err(err) = opencode::rename_latest_session_title(path, &title) {
+    if let Err(err) = opencode::rename_latest_session_title(path, title) {
         process::warn(&format!(
-            "Failed to update opencode session title for {repo_key} {branch}: {err}"
+            "Failed to update opencode session title for {title}: {err}"
         ));
     }
 
     for action in park_teardown_actions(has_tmux_session) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = close_windows(repo_key, branch);
+                let _ = close_windows(repo_key, worktree_name);
             }
             TeardownAction::KillTmuxSession => {
                 status(&["kill-session", "-t", &session], Some(path))?;
@@ -188,14 +187,14 @@ pub fn park(repo_key: &str, branch: &str, path: &Path) -> Result<ParkResult> {
     Ok(result)
 }
 
-pub fn finish_session(repo_key: &str, branch: &str, cwd: &Path) -> Result<()> {
+pub fn finish_session(repo_key: &str, worktree_name: &str, cwd: &Path) -> Result<()> {
     let tmux_available = is_available();
-    let session = session_name(repo_key, branch);
+    let session = session_name(repo_key, worktree_name);
 
     for action in finish_teardown_actions(tmux_available) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = close_windows(repo_key, branch);
+                let _ = close_windows(repo_key, worktree_name);
             }
             TeardownAction::KillTmuxSession => {
                 // Attempt kill-session directly without checking has-session

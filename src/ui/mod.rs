@@ -495,12 +495,14 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/b"),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
             },
             TaskRow {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/c"),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/c"),
             },
         ];
@@ -525,12 +527,14 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/b"),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
             },
             TaskRow {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/c"),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/c"),
             },
         ];
@@ -557,6 +561,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(format!("github.com/a/r{i}")),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from(format!("/tmp/{i}")),
             })
             .collect();
@@ -582,6 +587,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(format!("github.com/a/r{i}")),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from(format!("/tmp/{i}")),
             })
             .collect();
@@ -607,6 +613,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(format!("github.com/a/r{i}")),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from(format!("/tmp/{i}")),
             })
             .collect();
@@ -631,6 +638,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(format!("github.com/a/r{i}")),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from(format!("/tmp/{i}")),
             })
             .collect();
@@ -770,12 +778,14 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/app"),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
             },
             TaskRow {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/ops"),
                 branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/b"),
             },
         ];
@@ -1066,6 +1076,7 @@ mod tests {
             status: TaskStatus::Open,
             repo: RepoKey::new("github.com/a/b"),
             branch: BranchName::new("my-branch"),
+            worktree_name: "my-branch".to_string(),
             path: PathBuf::from("/tmp/a"),
         };
         let mut state = UiState::new(vec![row], vec![], None);

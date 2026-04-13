@@ -27,7 +27,9 @@ use crate::{
                 ResolveResult, clone_bare_repo, is_valid_bare_repo, parse_repo_input,
                 resolve_repo_query,
             },
-            worktrees::{branch_from_worktree_path, list_porcelain, parse_worktree_porcelain},
+            worktrees::{
+                self, branch_from_worktree_path, list_porcelain, parse_worktree_porcelain,
+            },
         },
         nodejs,
         tmux::{
@@ -215,7 +217,7 @@ impl TaskResolver {
     fn launch_workspace_impl(
         &self,
         repo_key: &RepoKey,
-        branch: &BranchName,
+        _branch: &BranchName,
         path: &Path,
         interactive: bool,
         no_open: bool,
@@ -236,7 +238,9 @@ impl TaskResolver {
             }
         }
 
-        if open_session(repo_key, branch, path, &self.codium_trusted_roots)? == OpenResult::Attached
+        let wt_name = worktrees::worktree_name(self.layout.wt_dir(), repo_key, path);
+        if open_session(repo_key, &wt_name, path, &self.codium_trusted_roots)?
+            == OpenResult::Attached
         {
             return Ok(());
         }
