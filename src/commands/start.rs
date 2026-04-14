@@ -4,8 +4,11 @@ use crate::{
     error::{Error, Result},
     runtime::{BranchName, environment::RuntimeEnvironment, process},
     tools::git::{
-        refs::{detect_default_base, fetch_origin_refs, ref_exists, rev_exists},
-        worktrees::{add_existing_branch, add_from_base, add_tracking_remote_branch},
+        refs::{current_branch, detect_default_base, fetch_origin_refs, ref_exists, rev_exists},
+        worktrees::{
+            add_existing_branch, add_from_base, add_tracking_remote_branch,
+            checkout_or_create_branch, status_porcelain,
+        },
     },
 };
 
@@ -38,6 +41,7 @@ pub fn run(
             )));
         }
         WorktreePathState::Existing => {
+            sync_existing_worktree_branch(&worktree, branch, &base_ref)?;
             process::log(&format!(
                 "Reusing existing worktree: {}",
                 worktree.display()
@@ -96,6 +100,26 @@ fn classify_worktree_path(worktree: &std::path::Path) -> WorktreePathState {
     }
 }
 
+fn sync_existing_worktree_branch(
+    worktree: &std::path::Path,
+    branch: &str,
+    base_ref: &str,
+) -> Result<()> {
+    if current_branch(worktree).as_deref() == Some(branch) {
+        return Ok(());
+    }
+
+    let status = status_porcelain(worktree)?;
+    if !status.trim().is_empty() {
+        return Err(Error::failed(format!(
+            "Cannot switch existing worktree with uncommitted changes: {}",
+            worktree.display()
+        )));
+    }
+
+    checkout_or_create_branch(worktree, branch, base_ref)
+}
+
 /// Which git operation to perform when creating the worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BranchStrategy {
@@ -134,10 +158,11 @@ fn resolve_branch_strategy(
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs, path::PathBuf};
+    use std::{env, fs, path::PathBuf, process::Command};
 
     use super::{
         BranchStrategy, WorktreePathState, classify_worktree_path, resolve_branch_strategy,
+        sync_existing_worktree_branch,
     };
 
     struct TempDir(PathBuf);
@@ -159,6 +184,29 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn run_git(args: &[&str], cwd: &std::path::Path) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", cwd)
+            .status()
+            .expect("git must be available");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn git_output(args: &[&str], cwd: &std::path::Path) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", cwd)
+            .output()
+            .expect("git must be available");
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
     mod classify_worktree_path_tests {
@@ -338,6 +386,85 @@ mod tests {
                 classify_worktree_path(dir.path()),
                 WorktreePathState::Existing
             );
+        }
+    }
+
+    mod sync_existing_worktree_branch_tests {
+        use super::*;
+
+        #[test]
+        fn does_nothing_when_branch_already_matches() {
+            let dir = TempDir::new("sync-existing-matches");
+            run_git(&["init", "-b", "feature"], dir.path());
+            run_git(&["config", "user.email", "test@example.com"], dir.path());
+            run_git(&["config", "user.name", "Test"], dir.path());
+            fs::write(dir.path().join("README.md"), "v1\n").unwrap();
+            run_git(&["add", "README.md"], dir.path());
+            run_git(&["commit", "-m", "initial"], dir.path());
+
+            sync_existing_worktree_branch(dir.path(), "feature", "main").unwrap();
+
+            let head = git_output(&["symbolic-ref", "--quiet", "--short", "HEAD"], dir.path());
+            assert_eq!(head, "feature");
+        }
+
+        #[test]
+        fn switches_to_requested_branch_when_existing_worktree_is_on_other_branch() {
+            let dir = TempDir::new("sync-existing-switches");
+            run_git(&["init", "-b", "main"], dir.path());
+            run_git(&["config", "user.email", "test@example.com"], dir.path());
+            run_git(&["config", "user.name", "Test"], dir.path());
+            fs::write(dir.path().join("README.md"), "v1\n").unwrap();
+            run_git(&["add", "README.md"], dir.path());
+            run_git(&["commit", "-m", "initial"], dir.path());
+            run_git(&["checkout", "-b", "feature"], dir.path());
+            run_git(&["checkout", "main"], dir.path());
+
+            sync_existing_worktree_branch(dir.path(), "feature", "main").unwrap();
+
+            let head = git_output(&["symbolic-ref", "--quiet", "--short", "HEAD"], dir.path());
+            assert_eq!(head, "feature");
+        }
+
+        #[test]
+        fn creates_requested_branch_when_missing_in_existing_worktree() {
+            let dir = TempDir::new("sync-existing-creates");
+            run_git(&["init", "-b", "main"], dir.path());
+            run_git(&["config", "user.email", "test@example.com"], dir.path());
+            run_git(&["config", "user.name", "Test"], dir.path());
+            fs::write(dir.path().join("README.md"), "v1\n").unwrap();
+            run_git(&["add", "README.md"], dir.path());
+            run_git(&["commit", "-m", "initial"], dir.path());
+
+            sync_existing_worktree_branch(dir.path(), "feature", "main").unwrap();
+
+            let head = git_output(&["symbolic-ref", "--quiet", "--short", "HEAD"], dir.path());
+            assert_eq!(head, "feature");
+        }
+
+        #[test]
+        fn errors_when_existing_worktree_has_uncommitted_changes() {
+            let dir = TempDir::new("sync-existing-dirty");
+            run_git(&["init", "-b", "main"], dir.path());
+            run_git(&["config", "user.email", "test@example.com"], dir.path());
+            run_git(&["config", "user.name", "Test"], dir.path());
+            fs::write(dir.path().join("README.md"), "v1\n").unwrap();
+            run_git(&["add", "README.md"], dir.path());
+            run_git(&["commit", "-m", "initial"], dir.path());
+            run_git(&["checkout", "-b", "feature"], dir.path());
+            run_git(&["checkout", "main"], dir.path());
+            fs::write(dir.path().join("README.md"), "dirty\n").unwrap();
+
+            let err = sync_existing_worktree_branch(dir.path(), "feature", "main").unwrap_err();
+
+            assert!(
+                err.to_string()
+                    .contains("Cannot switch existing worktree with uncommitted changes"),
+                "unexpected error: {err}"
+            );
+
+            let head = git_output(&["symbolic-ref", "--quiet", "--short", "HEAD"], dir.path());
+            assert_eq!(head, "main");
         }
     }
 }

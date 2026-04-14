@@ -82,6 +82,14 @@ pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {
     status(&["-C", worktree_str.as_ref(), "rebase", base_ref], None)
 }
 
+pub fn checkout_or_create_branch(worktree: &Path, branch: &str, base_ref: &str) -> Result<()> {
+    if local_branch_exists_in_worktree(worktree, branch) {
+        return checkout_branch(worktree, branch);
+    }
+
+    create_branch_from_base(worktree, branch, base_ref)
+}
+
 pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
     #[derive(Default)]
     struct Builder {
@@ -270,6 +278,36 @@ fn rev_exists_in_worktree(path: &Path, revision: &str) -> bool {
     .is_ok()
 }
 
+fn local_branch_exists_in_worktree(path: &Path, branch: &str) -> bool {
+    let path_str = path.to_string_lossy();
+    let branch_ref = format!("refs/heads/{branch}");
+    status(
+        &[
+            "-C",
+            path_str.as_ref(),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &branch_ref,
+        ],
+        None,
+    )
+    .is_ok()
+}
+
+fn checkout_branch(path: &Path, branch: &str) -> Result<()> {
+    let path_str = path.to_string_lossy();
+    status(&["-C", path_str.as_ref(), "checkout", branch], None)
+}
+
+fn create_branch_from_base(path: &Path, branch: &str, base_ref: &str) -> Result<()> {
+    let path_str = path.to_string_lossy();
+    status(
+        &["-C", path_str.as_ref(), "checkout", "-b", branch, base_ref],
+        None,
+    )
+}
+
 pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
     let branch_ref = branch_ref?;
     Some(
@@ -289,8 +327,8 @@ mod tests {
     };
 
     use super::{
-        WorktreeEntry, branch_from_ref, branch_from_worktree_path, parse_worktree_porcelain,
-        update_detached,
+        WorktreeEntry, branch_from_ref, branch_from_worktree_path, checkout_or_create_branch,
+        parse_worktree_porcelain, update_detached,
     };
 
     struct TempDir(PathBuf);
@@ -588,6 +626,71 @@ branch refs/heads/main\n\
             let head = git_output(&["rev-parse", "HEAD"], detached.as_path());
             let origin_main = git_output(&["rev-parse", "origin/main"], detached.as_path());
             assert_eq!(head, origin_main, "detached HEAD should match origin/main");
+        }
+    }
+
+    mod checkout_or_create_branch_tests {
+        use super::*;
+
+        #[test]
+        fn checks_out_existing_local_branch() {
+            let dir = TempDir::new("checkout-existing-branch");
+            let repo = dir.path().join("repo");
+
+            fs::create_dir_all(&repo).expect("create repo dir");
+            run_git(&["init", "-b", "main"], repo.as_path());
+            run_git(
+                &["config", "user.email", "test@example.com"],
+                repo.as_path(),
+            );
+            run_git(&["config", "user.name", "Test"], repo.as_path());
+            fs::write(repo.join("README.md"), "v1\n").expect("write initial file");
+            run_git(&["add", "README.md"], repo.as_path());
+            run_git(&["commit", "-m", "initial"], repo.as_path());
+            run_git(&["checkout", "-b", "feature"], repo.as_path());
+            run_git(&["checkout", "main"], repo.as_path());
+
+            checkout_or_create_branch(repo.as_path(), "feature", "main")
+                .expect("checkout existing branch");
+
+            let head = git_output(
+                &["symbolic-ref", "--quiet", "--short", "HEAD"],
+                repo.as_path(),
+            );
+            assert_eq!(head, "feature");
+        }
+
+        #[test]
+        fn creates_missing_branch_from_base() {
+            let dir = TempDir::new("checkout-create-branch");
+            let repo = dir.path().join("repo");
+
+            fs::create_dir_all(&repo).expect("create repo dir");
+            run_git(&["init", "-b", "main"], repo.as_path());
+            run_git(
+                &["config", "user.email", "test@example.com"],
+                repo.as_path(),
+            );
+            run_git(&["config", "user.name", "Test"], repo.as_path());
+            fs::write(repo.join("README.md"), "v1\n").expect("write initial file");
+            run_git(&["add", "README.md"], repo.as_path());
+            run_git(&["commit", "-m", "initial"], repo.as_path());
+
+            checkout_or_create_branch(repo.as_path(), "feature", "main")
+                .expect("create branch from base");
+
+            let head = git_output(
+                &["symbolic-ref", "--quiet", "--short", "HEAD"],
+                repo.as_path(),
+            );
+            assert_eq!(head, "feature");
+
+            let branch_ref = git_output(&["rev-parse", "feature"], repo.as_path());
+            let base_ref = git_output(&["rev-parse", "main"], repo.as_path());
+            assert_eq!(
+                branch_ref, base_ref,
+                "new branch should start from base ref"
+            );
         }
     }
 
