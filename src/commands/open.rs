@@ -23,9 +23,7 @@ pub fn run(
 ) -> Result<()> {
     if let (Some(query), None) = (repo_arg, branch_arg) {
         let row = select_task_by_query(context, query)?;
-        return context
-            .tasks()
-            .launch_workspace(&row.repo, &row.branch, &row.path);
+        return context.tasks().launch_workspace(&row.repo, &row.path);
     }
 
     let (repo_key_raw, branch) = context
@@ -39,9 +37,7 @@ pub fn run(
             worktree.display()
         )));
     }
-    context
-        .tasks()
-        .launch_workspace(&repo_key, &branch, &worktree)
+    context.tasks().launch_workspace(&repo_key, &worktree)
 }
 
 fn select_task_by_query(context: &RuntimeEnvironment, query: &str) -> Result<TaskRow> {

@@ -42,12 +42,9 @@ pub fn run(
                 "Reusing existing worktree: {}",
                 worktree.display()
             ));
-            return context.tasks().launch_workspace_no_open(
-                &repo_key,
-                &branch_name,
-                &worktree,
-                no_open,
-            );
+            return context
+                .tasks()
+                .launch_workspace_no_open(&repo_key, &worktree, no_open);
         }
         WorktreePathState::New => {}
     }
@@ -75,7 +72,7 @@ pub fn run(
 
     context
         .tasks()
-        .launch_workspace_no_open(&repo_key, &branch_name, &worktree, no_open)
+        .launch_workspace_no_open(&repo_key, &worktree, no_open)
 }
 
 /// Outcome of inspecting the target worktree path on disk.

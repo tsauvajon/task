@@ -38,9 +38,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
 
     match ui_result? {
         UiAction::Quit => Ok(()),
-        UiAction::Open(row) => context
-            .tasks()
-            .launch_workspace(&row.repo, &row.branch, &row.path),
+        UiAction::Open(row) => context.tasks().launch_workspace(&row.repo, &row.path),
         UiAction::Create { repo, branch } => {
             crate::commands::start::run(context, &repo, &branch, None, false)
         }

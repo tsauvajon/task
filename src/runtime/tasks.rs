@@ -195,29 +195,22 @@ impl TaskResolver {
         )))
     }
 
-    pub fn launch_workspace(
-        &self,
-        repo_key: &RepoKey,
-        branch: &BranchName,
-        path: &Path,
-    ) -> Result<()> {
-        self.launch_workspace_impl(repo_key, branch, path, is_interactive_terminal(), false)
+    pub fn launch_workspace(&self, repo_key: &RepoKey, path: &Path) -> Result<()> {
+        self.launch_workspace_impl(repo_key, path, is_interactive_terminal(), false)
     }
 
     pub fn launch_workspace_no_open(
         &self,
         repo_key: &RepoKey,
-        branch: &BranchName,
         path: &Path,
         no_open: bool,
     ) -> Result<()> {
-        self.launch_workspace_impl(repo_key, branch, path, is_interactive_terminal(), no_open)
+        self.launch_workspace_impl(repo_key, path, is_interactive_terminal(), no_open)
     }
 
     fn launch_workspace_impl(
         &self,
         repo_key: &RepoKey,
-        _branch: &BranchName,
         path: &Path,
         interactive: bool,
         no_open: bool,
@@ -1294,11 +1287,10 @@ mod tests {
             let resolver = resolver_for(&repos_dir, &wt_dir);
 
             let repo_key = RepoKey::new("github.com/me/app");
-            let branch = BranchName::new("feat-x");
             let path = dir.path().join("worktree");
 
             // interactive=false, no_open=false → non-interactive path; must succeed
-            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, false, false);
+            let result = resolver.launch_workspace_impl(&repo_key, &path, false, false);
             assert!(
                 result.is_ok(),
                 "non-interactive launch_workspace should succeed"
@@ -1315,11 +1307,10 @@ mod tests {
             let resolver = resolver_for(&repos_dir, &wt_dir);
 
             let repo_key = RepoKey::new("github.com/me/app");
-            let branch = BranchName::new("feat-y");
             // Intentionally point at a path that does not exist on disk.
             let path = dir.path().join("no-such-worktree");
 
-            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, false, false);
+            let result = resolver.launch_workspace_impl(&repo_key, &path, false, false);
             assert!(
                 result.is_ok(),
                 "non-interactive launch_workspace should succeed even with missing path"
@@ -1334,11 +1325,10 @@ mod tests {
             let resolver = resolver_for(&repos_dir, &wt_dir);
 
             let repo_key = RepoKey::new("github.com/me/app");
-            let branch = BranchName::new("feat-z");
             let path = dir.path().join("worktree");
 
             // interactive=true but no_open=true → must also skip tools and succeed
-            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, true, true);
+            let result = resolver.launch_workspace_impl(&repo_key, &path, true, true);
             assert!(
                 result.is_ok(),
                 "no_open=true should skip tools and succeed even in an interactive terminal"
