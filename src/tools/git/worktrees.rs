@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     gitdir::GitDir,
-    refs::parse_ls_remote_branch,
+    refs::{parse_ls_remote_branch, set_branch_upstream},
     run::{capture, status},
 };
 use crate::error::Result;
@@ -30,26 +30,33 @@ pub fn add_existing_branch(gitdir: &Path, worktree: &Path, branch: &str) -> Resu
 pub fn add_tracking_remote_branch(gitdir: &Path, worktree: &Path, branch: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
     let remote = format!("origin/{branch}");
-    GitDir::new(gitdir).status(&[
-        "worktree",
-        "add",
-        "--track",
-        "-b",
-        branch,
-        worktree_str.as_ref(),
-        &remote,
-    ])
+    add_new_branch_worktree(gitdir, worktree_str.as_ref(), branch, &remote, true)
 }
 
 pub fn add_from_base(gitdir: &Path, worktree: &Path, branch: &str, base_ref: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
+    add_new_branch_worktree(gitdir, worktree_str.as_ref(), branch, base_ref, false)?;
+
+    set_branch_upstream(gitdir, branch, "origin")
+}
+
+fn add_new_branch_worktree(
+    gitdir: &Path,
+    worktree: &str,
+    branch: &str,
+    start_point: &str,
+    track: bool,
+) -> Result<()> {
+    let track_flag = if track { "--track" } else { "--no-track" };
+
     GitDir::new(gitdir).status(&[
         "worktree",
         "add",
+        track_flag,
         "-b",
         branch,
-        worktree_str.as_ref(),
-        base_ref,
+        worktree,
+        start_point,
     ])
 }
 
@@ -327,8 +334,9 @@ mod tests {
     };
 
     use super::{
-        WorktreeEntry, branch_from_ref, branch_from_worktree_path, checkout_or_create_branch,
-        parse_worktree_porcelain, update_detached,
+        WorktreeEntry, add_from_base, add_tracking_remote_branch, branch_from_ref,
+        branch_from_worktree_path, checkout_or_create_branch, parse_worktree_porcelain,
+        update_detached,
     };
 
     struct TempDir(PathBuf);
@@ -378,6 +386,54 @@ mod tests {
             .expect("git must be available");
         assert!(output.status.success(), "git {args:?} failed");
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn create_bare_repo_with_origin(name: &str) -> (TempDir, PathBuf, PathBuf) {
+        let dir = TempDir::new(name);
+        let remote = dir.path().join("remote.git");
+        let source = dir.path().join("source");
+        let bare = dir.path().join("repo.git");
+
+        fs::create_dir_all(&source).expect("create source dir");
+
+        run_git(
+            &["init", "--bare", remote.to_string_lossy().as_ref()],
+            dir.path(),
+        );
+        run_git(&["init", "-b", "main"], source.as_path());
+        run_git(
+            &["config", "user.email", "test@example.com"],
+            source.as_path(),
+        );
+        run_git(&["config", "user.name", "Test"], source.as_path());
+        fs::write(source.join("README.md"), "v1\n").expect("write initial file");
+        run_git(&["add", "README.md"], source.as_path());
+        run_git(&["commit", "-m", "initial"], source.as_path());
+        run_git(
+            &["remote", "add", "origin", remote.to_string_lossy().as_ref()],
+            source.as_path(),
+        );
+        run_git(&["push", "-u", "origin", "main"], source.as_path());
+
+        run_git(
+            &["init", "--bare", bare.to_string_lossy().as_ref()],
+            dir.path(),
+        );
+        run_git(
+            &["remote", "add", "origin", remote.to_string_lossy().as_ref()],
+            bare.as_path(),
+        );
+        run_git(
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+            bare.as_path(),
+        );
+        run_git(&["fetch", "origin"], bare.as_path());
+
+        (dir, source, bare)
     }
 
     mod parse_worktree_porcelain {
@@ -691,6 +747,63 @@ branch refs/heads/main\n\
                 branch_ref, base_ref,
                 "new branch should start from base ref"
             );
+        }
+    }
+
+    mod branch_tracking_tests {
+        use super::*;
+
+        #[test]
+        fn add_from_base_sets_upstream_to_same_named_origin_branch() {
+            let (dir, _source, bare) = create_bare_repo_with_origin("add-from-base-upstream");
+            let worktree = dir.path().join("wt/feature");
+
+            add_from_base(bare.as_path(), worktree.as_path(), "feature", "origin/main")
+                .expect("create worktree from base");
+
+            let branch = git_output(
+                &["symbolic-ref", "--quiet", "--short", "HEAD"],
+                worktree.as_path(),
+            );
+            assert_eq!(branch, "feature");
+
+            let remote_config = git_output(
+                &["config", "--get", "branch.feature.remote"],
+                worktree.as_path(),
+            );
+            assert_eq!(remote_config, "origin");
+
+            let merge_config = git_output(
+                &["config", "--get", "branch.feature.merge"],
+                worktree.as_path(),
+            );
+            assert_eq!(merge_config, "refs/heads/feature");
+
+            run_git(&["push"], worktree.as_path());
+
+            let status = git_output(&["status", "-sb"], worktree.as_path());
+            assert!(status.starts_with("## feature...origin/feature"));
+        }
+
+        #[test]
+        fn add_tracking_remote_branch_tracks_existing_remote_branch() {
+            let (dir, source, bare) = create_bare_repo_with_origin("track-remote-upstream");
+            let worktree = dir.path().join("wt/feature");
+            run_git(&["checkout", "-b", "feature"], source.as_path());
+            run_git(&["push", "-u", "origin", "feature"], source.as_path());
+            run_git(&["fetch", "origin"], bare.as_path());
+
+            add_tracking_remote_branch(bare.as_path(), worktree.as_path(), "feature")
+                .expect("create tracking worktree");
+
+            let status = git_output(&["status", "-sb"], worktree.as_path());
+            assert!(status.starts_with("## feature...origin/feature"));
+
+            let merge_config = git_output(
+                &["config", "--get", "branch.feature.merge"],
+                worktree.as_path(),
+            );
+            assert_eq!(merge_config, "refs/heads/feature");
         }
     }
 
