@@ -340,7 +340,7 @@ fn is_detached_worktree(path: &std::path::Path) -> bool {
 }
 
 /// Recursively collect leaf directories that look like git worktrees.
-fn collect_detached_worktrees(
+pub(crate) fn collect_detached_worktrees(
     dir: &std::path::Path,
     out: &mut Vec<std::path::PathBuf>,
 ) -> Result<()> {
@@ -384,7 +384,10 @@ fn read_head_sha(path: &std::path::Path) -> Option<String> {
     }
 }
 
-fn repo_key_from_detached_path(detached_dir: &std::path::Path, path: &std::path::Path) -> RepoKey {
+pub(crate) fn repo_key_from_detached_path(
+    detached_dir: &std::path::Path,
+    path: &std::path::Path,
+) -> RepoKey {
     let relative = path
         .strip_prefix(detached_dir)
         .unwrap_or(path)

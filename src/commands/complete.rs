@@ -1,6 +1,10 @@
 use std::collections::HashSet;
 
-use crate::{error::Result, runtime::environment::RuntimeEnvironment};
+use crate::{
+    commands::detach::{collect_detached_worktrees, repo_key_from_detached_path},
+    error::Result,
+    runtime::environment::RuntimeEnvironment,
+};
 
 pub fn run(context: Option<&RuntimeEnvironment>, words: &[String]) -> Result<()> {
     for value in completion_values(context, words)? {
@@ -89,6 +93,7 @@ fn completion_values(
             }
         }
         "repo" => repo_subcommand_completions(context, args)?,
+        "detach" => detach_subcommand_completions(context, args)?,
         "doctor" => {
             if arg_count <= 1 {
                 vec!["--fix".to_string()]
@@ -125,6 +130,7 @@ fn top_level_commands() -> Vec<String> {
         "finish",
         "check",
         "rebase",
+        "detach",
         "completions",
     ]
     .iter()
@@ -167,6 +173,105 @@ fn repo_subcommand_completions(
         }
         _ => Ok(Vec::new()),
     }
+}
+
+fn detach_subcommand_completions(
+    context: Option<&RuntimeEnvironment>,
+    args: &[String],
+) -> Result<Vec<String>> {
+    let detach_subcommands = vec![
+        "add".to_string(),
+        "update".to_string(),
+        "remove".to_string(),
+        "install".to_string(),
+        "list".to_string(),
+    ];
+
+    if args.len() <= 1 {
+        return Ok(detach_subcommands);
+    }
+
+    let subcmd = args[0].as_str();
+    let sub_args = &args[1..];
+    let sub_arg_count = sub_args.len();
+    let current = sub_args.last().map(String::as_str).unwrap_or_default();
+
+    // All detach subcommands take at most one positional (repo), plus optional flags.
+    // For `remove`, a `--force` flag is also valid.
+    if sub_arg_count >= 3 {
+        return Ok(Vec::new());
+    }
+
+    match subcmd {
+        "add" => {
+            if sub_arg_count <= 1 {
+                repo_candidates(context)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        "update" => {
+            if sub_arg_count <= 1 {
+                detached_repo_candidates(context)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        "remove" => {
+            if current.starts_with('-') {
+                Ok(vec!["--force".to_string()])
+            } else if sub_arg_count <= 1 {
+                detached_repo_candidates(context)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        "install" => {
+            if sub_arg_count <= 1 {
+                install_repo_candidates(context)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        "list" => Ok(Vec::new()),
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn detached_repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<String>> {
+    let Some(context) = context else {
+        return Ok(Vec::new());
+    };
+
+    let detached_dir = context.layout().detached_dir();
+    let mut worktrees: Vec<std::path::PathBuf> = Vec::new();
+    collect_detached_worktrees(detached_dir, &mut worktrees)?;
+
+    let mut short_names: Vec<String> = worktrees
+        .into_iter()
+        .map(|path| repo_key_from_detached_path(detached_dir, &path))
+        .filter_map(|key| key.rsplit('/').next().map(str::to_string))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    short_names.sort();
+    Ok(short_names)
+}
+
+fn install_repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<String>> {
+    let Some(context) = context else {
+        return Ok(Vec::new());
+    };
+
+    let mut short_names: Vec<String> = context
+        .install_entries()
+        .iter()
+        .filter_map(|entry| entry.repo.rsplit('/').next().map(str::to_string))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    short_names.sort();
+    Ok(short_names)
 }
 
 fn repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<String>> {
@@ -285,6 +390,7 @@ mod tests {
                 "finish",
                 "check",
                 "rebase",
+                "detach",
                 "completions",
             ] {
                 assert!(
@@ -653,6 +759,204 @@ mod tests {
             let values = completion_values(None, &["completions".to_string(), "f".to_string()])
                 .expect("fish prefix completions");
             assert_eq!(values, vec!["fish"]);
+        }
+    }
+
+    mod detach {
+        use std::fs;
+
+        use super::completion_values;
+        use crate::runtime::environment::RuntimeEnvironment;
+
+        struct TempDir(std::path::PathBuf);
+
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = std::env::temp_dir().join(format!("task-rs-complete-detach-{name}"));
+                let _ = fs::remove_dir_all(&path);
+                fs::create_dir_all(&path).expect("create temp dir");
+                Self(path)
+            }
+
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn make_env(base: &std::path::Path) -> RuntimeEnvironment {
+            let repos_dir = base.join("repos");
+            let wt_dir = base.join("wt");
+            let detached_dir = base.join("detached");
+            fs::create_dir_all(&repos_dir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+            fs::create_dir_all(&detached_dir).unwrap();
+            RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir)
+        }
+
+        fn make_detached_worktree(detached_dir: &std::path::Path, repo_key: &str) {
+            let path = detached_dir.join(repo_key);
+            fs::create_dir_all(&path).expect("create detached worktree dir");
+            fs::write(path.join(".git"), "gitdir: ...").expect("write .git marker");
+        }
+
+        #[test]
+        fn top_level_includes_detach() {
+            let values =
+                completion_values(None, &["de".to_string()]).expect("detach prefix completions");
+            assert!(
+                values.contains(&"detach".to_string()),
+                "expected 'detach' in: {values:?}"
+            );
+        }
+
+        #[test]
+        fn detach_alone_suggests_subcommands() {
+            let values = completion_values(None, &["detach".to_string(), "".to_string()])
+                .expect("detach subcommand completions");
+            for expected in ["add", "update", "remove", "install", "list"] {
+                assert!(
+                    values.contains(&expected.to_string()),
+                    "missing {expected} in {values:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn detach_partial_subcommand_filters() {
+            let values = completion_values(None, &["detach".to_string(), "u".to_string()])
+                .expect("detach partial subcommand");
+            assert_eq!(values, vec!["update"]);
+        }
+
+        #[test]
+        fn detach_update_returns_empty_without_context() {
+            let values = completion_values(
+                None,
+                &["detach".to_string(), "update".to_string(), "".to_string()],
+            )
+            .expect("detach update without context");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn detach_update_suggests_detached_repos() {
+            let dir = TempDir::new("update-suggests");
+            let env = make_env(dir.path());
+            make_detached_worktree(env.layout().detached_dir(), "github.com/org/alpha");
+            make_detached_worktree(env.layout().detached_dir(), "gitlab.com/team/beta");
+
+            let values = completion_values(
+                Some(&env),
+                &["detach".to_string(), "update".to_string(), "".to_string()],
+            )
+            .expect("detach update completions");
+            assert_eq!(values, vec!["alpha", "beta"]);
+        }
+
+        #[test]
+        fn detach_update_filters_by_prefix() {
+            let dir = TempDir::new("update-prefix");
+            let env = make_env(dir.path());
+            make_detached_worktree(env.layout().detached_dir(), "github.com/org/alpha");
+            make_detached_worktree(env.layout().detached_dir(), "gitlab.com/team/beta");
+
+            let values = completion_values(
+                Some(&env),
+                &["detach".to_string(), "update".to_string(), "al".to_string()],
+            )
+            .expect("detach update prefix completions");
+            assert_eq!(values, vec!["alpha"]);
+        }
+
+        #[test]
+        fn detach_update_second_positional_returns_empty() {
+            let dir = TempDir::new("update-second");
+            let env = make_env(dir.path());
+            make_detached_worktree(env.layout().detached_dir(), "github.com/org/alpha");
+
+            let values = completion_values(
+                Some(&env),
+                &[
+                    "detach".to_string(),
+                    "update".to_string(),
+                    "alpha".to_string(),
+                    "".to_string(),
+                ],
+            )
+            .expect("detach update 2nd positional");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn detach_remove_dash_suggests_force() {
+            let values = completion_values(
+                None,
+                &["detach".to_string(), "remove".to_string(), "-".to_string()],
+            )
+            .expect("detach remove dash");
+            assert!(values.contains(&"--force".to_string()));
+            assert!(values.contains(&"-h".to_string()));
+            assert!(values.contains(&"--help".to_string()));
+        }
+
+        #[test]
+        fn detach_remove_suggests_detached_repos() {
+            let dir = TempDir::new("remove-suggests");
+            let env = make_env(dir.path());
+            make_detached_worktree(env.layout().detached_dir(), "github.com/org/gamma");
+
+            let values = completion_values(
+                Some(&env),
+                &["detach".to_string(), "remove".to_string(), "".to_string()],
+            )
+            .expect("detach remove completions");
+            assert_eq!(values, vec!["gamma"]);
+        }
+
+        #[test]
+        fn detach_add_without_context_returns_empty() {
+            let values = completion_values(
+                None,
+                &["detach".to_string(), "add".to_string(), "".to_string()],
+            )
+            .expect("detach add without context");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn detach_install_without_context_returns_empty() {
+            let values = completion_values(
+                None,
+                &["detach".to_string(), "install".to_string(), "".to_string()],
+            )
+            .expect("detach install without context");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn detach_list_takes_no_args() {
+            let values = completion_values(
+                None,
+                &["detach".to_string(), "list".to_string(), "".to_string()],
+            )
+            .expect("detach list completions");
+            assert!(values.is_empty());
+        }
+
+        #[test]
+        fn detach_double_dash_includes_help() {
+            let values = completion_values(
+                None,
+                &["detach".to_string(), "update".to_string(), "--".to_string()],
+            )
+            .expect("detach update double dash");
+            assert!(values.contains(&"--help".to_string()));
         }
     }
 }
