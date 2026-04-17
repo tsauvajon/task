@@ -1,13 +1,16 @@
+use std::{collections::HashSet, path::Path};
+
 use super::state::{RepoRow, UiState};
 use crate::{
     error::{Error, Result},
-    runtime::{
-        environment::RuntimeEnvironment,
-        task_rows::{TaskRow, TaskStatus},
-    },
+    runtime::{RepoKey, environment::RuntimeEnvironment, task_rows::TaskRow},
     tools::{
-        git::repo::{default_clone_url, parse_repo_input},
+        git::{
+            repo::{default_clone_url, parse_repo_input},
+            worktrees::{list_registered_worktrees, worktree_name},
+        },
         tmux::{
+            naming::session_name,
             sessions::is_available,
             workflow::{ParkResult, park},
         },
@@ -64,22 +67,12 @@ pub(super) fn load_task_rows(
 
 pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow>> {
     let open_sessions = context.tasks().tmux_sessions();
+    let wt_dir = context.layout().wt_dir();
     let mut rows = Vec::new();
 
-    for repo_key in context.tasks().available_repo_keys()? {
-        let gitdir = context.layout().repo_gitdir_path(&repo_key);
-        if !gitdir.is_dir() {
-            continue;
-        }
-
-        let task_rows = context
-            .tasks()
-            .repo_task_rows(&repo_key, &gitdir, &open_sessions)?;
-        let open_tasks = task_rows
-            .iter()
-            .filter(|row| row.status == TaskStatus::Open)
-            .count();
-        let parked_tasks = task_rows.len().saturating_sub(open_tasks);
+    for (repo_key, gitdir) in context.tasks().available_repos()? {
+        let (open_tasks, parked_tasks) =
+            count_repo_worktrees(&repo_key, &gitdir, wt_dir, &open_sessions);
 
         let detached_path = context.layout().detached_path(&repo_key);
         let is_detached = is_detached_worktree(&detached_path);
@@ -107,6 +100,47 @@ pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow
 /// as created by `git worktree add`, or is a bare/worktree with `HEAD`).
 fn is_detached_worktree(path: &std::path::Path) -> bool {
     path.join(".git").exists() || path.join("HEAD").exists()
+}
+
+/// Count `(open, parked)` task worktrees for a repo without spawning git.
+///
+/// Reads `<gitdir>/worktrees/*/gitdir` from disk, keeps only worktrees that
+/// live under `<wt_dir>/<repo_key>/` (excluding the repo root itself and
+/// detached snapshots outside `wt_dir`), and classifies each as `Open` when a
+/// tmux session matches `session_name(repo_key, worktree_name)`. Otherwise
+/// the worktree is counted as `Parked`.
+///
+/// Mirrors the filter logic of `build_task_rows` but skips branch-name
+/// resolution (not needed for the Repos view) and the git subprocess.
+fn count_repo_worktrees(
+    repo_key: &RepoKey,
+    gitdir: &Path,
+    wt_dir: &Path,
+    open_sessions: &HashSet<String>,
+) -> (usize, usize) {
+    let task_root_real = canonical(wt_dir).join(repo_key.as_str());
+    let mut open = 0usize;
+    let mut parked = 0usize;
+
+    for wt_path in list_registered_worktrees(gitdir) {
+        let real_path = std::fs::canonicalize(&wt_path).unwrap_or_else(|_| wt_path.clone());
+        if !real_path.starts_with(&task_root_real) || real_path == task_root_real {
+            continue;
+        }
+        let wt_name = worktree_name(wt_dir, repo_key.as_str(), &wt_path);
+        let session = session_name(repo_key.as_str(), &wt_name);
+        if open_sessions.contains(&session) {
+            open += 1;
+        } else {
+            parked += 1;
+        }
+    }
+
+    (open, parked)
+}
+
+fn canonical(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
@@ -619,6 +653,157 @@ mod tests {
             let path = env::temp_dir().join("task-rs-detached-nonexistent-12345");
             let _ = fs::remove_dir_all(&path);
             assert!(!is_detached_worktree(&path));
+        }
+    }
+
+    mod count_repo_worktrees_tests {
+        use std::{collections::HashSet, fs};
+
+        use super::super::count_repo_worktrees;
+        use crate::{runtime::RepoKey, tools::tmux::naming::session_name};
+
+        struct TempDir(std::path::PathBuf);
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = std::env::temp_dir().join(format!("task-rs-count-wt-{name}"));
+                let _ = fs::remove_dir_all(&path);
+                fs::create_dir_all(&path).expect("create temp dir");
+                Self(path)
+            }
+
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+        }
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        /// Register a worktree on disk the way `git worktree add` would:
+        /// `<gitdir>/worktrees/<name>/gitdir` containing the absolute path
+        /// of the worktree's `.git` file.
+        fn register(gitdir: &std::path::Path, name: &str, wt_path: &std::path::Path) {
+            let meta = gitdir.join("worktrees").join(name);
+            fs::create_dir_all(&meta).unwrap();
+            fs::create_dir_all(wt_path).unwrap();
+            fs::write(
+                meta.join("gitdir"),
+                wt_path.join(".git").to_string_lossy().as_ref(),
+            )
+            .unwrap();
+        }
+
+        #[test]
+        fn returns_zeros_when_no_worktrees_registered() {
+            let dir = TempDir::new("zeros");
+            let gitdir = dir.path().join("repo.git");
+            fs::create_dir_all(&gitdir).unwrap();
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let (open, parked) = count_repo_worktrees(&repo_key, &gitdir, &wt_dir, &HashSet::new());
+            assert_eq!((open, parked), (0, 0));
+        }
+
+        #[test]
+        fn counts_worktree_under_wt_dir_as_parked_without_session() {
+            let dir = TempDir::new("parked");
+            let gitdir = dir.path().join("repo.git");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let wt_path = wt_dir.join("github.com/me/app/feat");
+            register(&gitdir, "feat", &wt_path);
+
+            let (open, parked) = count_repo_worktrees(&repo_key, &gitdir, &wt_dir, &HashSet::new());
+            assert_eq!((open, parked), (0, 1));
+        }
+
+        #[test]
+        fn counts_worktree_as_open_when_matching_session_is_present() {
+            let dir = TempDir::new("open");
+            let gitdir = dir.path().join("repo.git");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let wt_path = wt_dir.join("github.com/me/app/feat");
+            register(&gitdir, "feat", &wt_path);
+
+            // The session name used by open detection must match
+            // `session_name(repo_key, worktree_name)`.
+            let mut sessions = HashSet::new();
+            sessions.insert(session_name(repo_key.as_str(), "feat"));
+
+            let (open, parked) = count_repo_worktrees(&repo_key, &gitdir, &wt_dir, &sessions);
+            assert_eq!((open, parked), (1, 0));
+        }
+
+        #[test]
+        fn excludes_worktrees_outside_wt_dir_for_repo() {
+            // Detached snapshots registered in the bare repo point at
+            // paths outside `<wt_dir>/<repo_key>/` — they must not be counted.
+            let dir = TempDir::new("outside");
+            let gitdir = dir.path().join("repo.git");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            // Outside the expected wt subtree.
+            let detached_path = dir.path().join("detached/github.com/me/app");
+            register(&gitdir, "detached", &detached_path);
+
+            let (open, parked) = count_repo_worktrees(&repo_key, &gitdir, &wt_dir, &HashSet::new());
+            assert_eq!((open, parked), (0, 0));
+        }
+
+        #[test]
+        fn excludes_stale_entries() {
+            let dir = TempDir::new("stale");
+            let gitdir = dir.path().join("repo.git");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            // Metadata exists but the worktree path does not.
+            let meta = gitdir.join("worktrees/ghost");
+            fs::create_dir_all(&meta).unwrap();
+            fs::write(meta.join("gitdir"), "/does/not/exist/.git").unwrap();
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let (open, parked) = count_repo_worktrees(&repo_key, &gitdir, &wt_dir, &HashSet::new());
+            assert_eq!((open, parked), (0, 0));
+        }
+
+        #[test]
+        fn mixes_open_and_parked_counts_across_worktrees() {
+            let dir = TempDir::new("mixed");
+            let gitdir = dir.path().join("repo.git");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let wt_a = wt_dir.join("github.com/me/app/a");
+            let wt_b = wt_dir.join("github.com/me/app/b");
+            let wt_c = wt_dir.join("github.com/me/app/c");
+            register(&gitdir, "a", &wt_a);
+            register(&gitdir, "b", &wt_b);
+            register(&gitdir, "c", &wt_c);
+
+            let mut sessions = HashSet::new();
+            sessions.insert(session_name(repo_key.as_str(), "a"));
+            sessions.insert(session_name(repo_key.as_str(), "c"));
+
+            let (open, parked) = count_repo_worktrees(&repo_key, &gitdir, &wt_dir, &sessions);
+            assert_eq!((open, parked), (2, 1));
         }
     }
 }
