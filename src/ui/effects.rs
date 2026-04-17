@@ -1,34 +1,45 @@
 use super::{
+    loader::{self, LoaderHandle},
     state::{UiAction, UiState},
-    tasks::{
-        clone_from_input, finish_selected, load_repo_rows, load_task_rows, park_selected,
-        resolve_create_repo,
-    },
+    tasks::{clone_from_input, finish_selected, park_selected, resolve_create_repo},
 };
 use crate::{
     commands::detach as detach_cmd, error::Result, runtime::environment::RuntimeEnvironment,
 };
 
-pub(super) fn refresh_task_rows(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
-    let rows = load_task_rows(context, state.task_repo_scope.as_deref())?;
-    state.set_task_rows(rows);
-    Ok(())
+/// Cancel the current loader and spawn a fresh one that scans both the
+/// tasks and the repos in parallel. Rows are cleared immediately and
+/// stream back in as each repo finishes.
+pub(super) fn refresh_all(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) {
+    let generation = state.begin_load();
+    let new_handle = loader::spawn(context.clone(), state.task_repo_scope.clone(), generation);
+    // Dropping the old handle sets its stop flag; workers exit between
+    // repos without blocking this call.
+    let _ = std::mem::replace(loader, new_handle);
 }
 
-pub(super) fn refresh_repo_rows(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
-    let rows = load_repo_rows(context)?;
-    state.set_repo_rows(rows);
-    Ok(())
-}
-
-pub(super) fn finish_and_refresh(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
+pub(super) fn finish_and_refresh(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) -> Result<()> {
     finish_selected(context, state)?;
-    refresh_task_rows(context, state)
+    refresh_all(context, state, loader);
+    Ok(())
 }
 
-pub(super) fn park_and_refresh(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
+pub(super) fn park_and_refresh(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) -> Result<()> {
     park_selected(context, state)?;
-    refresh_task_rows(context, state)
+    refresh_all(context, state, loader);
+    Ok(())
 }
 
 pub(super) fn create_action(context: &RuntimeEnvironment, state: &UiState) -> Result<UiAction> {
@@ -47,14 +58,10 @@ pub(super) fn create_action(context: &RuntimeEnvironment, state: &UiState) -> Re
 pub(super) fn clone_and_refresh(
     context: &RuntimeEnvironment,
     state: &mut UiState,
+    loader: &mut LoaderHandle,
 ) -> Result<String> {
     let cloned_repo = clone_from_input(context, &state.clone_input)?;
-    refresh_repo_rows(context, state)?;
-    if let Some(repo) = state.task_repo_scope.as_deref()
-        && repo == cloned_repo
-    {
-        refresh_task_rows(context, state)?;
-    }
+    refresh_all(context, state, loader);
     Ok(cloned_repo)
 }
 
@@ -65,6 +72,7 @@ pub(super) fn clone_and_refresh(
 pub(super) fn toggle_detach_and_refresh(
     context: &RuntimeEnvironment,
     state: &mut UiState,
+    loader: &mut LoaderHandle,
 ) -> Result<String> {
     let Some(row) = state.selected_repo_row().cloned() else {
         return Ok("No repo selected".to_string());
@@ -79,7 +87,7 @@ pub(super) fn toggle_detach_and_refresh(
         format!("Added detached worktree for {repo_key_str}")
     };
 
-    refresh_repo_rows(context, state)?;
+    refresh_all(context, state, loader);
     Ok(message)
 }
 

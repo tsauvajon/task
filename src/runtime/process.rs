@@ -23,10 +23,6 @@ fn log_capture() -> &'static Mutex<LogCapture> {
 
 /// External binaries the CLI shells out to. The enum captures just enough
 /// metadata to generate install hints when the binary is missing from PATH.
-///
-/// Previously `ManagedTool` — renamed because we no longer resolve or launch
-/// these via Nix at runtime. We just know their names and how the user can
-/// install them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalTool {
     Git,

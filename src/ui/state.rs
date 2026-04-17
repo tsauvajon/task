@@ -24,6 +24,80 @@ pub(super) struct RepoRow {
     pub(super) is_detached: bool,
 }
 
+/// Progress of a background load. `total` is `None` while the
+/// repo-enumeration scan is still running in the loader thread — the
+/// status bar renders `… / ?` in that window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LoadPhase {
+    Idle,
+    Loading { done: usize, total: Option<usize> },
+}
+
+impl LoadPhase {
+    pub(super) fn is_loading(&self) -> bool {
+        matches!(self, LoadPhase::Loading { .. })
+    }
+}
+
+/// Messages sent by the background loader thread to the UI event loop.
+///
+/// `generation` is the loader-generation counter; the main thread bumps it
+/// on every `refresh` and drops any message whose `generation` does not
+/// match the current one. This keeps stale workers from corrupting state
+/// after a refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LoadMsg {
+    /// Sent once the loader has enumerated all cloned repos and knows the
+    /// total count for both scans.
+    ScanStarted {
+        generation: u64,
+        total: usize,
+    },
+    TaskRowsForRepo {
+        generation: u64,
+        repo: RepoKey,
+        rows: Vec<TaskRow>,
+    },
+    /// One repo finished its task-scan (success or error). Advances the
+    /// `done` counter for the tasks phase.
+    TaskRepoDone {
+        generation: u64,
+    },
+    /// All task-scan workers have returned. Flips `task_load` to `Idle`.
+    TasksComplete {
+        generation: u64,
+    },
+    RepoRow {
+        generation: u64,
+        row: RepoRow,
+    },
+    /// All repo-scan workers have returned. Flips `repo_load` to `Idle`.
+    RepoRowsDone {
+        generation: u64,
+    },
+    /// A per-repo git call failed. Surfaces a muted entry in the activity
+    /// panel and bumps `skipped_repos_count`.
+    RepoError {
+        generation: u64,
+        repo: RepoKey,
+        err: String,
+    },
+}
+
+impl LoadMsg {
+    pub(super) fn generation(&self) -> u64 {
+        match self {
+            Self::ScanStarted { generation, .. }
+            | Self::TaskRowsForRepo { generation, .. }
+            | Self::TaskRepoDone { generation }
+            | Self::TasksComplete { generation }
+            | Self::RepoRow { generation, .. }
+            | Self::RepoRowsDone { generation }
+            | Self::RepoError { generation, .. } => *generation,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum UiAction {
     Quit,
@@ -50,6 +124,18 @@ pub(super) struct UiState {
     pub(super) show_help: bool,
     pub(super) help_area: Option<Rect>,
     pub(super) visible_rows: usize,
+    /// Progress of the background tasks-scan.
+    pub(super) task_load: LoadPhase,
+    /// Progress of the background repo-scan.
+    pub(super) repo_load: LoadPhase,
+    /// Animated spinner frame counter; advanced each tick by the event loop.
+    pub(super) spinner_frame: u8,
+    /// Current loader generation. Incremented on every refresh so stale
+    /// messages from an old loader worker are dropped by `apply_load_msg`.
+    pub(super) load_generation: u64,
+    /// Count of repos that produced an error during the current load. Reset
+    /// at the start of each refresh.
+    pub(super) skipped_repos_count: usize,
 }
 
 impl UiState {
@@ -76,9 +162,164 @@ impl UiState {
             show_help: false,
             help_area: None,
             visible_rows: 20,
+            task_load: LoadPhase::Idle,
+            repo_load: LoadPhase::Idle,
+            spinner_frame: 0,
+            load_generation: 0,
+            skipped_repos_count: 0,
         };
         state.apply_filters();
         state
+    }
+
+    /// Construct an empty state ready for a background load. Used by the
+    /// progressive UI path: we enter the terminal and draw the first frame
+    /// before any rows have been collected.
+    pub(super) fn new_empty_loading(task_repo_scope: Option<String>) -> Self {
+        let mut state = Self::new(Vec::new(), Vec::new(), task_repo_scope);
+        state.task_load = LoadPhase::Loading {
+            done: 0,
+            total: None,
+        };
+        state.repo_load = LoadPhase::Loading {
+            done: 0,
+            total: None,
+        };
+        state.message = "Loading…".to_string();
+        state
+    }
+
+    /// Apply a message from the background loader, advancing progress and
+    /// inserting rows in sorted order. Messages whose `generation` does
+    /// not match the current one are ignored (they come from a superseded
+    /// loader).
+    pub(super) fn apply_load_msg(&mut self, msg: LoadMsg) {
+        if msg.generation() != self.load_generation {
+            return;
+        }
+
+        match msg {
+            LoadMsg::ScanStarted { total, .. } => {
+                if let LoadPhase::Loading {
+                    total: task_total, ..
+                } = &mut self.task_load
+                {
+                    *task_total = Some(total);
+                }
+                if let LoadPhase::Loading {
+                    total: repo_total, ..
+                } = &mut self.repo_load
+                {
+                    *repo_total = Some(total);
+                }
+            }
+            LoadMsg::TaskRowsForRepo { rows, .. } => {
+                if !rows.is_empty() {
+                    self.insert_task_rows_sorted(rows);
+                }
+            }
+            LoadMsg::TaskRepoDone { .. } => {
+                if let LoadPhase::Loading { done, .. } = &mut self.task_load {
+                    *done += 1;
+                }
+            }
+            LoadMsg::TasksComplete { .. } => {
+                self.task_load = LoadPhase::Idle;
+            }
+            LoadMsg::RepoRow { row, .. } => {
+                self.insert_repo_row_sorted(row);
+                if let LoadPhase::Loading { done, .. } = &mut self.repo_load {
+                    *done += 1;
+                }
+            }
+            LoadMsg::RepoRowsDone { .. } => {
+                self.repo_load = LoadPhase::Idle;
+            }
+            LoadMsg::RepoError { repo, err, .. } => {
+                self.skipped_repos_count += 1;
+                self.append_activity_lines(vec![format!("{repo}: {err}")]);
+            }
+        }
+    }
+
+    /// Bump `load_generation` and return the new value. Use this when
+    /// starting a new load so the caller can stamp it into the loader
+    /// thread; any in-flight messages from the previous generation will
+    /// be ignored by `apply_load_msg`.
+    pub(super) fn begin_load(&mut self) -> u64 {
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.task_rows.clear();
+        self.repo_rows.clear();
+        self.task_selected = 0;
+        self.repo_selected = 0;
+        self.skipped_repos_count = 0;
+        self.task_load = LoadPhase::Loading {
+            done: 0,
+            total: None,
+        };
+        self.repo_load = LoadPhase::Loading {
+            done: 0,
+            total: None,
+        };
+        self.apply_filters();
+        self.load_generation
+    }
+
+    /// Insert task rows while preserving the global sort order
+    /// `(status, repo, branch)`. Keeps the currently-selected task on the
+    /// same logical row (by repo+branch) so streaming inserts don't make
+    /// the selection drift.
+    pub(super) fn insert_task_rows_sorted(&mut self, rows: Vec<TaskRow>) {
+        let selected_identity = self
+            .selected_task_row()
+            .map(|row| (row.repo.clone(), row.branch.clone()));
+
+        self.task_rows.extend(rows);
+        self.task_rows.sort_by(|left, right| {
+            left.status
+                .cmp(&right.status)
+                .then(left.repo.cmp(&right.repo))
+                .then(left.branch.cmp(&right.branch))
+        });
+        self.apply_task_filter();
+
+        if let Some((repo, branch)) = selected_identity {
+            let new_index = self
+                .task_filtered_indices
+                .iter()
+                .position(|&idx| {
+                    let row = &self.task_rows[idx];
+                    row.repo == repo && row.branch == branch
+                })
+                .unwrap_or(0);
+            self.task_selected = new_index;
+        }
+    }
+
+    /// Insert one repo row, preserving sort order used elsewhere
+    /// (open desc, parked desc, detached desc, repo asc).
+    pub(super) fn insert_repo_row_sorted(&mut self, row: RepoRow) {
+        let selected_identity = self.selected_repo_row().map(|row| row.repo.clone());
+
+        self.repo_rows.push(row);
+        self.repo_rows.sort_by(|left, right| {
+            right
+                .open_tasks
+                .cmp(&left.open_tasks)
+                .then(right.parked_tasks.cmp(&left.parked_tasks))
+                .then(right.is_detached.cmp(&left.is_detached))
+                .then(left.repo.cmp(&right.repo))
+        });
+        self.apply_repo_filter();
+
+        if let Some(repo) = selected_identity {
+            let new_index = self
+                .repo_filtered_indices
+                .iter()
+                .position(|&idx| self.repo_rows[idx].repo == repo)
+                .unwrap_or(0);
+            self.repo_selected = new_index;
+        }
     }
 
     pub(super) fn apply_filters(&mut self) {
@@ -236,11 +477,13 @@ impl UiState {
         self.visible_rows = rows;
     }
 
+    #[cfg(test)]
     pub(super) fn set_task_rows(&mut self, rows: Vec<TaskRow>) {
         self.task_rows = rows;
         self.apply_task_filter();
     }
 
+    #[cfg(test)]
     pub(super) fn set_repo_rows(&mut self, rows: Vec<RepoRow>) {
         self.repo_rows = rows;
         self.apply_repo_filter();
@@ -1337,6 +1580,213 @@ mod tests {
             state.apply_task_filter();
 
             assert_eq!(state.task_filtered_indices.len(), 2);
+        }
+    }
+
+    mod load_phase_reducer {
+        use super::*;
+        use crate::{
+            runtime::RepoKey,
+            ui::state::{LoadMsg, LoadPhase},
+        };
+
+        fn loading_state() -> UiState {
+            UiState::new_empty_loading(None)
+        }
+
+        #[test]
+        fn new_empty_loading_starts_in_loading_without_total() {
+            let state = loading_state();
+            assert_eq!(
+                state.task_load,
+                LoadPhase::Loading {
+                    done: 0,
+                    total: None
+                }
+            );
+            assert_eq!(
+                state.repo_load,
+                LoadPhase::Loading {
+                    done: 0,
+                    total: None
+                }
+            );
+            assert_eq!(state.load_generation, 0);
+        }
+
+        #[test]
+        fn scan_started_fills_total_for_both_phases() {
+            let mut state = loading_state();
+            state.apply_load_msg(LoadMsg::ScanStarted {
+                generation: 0,
+                total: 42,
+            });
+            assert_eq!(
+                state.task_load,
+                LoadPhase::Loading {
+                    done: 0,
+                    total: Some(42)
+                }
+            );
+            assert_eq!(
+                state.repo_load,
+                LoadPhase::Loading {
+                    done: 0,
+                    total: Some(42)
+                }
+            );
+        }
+
+        #[test]
+        fn task_repo_done_increments_done() {
+            let mut state = loading_state();
+            state.apply_load_msg(LoadMsg::ScanStarted {
+                generation: 0,
+                total: 3,
+            });
+            state.apply_load_msg(LoadMsg::TaskRepoDone { generation: 0 });
+            state.apply_load_msg(LoadMsg::TaskRepoDone { generation: 0 });
+            assert_eq!(
+                state.task_load,
+                LoadPhase::Loading {
+                    done: 2,
+                    total: Some(3)
+                }
+            );
+        }
+
+        #[test]
+        fn tasks_complete_flips_to_idle() {
+            let mut state = loading_state();
+            state.apply_load_msg(LoadMsg::TasksComplete { generation: 0 });
+            assert_eq!(state.task_load, LoadPhase::Idle);
+            assert_eq!(
+                state.repo_load,
+                LoadPhase::Loading {
+                    done: 0,
+                    total: None
+                }
+            );
+        }
+
+        #[test]
+        fn repo_rows_done_flips_repo_to_idle_only() {
+            let mut state = loading_state();
+            state.apply_load_msg(LoadMsg::RepoRowsDone { generation: 0 });
+            assert_eq!(state.repo_load, LoadPhase::Idle);
+            assert!(matches!(state.task_load, LoadPhase::Loading { .. }));
+        }
+
+        #[test]
+        fn task_rows_for_repo_appends_and_keeps_sort() {
+            let mut state = loading_state();
+            let r1 = task_row_for_repo("github.com/b/app");
+            let r2 = task_row_for_repo("github.com/a/app");
+            state.apply_load_msg(LoadMsg::TaskRowsForRepo {
+                generation: 0,
+                repo: RepoKey::new("github.com/b/app"),
+                rows: vec![r1],
+            });
+            state.apply_load_msg(LoadMsg::TaskRowsForRepo {
+                generation: 0,
+                repo: RepoKey::new("github.com/a/app"),
+                rows: vec![r2],
+            });
+            assert_eq!(state.task_rows.len(), 2);
+            assert_eq!(state.task_rows[0].repo.as_str(), "github.com/a/app");
+            assert_eq!(state.task_rows[1].repo.as_str(), "github.com/b/app");
+        }
+
+        #[test]
+        fn repo_row_insert_keeps_sort_and_bumps_done() {
+            let mut state = loading_state();
+            state.apply_load_msg(LoadMsg::ScanStarted {
+                generation: 0,
+                total: 2,
+            });
+            state.apply_load_msg(LoadMsg::RepoRow {
+                generation: 0,
+                row: repo_row("github.com/z/zebra", 0, 0),
+            });
+            state.apply_load_msg(LoadMsg::RepoRow {
+                generation: 0,
+                row: repo_row("github.com/a/alpha", 0, 0),
+            });
+            assert_eq!(state.repo_rows[0].repo.as_str(), "github.com/a/alpha");
+            assert_eq!(state.repo_rows[1].repo.as_str(), "github.com/z/zebra");
+            assert_eq!(
+                state.repo_load,
+                LoadPhase::Loading {
+                    done: 2,
+                    total: Some(2)
+                }
+            );
+        }
+
+        #[test]
+        fn messages_with_stale_generation_are_ignored() {
+            let mut state = loading_state();
+            // Pretend a refresh just happened — next generation is 1.
+            state.begin_load();
+            assert_eq!(state.load_generation, 1);
+            // Stale message from an old worker.
+            state.apply_load_msg(LoadMsg::RepoRow {
+                generation: 0,
+                row: repo_row("github.com/a/app", 1, 0),
+            });
+            assert!(state.repo_rows.is_empty(), "stale row must be dropped");
+        }
+
+        #[test]
+        fn repo_error_surfaces_in_activity_and_counter() {
+            let mut state = loading_state();
+            state.apply_load_msg(LoadMsg::RepoError {
+                generation: 0,
+                repo: RepoKey::new("github.com/acme/broken"),
+                err: "git failed".to_string(),
+            });
+            assert_eq!(state.skipped_repos_count, 1);
+            assert!(
+                state
+                    .activity_lines
+                    .iter()
+                    .any(|line| line.contains("broken") && line.contains("git failed")),
+                "activity lines should contain the repo error: {:?}",
+                state.activity_lines
+            );
+        }
+
+        #[test]
+        fn selection_follows_by_identity_through_streaming_inserts() {
+            // Seed the table with one row, select it, then stream in rows
+            // from earlier-sorting repos. Selection must track the same
+            // (repo, branch) instead of staying on index 0.
+            let mut state =
+                UiState::new(vec![task_row_for_repo("github.com/m/middle")], vec![], None);
+            assert_eq!(state.task_selected, 0);
+            state.insert_task_rows_sorted(vec![task_row_for_repo("github.com/a/alpha")]);
+            let selected = state
+                .selected_task_row()
+                .expect("selection should exist after insert");
+            assert_eq!(selected.repo.as_str(), "github.com/m/middle");
+        }
+
+        #[test]
+        fn begin_load_bumps_generation_and_resets_rows() {
+            let mut state = UiState::new(
+                vec![task_row_for_repo("github.com/a/app")],
+                vec![repo_row("github.com/a/app", 1, 0)],
+                None,
+            );
+            state.skipped_repos_count = 5;
+            let gen_before = state.load_generation;
+            let new_gen = state.begin_load();
+            assert_eq!(new_gen, gen_before.wrapping_add(1));
+            assert!(state.task_rows.is_empty());
+            assert!(state.repo_rows.is_empty());
+            assert_eq!(state.skipped_repos_count, 0);
+            assert!(matches!(state.task_load, LoadPhase::Loading { .. }));
+            assert!(matches!(state.repo_load, LoadPhase::Loading { .. }));
         }
     }
 }

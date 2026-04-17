@@ -1,9 +1,16 @@
 use std::{collections::HashSet, path::Path};
 
-use super::state::{RepoRow, UiState};
+#[cfg(test)]
+use rayon::prelude::*;
+
+#[cfg(test)]
+use super::state::RepoRow;
+use super::state::UiState;
+#[cfg(test)]
+use crate::runtime::task_rows::TaskRow;
 use crate::{
     error::{Error, Result},
-    runtime::{RepoKey, environment::RuntimeEnvironment, task_rows::TaskRow},
+    runtime::{RepoKey, environment::RuntimeEnvironment},
     tools::{
         git::{
             repo::{default_clone_url, parse_repo_input},
@@ -26,34 +33,42 @@ pub(super) fn initial_repo_scope(
         .or_else(|| context.tasks().current_repo_key().map(String::from))
 }
 
+/// Synchronously load every task row across the workspace.
+#[cfg(test)]
 pub(super) fn load_task_rows(
     context: &RuntimeEnvironment,
     repo_scope: Option<&str>,
 ) -> Result<Vec<TaskRow>> {
     let open_sessions = context.tasks().tmux_sessions();
-    let mut rows = Vec::new();
 
-    if let Some(repo_arg) = repo_scope {
+    let mut rows: Vec<TaskRow> = if let Some(repo_arg) = repo_scope {
         let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
         let gitdir = context.layout().repo_gitdir_path(&repo_key);
         if !gitdir.is_dir() {
             return Err(Error::not_found(format!("Repo not found: {repo_key}")));
         }
-        rows.extend(
-            context
-                .tasks()
-                .repo_task_rows(&repo_key, &gitdir, &open_sessions)?,
-        );
+        context
+            .tasks()
+            .repo_task_rows(&repo_key, &gitdir, &open_sessions)?
     } else {
-        for repo_key in context.tasks().available_repo_keys()? {
-            let gitdir = context.layout().repo_gitdir_path(&repo_key);
-            rows.extend(
+        // Fan out per-repo `git worktree list --porcelain` calls across
+        // the rayon pool. Fork+exec overhead dominates each call, so
+        // running them in parallel is roughly a linear speedup on a
+        // workspace with many bare repos.
+        context
+            .tasks()
+            .available_repos()?
+            .into_par_iter()
+            .map(|(repo_key, gitdir)| {
                 context
                     .tasks()
-                    .repo_task_rows(&repo_key, &gitdir, &open_sessions)?,
-            );
-        }
-    }
+                    .repo_task_rows(&repo_key, &gitdir, &open_sessions)
+            })
+            .try_reduce(Vec::new, |mut acc, mut v| {
+                acc.append(&mut v);
+                Ok(acc)
+            })?
+    };
 
     rows.sort_by(|left, right| {
         left.status
@@ -65,25 +80,38 @@ pub(super) fn load_task_rows(
     Ok(rows)
 }
 
+#[cfg(test)]
 pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow>> {
     let open_sessions = context.tasks().tmux_sessions();
     let wt_dir = context.layout().wt_dir();
-    let mut rows = Vec::new();
+    // Canonicalize once to avoid one `fs::canonicalize` syscall per repo
+    // just to resolve paths like `/var` → `/private/var` on macOS.
+    let real_wt_dir = canonical(wt_dir);
 
-    for (repo_key, gitdir) in context.tasks().available_repos()? {
-        let (open_tasks, parked_tasks) =
-            count_repo_worktrees(&repo_key, &gitdir, wt_dir, &open_sessions);
+    let mut rows: Vec<RepoRow> = context
+        .tasks()
+        .available_repos()?
+        .into_par_iter()
+        .map(|(repo_key, gitdir)| {
+            let (open_tasks, parked_tasks) = count_repo_worktrees_with_canonical_wt(
+                &repo_key,
+                &gitdir,
+                &real_wt_dir,
+                wt_dir,
+                &open_sessions,
+            );
 
-        let detached_path = context.layout().detached_path(&repo_key);
-        let is_detached = is_detached_worktree(&detached_path);
+            let detached_path = context.layout().detached_path(&repo_key);
+            let is_detached = is_detached_worktree(&detached_path);
 
-        rows.push(RepoRow {
-            repo: repo_key,
-            open_tasks,
-            parked_tasks,
-            is_detached,
-        });
-    }
+            RepoRow {
+                repo: repo_key,
+                open_tasks,
+                parked_tasks,
+                is_detached,
+            }
+        })
+        .collect();
 
     rows.sort_by(|left, right| {
         right
@@ -102,6 +130,12 @@ fn is_detached_worktree(path: &std::path::Path) -> bool {
     path.join(".git").exists() || path.join("HEAD").exists()
 }
 
+/// Public `pub(super)` alias used by the loader module; keeps the
+/// existing private name free for this module's own tests.
+pub(super) fn is_detached_worktree_path(path: &std::path::Path) -> bool {
+    is_detached_worktree(path)
+}
+
 /// Count `(open, parked)` task worktrees for a repo without spawning git.
 ///
 /// Reads `<gitdir>/worktrees/*/gitdir` from disk, keeps only worktrees that
@@ -112,13 +146,27 @@ fn is_detached_worktree(path: &std::path::Path) -> bool {
 ///
 /// Mirrors the filter logic of `build_task_rows` but skips branch-name
 /// resolution (not needed for the Repos view) and the git subprocess.
+#[cfg(test)]
 fn count_repo_worktrees(
     repo_key: &RepoKey,
     gitdir: &Path,
     wt_dir: &Path,
     open_sessions: &HashSet<String>,
 ) -> (usize, usize) {
-    let task_root_real = canonical(wt_dir).join(repo_key.as_str());
+    let real_wt_dir = canonical(wt_dir);
+    count_repo_worktrees_with_canonical_wt(repo_key, gitdir, &real_wt_dir, wt_dir, open_sessions)
+}
+
+/// Like `count_repo_worktrees`, but accepts a pre-canonicalized `wt_dir` so
+/// the caller can canonicalize once and reuse across many repos.
+pub(super) fn count_repo_worktrees_with_canonical_wt(
+    repo_key: &RepoKey,
+    gitdir: &Path,
+    real_wt_dir: &Path,
+    wt_dir: &Path,
+    open_sessions: &HashSet<String>,
+) -> (usize, usize) {
+    let task_root_real = real_wt_dir.join(repo_key.as_str());
     let mut open = 0usize;
     let mut parked = 0usize;
 
@@ -139,6 +187,7 @@ fn count_repo_worktrees(
     (open, parked)
 }
 
+#[cfg(test)]
 fn canonical(path: &Path) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -591,6 +640,121 @@ mod tests {
                 rows.is_empty(),
                 "expected no task rows for a bare repo with no worktrees"
             );
+            let _ = fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn parallel_unscoped_load_is_deterministic_across_many_repos() {
+            // Pins the behaviour that parallelised `load_task_rows` still
+            // returns results sorted by (status, repo, branch), regardless
+            // of which worker finishes first.
+            let (base, env) = env_for("parallel-determinism-tasks");
+            let repos_dir = base.join("repos");
+            // Create several bare repos in no particular order.
+            for slug in [
+                "github.com/z/zebra",
+                "github.com/a/alpha",
+                "github.com/m/middle",
+                "github.com/b/beta",
+                "github.com/y/yankee",
+            ] {
+                init_bare_repo(&repos_dir.join(format!("{slug}.git")));
+            }
+
+            // Run multiple times; output must be identical (stable sort
+            // after parallel collect).
+            let first = load_task_rows(&env, None).expect("load_task_rows");
+            for _ in 0..5 {
+                let again = load_task_rows(&env, None).expect("load_task_rows");
+                assert_eq!(
+                    again, first,
+                    "parallel load_task_rows must be deterministic"
+                );
+            }
+
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    mod load_repo_rows_tests {
+        use std::{env, fs, process::Command};
+
+        use super::super::load_repo_rows;
+        use crate::runtime::environment::RuntimeEnvironment;
+
+        fn init_bare_repo(path: &std::path::Path) {
+            fs::create_dir_all(path).expect("create repo dir");
+            let status = Command::new("git")
+                .args(["init", "--bare"])
+                .arg(path)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", env::temp_dir())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("git must be available");
+            assert!(status.success(), "git init --bare failed");
+        }
+
+        fn env_for(base: &str) -> (std::path::PathBuf, RuntimeEnvironment) {
+            let base_dir = env::temp_dir().join(format!("task-rs-ui-tasks-repos-{base}"));
+            let repos_dir = base_dir.join("repos");
+            let wt_dir = base_dir.join("wt");
+            let detached_dir = base_dir.join("detached");
+            let _ = fs::remove_dir_all(&base_dir);
+            fs::create_dir_all(&repos_dir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+            let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir);
+            (base_dir, env)
+        }
+
+        #[test]
+        fn returns_empty_when_no_repos() {
+            let (_base, env) = env_for("empty");
+            let rows = load_repo_rows(&env).expect("load_repo_rows");
+            assert!(rows.is_empty());
+        }
+
+        #[test]
+        fn parallel_load_is_deterministic_and_sorted() {
+            // Several empty bare repos — exercises the parallel path and
+            // pins the alphabetical tiebreaker when all counts are zero.
+            let (base, env) = env_for("parallel-determinism");
+            let repos_dir = base.join("repos");
+            let slugs = [
+                "github.com/z/zebra",
+                "github.com/a/alpha",
+                "github.com/m/middle",
+                "github.com/b/beta",
+                "github.com/y/yankee",
+            ];
+            for slug in slugs {
+                init_bare_repo(&repos_dir.join(format!("{slug}.git")));
+            }
+
+            let first = load_repo_rows(&env).expect("load_repo_rows");
+            assert_eq!(first.len(), slugs.len());
+            // When every repo has 0 open, 0 parked, not detached, the
+            // comparator falls through to `left.repo.cmp(&right.repo)`.
+            let expected_order = [
+                "github.com/a/alpha",
+                "github.com/b/beta",
+                "github.com/m/middle",
+                "github.com/y/yankee",
+                "github.com/z/zebra",
+            ];
+            for (row, expected) in first.iter().zip(expected_order.iter()) {
+                assert_eq!(row.repo.as_str(), *expected);
+            }
+
+            for _ in 0..5 {
+                let again = load_repo_rows(&env).expect("load_repo_rows");
+                assert_eq!(
+                    again, first,
+                    "parallel load_repo_rows must be deterministic"
+                );
+            }
+
             let _ = fs::remove_dir_all(&base);
         }
     }
