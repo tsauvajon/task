@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::runtime::process::ExternalTool;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
@@ -43,6 +45,16 @@ impl Error {
 
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self::NotFound(msg.into())
+    }
+
+    /// Build a user-facing error for a required external tool that is not on
+    /// PATH. Includes the tool's install hint so the message is actionable.
+    pub fn tool_missing(tool: ExternalTool) -> Self {
+        Self::Failed(format!(
+            "Required tool `{binary}` not found on PATH. Install with: {hint}",
+            binary = tool.binary_name(),
+            hint = tool.install_hint(),
+        ))
     }
 }
 
@@ -101,6 +113,48 @@ mod tests {
             let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
             let err: Error = json_err.into();
             assert!(matches!(err, Error::Json(_)));
+        }
+    }
+
+    mod tool_missing {
+        use super::*;
+        use crate::runtime::process::ExternalTool;
+
+        #[test]
+        fn mentions_binary_name_and_install_hint() {
+            let err = Error::tool_missing(ExternalTool::Git);
+            let msg = err.to_string();
+            assert!(msg.contains("`git`"), "message should quote binary: {msg}");
+            assert!(
+                msg.contains("not found on PATH"),
+                "message should say not found: {msg}"
+            );
+            assert!(
+                msg.contains("nix profile install nixpkgs#git"),
+                "message should include install hint: {msg}"
+            );
+        }
+
+        #[test]
+        fn uses_tool_specific_nix_package() {
+            let err = Error::tool_missing(ExternalTool::Tmux);
+            assert!(err.to_string().contains("nixpkgs#tmux"));
+
+            let err = Error::tool_missing(ExternalTool::Node);
+            // Node and Corepack both ship in nixpkgs#nodejs
+            assert!(err.to_string().contains("nixpkgs#nodejs"));
+        }
+
+        #[test]
+        fn cargo_hint_mentions_rustup() {
+            let err = Error::tool_missing(ExternalTool::Cargo);
+            assert!(err.to_string().contains("rustup"));
+        }
+
+        #[test]
+        fn nix_hint_points_at_nixos_download() {
+            let err = Error::tool_missing(ExternalTool::Nix);
+            assert!(err.to_string().contains("nixos.org/download"));
         }
     }
 }

@@ -61,14 +61,10 @@ pub fn run_full_setup(env: &RuntimeEnvironment) -> Result<()> {
         layout.detached_dir().display()
     ));
 
-    if !process::nix_available() {
-        return Err(Error::failed(
-            "nix is required for setup. Install nix and retry 'task bootstrap'.",
-        ));
-    }
-
     if !asdf::is_available() {
-        process::warn("asdf could not be launched via nix. Skipping asdf-managed runtime setup.");
+        process::warn(
+            "asdf not found on PATH. Skipping asdf-managed runtime setup. Install with: nix profile install nixpkgs#asdf-vm",
+        );
     } else {
         if !asdf::has_nodejs_plugin() {
             process::log("Installing asdf nodejs plugin");

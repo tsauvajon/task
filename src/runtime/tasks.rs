@@ -422,10 +422,6 @@ impl TaskResolver {
 
     fn all_tasks(&self) -> Result<Vec<TaskRow>> {
         let open_sessions = self.tmux_sessions();
-        // Resolve the nix store path for git before entering the parallel
-        // section: the OnceLock inside NixRunner would otherwise block every
-        // rayon thread on the first caller while the rest stall idle.
-        crate::tools::git::warmup();
         self.available_repos()?
             .into_par_iter()
             .map(|(repo_key, gitdir)| self.repo_task_rows(&repo_key, &gitdir, &open_sessions))

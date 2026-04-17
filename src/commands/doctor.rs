@@ -3,7 +3,7 @@ use crate::{
     runtime::{
         config::is_interactive_terminal,
         environment::RuntimeEnvironment,
-        process,
+        process::{self, ExternalTool},
         setup::{self, SetupApproval},
     },
     tools::opencode,
@@ -11,6 +11,21 @@ use crate::{
 
 struct DoctorReport {
     missing_required: bool,
+}
+
+/// Tool availability classification for doctor output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Importance {
+    Required,
+    Recommended,
+}
+
+fn importance_for(tool: ExternalTool) -> Importance {
+    match tool {
+        // `git` is the only hard requirement — almost every code path shells out to it.
+        ExternalTool::Git => Importance::Required,
+        _ => Importance::Recommended,
+    }
 }
 
 pub fn run(env: &RuntimeEnvironment, fix: bool) -> Result<()> {
@@ -71,13 +86,27 @@ fn check(env: &RuntimeEnvironment) -> DoctorReport {
     println!("wt_dir: {}", layout.wt_dir().display());
     println!("detached_dir: {}", layout.detached_dir().display());
 
-    if process::nix_available() {
-        println!("[ok]      nix");
-        println!("[ok]      managed tools launch via nix run");
-    } else {
-        println!("[missing] nix");
-        println!("[missing] managed tools launch via nix run");
-        missing_required = true;
+    for &tool in ExternalTool::all() {
+        let binary = tool.binary_name();
+        let importance = importance_for(tool);
+        let present = process::command_exists(binary);
+
+        match (present, importance) {
+            (true, _) => println!("[ok]      {binary}"),
+            (false, Importance::Required) => {
+                println!(
+                    "[missing] {binary:<9} install: {hint}",
+                    hint = tool.install_hint()
+                );
+                missing_required = true;
+            }
+            (false, Importance::Recommended) => {
+                println!(
+                    "[warn]    {binary:<9} install: {hint}",
+                    hint = tool.install_hint()
+                );
+            }
+        }
     }
 
     if layout.repos_dir().is_dir() && layout.wt_dir().is_dir() && layout.detached_dir().is_dir() {
@@ -103,7 +132,8 @@ fn apply_fixes(env: &RuntimeEnvironment, approval: SetupApproval<'_>) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{DoctorAction, decide_action};
+    use super::{DoctorAction, Importance, decide_action, importance_for};
+    use crate::runtime::process::ExternalTool;
 
     mod decide_action {
         use super::*;
@@ -142,6 +172,29 @@ mod tests {
         #[test]
         fn reports_only_when_missing_but_not_interactive() {
             assert_eq!(decide_action(false, true, false), DoctorAction::ReportOnly);
+        }
+    }
+
+    mod importance {
+        use super::*;
+
+        #[test]
+        fn git_is_required() {
+            assert_eq!(importance_for(ExternalTool::Git), Importance::Required);
+        }
+
+        #[test]
+        fn other_tools_are_recommended() {
+            for &tool in ExternalTool::all() {
+                if tool == ExternalTool::Git {
+                    continue;
+                }
+                assert_eq!(
+                    importance_for(tool),
+                    Importance::Recommended,
+                    "{tool} should be recommended, not required"
+                );
+            }
         }
     }
 }

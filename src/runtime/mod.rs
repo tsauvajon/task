@@ -1,7 +1,6 @@
 pub mod branch_name;
 pub mod config;
 pub mod environment;
-pub mod nix_store;
 pub mod paths;
 pub mod process;
 pub mod repo_key;

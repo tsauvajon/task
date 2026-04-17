@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use crate::{
     error::Result,
-    runtime::process::{CommandPlan, ManagedTool},
+    runtime::process::{CommandPlan, ExternalTool},
 };
 
 pub fn auth_storage_reachable() -> bool {
@@ -18,9 +18,9 @@ pub fn auth_storage_reachable() -> bool {
 pub fn launch_command(directory: &Path) -> CommandPlan {
     match last_session_id(directory) {
         Some(id) => {
-            CommandPlan::for_managed_tool(ManagedTool::Opencode, vec!["--session".to_string(), id])
+            CommandPlan::for_tool(ExternalTool::Opencode, vec!["--session".to_string(), id])
         }
-        None => CommandPlan::for_managed_tool(ManagedTool::Opencode, Vec::new()),
+        None => CommandPlan::for_tool(ExternalTool::Opencode, Vec::new()),
     }
 }
 
@@ -183,16 +183,16 @@ mod tests {
         use super::*;
 
         #[test]
-        fn uses_nix_wrapped_opencode_when_no_db() {
+        fn uses_direct_opencode_binary_when_no_db() {
             let plan = launch_command(Path::new("/nonexistent/worktree"));
-            assert_eq!(plan.program(), "nix");
-            assert_eq!(plan.args(), vec!["run", "nixpkgs#opencode", "--"]);
+            assert_eq!(plan.program(), "opencode");
+            assert!(plan.args().is_empty());
         }
 
         #[test]
-        fn program_is_nix() {
+        fn program_is_opencode() {
             let plan = launch_command(Path::new("/nonexistent/wt/repo"));
-            assert_eq!(plan.program(), "nix");
+            assert_eq!(plan.program(), "opencode");
         }
     }
 

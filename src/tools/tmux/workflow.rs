@@ -216,7 +216,7 @@ mod tests {
         SessionStartup, TeardownAction, finish_teardown_actions, is_inside_tmux, new_session_args,
         park_teardown_actions, tmux_env_indicates_inside,
     };
-    use crate::runtime::process::{CommandPlan, ManagedTool};
+    use crate::runtime::process::{CommandPlan, ExternalTool};
 
     mod park_teardown {
         use super::*;
@@ -314,9 +314,9 @@ mod tests {
         }
 
         #[test]
-        fn with_opencode_uses_nix_wrapped_command() {
-            let opencode_command = CommandPlan::for_managed_tool(
-                ManagedTool::Opencode,
+        fn with_opencode_invokes_binary_directly() {
+            let opencode_command = CommandPlan::for_tool(
+                ExternalTool::Opencode,
                 vec!["--session".to_string(), "ses_123".to_string()],
             );
 
@@ -335,10 +335,7 @@ mod tests {
                     "repo-branch",
                     "-c",
                     "/tmp/wt/repo",
-                    "nix",
-                    "run",
-                    "nixpkgs#opencode",
-                    "--",
+                    "opencode",
                     "--session",
                     "ses_123",
                 ]
@@ -346,8 +343,8 @@ mod tests {
         }
 
         #[test]
-        fn with_opencode_no_extra_args_ends_after_separator() {
-            let opencode_command = CommandPlan::for_managed_tool(ManagedTool::Opencode, vec![]);
+        fn with_opencode_no_extra_args_omits_trailing_flags() {
+            let opencode_command = CommandPlan::for_tool(ExternalTool::Opencode, vec![]);
 
             let args = new_session_args(
                 "repo-branch",
@@ -364,10 +361,7 @@ mod tests {
                     "repo-branch",
                     "-c",
                     "/tmp/wt/repo",
-                    "nix",
-                    "run",
-                    "nixpkgs#opencode",
-                    "--",
+                    "opencode",
                 ]
             );
         }
