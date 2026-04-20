@@ -1,6 +1,7 @@
 use std::fs;
 
 use clap::Subcommand;
+use rayon::prelude::*;
 
 use crate::{
     error::{Error, Result},
@@ -137,15 +138,35 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
 
     drop(entries);
 
+    // Fan out per-repo work across rayon workers. Each closure installs its
+    // own [`process::OutputScope`] so all of the worker's logs and
+    // subprocess output are buffered, then flushed sequentially in the
+    // original sort order below.
+    let results: Vec<(std::path::PathBuf, Vec<process::CapturedLine>, Result<()>)> = worktrees
+        .par_iter()
+        .map(|path| {
+            let scope = process::OutputScope::new();
+            process::log(&format!("Updating: {}", path.display()));
+            let result = match update_detached(path) {
+                Ok(()) => {
+                    let repo_key = repo_key_from_detached_path(detached_dir, path);
+                    try_install(env, &repo_key);
+                    Ok(())
+                }
+                Err(err) => {
+                    process::warn(&format!("Failed to update {}: {err}", path.display()));
+                    Err(err)
+                }
+            };
+            (path.clone(), scope.into_lines(), result)
+        })
+        .collect();
+
     let mut errors: Vec<String> = Vec::new();
-    for path in &worktrees {
-        process::log(&format!("Updating: {}", path.display()));
-        if let Err(err) = update_detached(path) {
-            process::warn(&format!("Failed to update {}: {err}", path.display()));
+    for (path, lines, result) in results {
+        process::flush_captured_lines(lines);
+        if let Err(err) = result {
             errors.push(format!("{}: {err}", path.display()));
-        } else {
-            let repo_key = repo_key_from_detached_path(detached_dir, path);
-            try_install(env, &repo_key);
         }
     }
 
@@ -237,12 +258,27 @@ pub(crate) fn install_all(env: &RuntimeEnvironment) -> Result<()> {
     }
 
     let detached_dir = env.layout().detached_dir();
-    let mut errors: Vec<String> = Vec::new();
 
-    for entry in entries {
-        if let Err(err) = run_cargo_install(detached_dir, entry) {
-            process::warn(&format!("Failed to install {}: {err}", entry.repo));
-            errors.push(format!("{}: {err}", entry.repo));
+    // Parallelise across entries. cargo's global install lock serialises
+    // the final `mv` step, but the expensive compile phase overlaps across
+    // distinct detached worktrees (each has its own target/ directory).
+    let results: Vec<(String, Vec<process::CapturedLine>, Result<()>)> = entries
+        .par_iter()
+        .map(|entry| {
+            let scope = process::OutputScope::new();
+            let result = run_cargo_install(detached_dir, entry);
+            if let Err(err) = &result {
+                process::warn(&format!("Failed to install {}: {err}", entry.repo));
+            }
+            (entry.repo.clone(), scope.into_lines(), result)
+        })
+        .collect();
+
+    let mut errors: Vec<String> = Vec::new();
+    for (repo, lines, result) in results {
+        process::flush_captured_lines(lines);
+        if let Err(err) = result {
+            errors.push(format!("{repo}: {err}"));
         }
     }
 
@@ -557,6 +593,58 @@ mod tests {
         assert!(ok, "git init --bare failed");
     }
 
+    /// Run a git command, isolated from the user's global config, panicking
+    /// on failure. Used by the parallel update_all fixtures below.
+    fn git(args: &[&str], cwd: &Path) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", std::env::temp_dir())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git must be available");
+        assert!(status.success(), "git {args:?} in {cwd:?} failed");
+    }
+
+    /// Create a minimal remote + clone-style detached worktree at the
+    /// given path. Returns the path the caller can hand to `update_all`.
+    ///
+    /// Layout:
+    /// - `<base>/remote.git` — bare origin with one commit on `main`.
+    /// - `<base>/detached/<repo_key>` — `git clone`d working tree.
+    fn make_clone_backed_detached(base: &Path, repo_key: &str) -> std::path::PathBuf {
+        let remote = base.join(format!("remote-{}.git", repo_key.replace('/', "-")));
+        let seed = base.join(format!("seed-{}", repo_key.replace('/', "-")));
+        fs::create_dir_all(&seed).unwrap();
+
+        git(&["init", "--bare", remote.to_str().unwrap()], base);
+        git(&["init", "-b", "main"], &seed);
+        git(&["config", "user.email", "t@example.com"], &seed);
+        git(&["config", "user.name", "T"], &seed);
+        fs::write(seed.join("README.md"), "v1\n").unwrap();
+        git(&["add", "README.md"], &seed);
+        git(&["commit", "-m", "initial"], &seed);
+        git(
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+            &seed,
+        );
+        git(&["push", "-u", "origin", "main"], &seed);
+
+        let detached = base.join("detached").join(repo_key);
+        fs::create_dir_all(detached.parent().unwrap()).unwrap();
+        git(
+            &[
+                "clone",
+                remote.to_str().unwrap(),
+                detached.to_str().unwrap(),
+            ],
+            base,
+        );
+        detached
+    }
+
     mod add_tests {
         use super::{super::add, *};
 
@@ -684,6 +772,55 @@ mod tests {
             assert!(
                 result.is_ok(),
                 "should succeed gracefully with empty detached_dir: {result:?}"
+            );
+        }
+
+        #[test]
+        fn update_all_processes_multiple_repos_in_parallel() {
+            // Exercise the rayon par_iter path with two real detached
+            // worktrees. Each has an origin remote, so `git fetch origin`
+            // and `git reset --hard` succeed and `update_all` should return
+            // Ok(()) after updating both.
+            let dir = TempDir::new("update-all-parallel");
+            let base = dir.path();
+            let env = make_env(base);
+
+            let wt_a = make_clone_backed_detached(base, "github.com/org/a");
+            let wt_b = make_clone_backed_detached(base, "github.com/org/b");
+
+            let result = update_all(&env);
+            assert!(
+                result.is_ok(),
+                "update_all should succeed for two valid detached worktrees: {result:?}"
+            );
+            assert!(wt_a.join(".git").exists());
+            assert!(wt_b.join(".git").exists());
+        }
+
+        #[test]
+        fn update_all_aggregates_errors_across_repos() {
+            // One healthy worktree, one broken (no `.git`). The broken one
+            // is still a leaf directory but lacks any git metadata, so
+            // `update_detached` will fail for it. `update_all` must surface
+            // the failure AND still process the healthy one.
+            let dir = TempDir::new("update-all-mixed");
+            let base = dir.path();
+            let env = make_env(base);
+
+            let _good = make_clone_backed_detached(base, "github.com/org/good");
+
+            // Create a broken leaf that looks like a worktree (has a .git
+            // file) but points at nothing, so `git fetch origin` fails.
+            let broken = base.join("detached/github.com/org/broken");
+            fs::create_dir_all(&broken).unwrap();
+            fs::write(broken.join(".git"), "gitdir: /nonexistent/path").unwrap();
+
+            let result = update_all(&env);
+            assert!(result.is_err(), "broken worktree should trigger an error");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("failed to update"),
+                "error should mention failed updates: {msg}"
             );
         }
     }

@@ -1,8 +1,11 @@
 use std::{
+    cell::RefCell,
     ffi::OsStr,
+    io::{BufRead, BufReader, Read},
     path::Path,
     process::{Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
+    thread,
 };
 
 use owo_colors::OwoColorize;
@@ -19,6 +22,108 @@ static LOG_CAPTURE: OnceLock<Mutex<LogCapture>> = OnceLock::new();
 
 fn log_capture() -> &'static Mutex<LogCapture> {
     LOG_CAPTURE.get_or_init(|| Mutex::new(LogCapture::default()))
+}
+
+/// A single buffered line, tagged with the stream it should be flushed to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapturedLine {
+    Stdout(String),
+    Stderr(String),
+}
+
+impl CapturedLine {
+    pub fn flush(&self) {
+        match self {
+            Self::Stdout(line) => println!("{line}"),
+            Self::Stderr(line) => eprintln!("{line}"),
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Stdout(s) | Self::Stderr(s) => s,
+        }
+    }
+}
+
+/// A thread-local output sink used by [`OutputScope`] to capture everything
+/// a parallel worker would otherwise print — log lines, warnings, and
+/// subprocess stdout/stderr — so it can be flushed to the terminal as one
+/// grouped block after the worker finishes.
+///
+/// The sink stores lines in order of arrival. Nothing here is global: each
+/// worker thread installs (and drops) its own `OutputScope`.
+type Sink = Arc<Mutex<Vec<CapturedLine>>>;
+
+thread_local! {
+    static OUTPUT_SINK: RefCell<Option<Sink>> = const { RefCell::new(None) };
+}
+
+/// Install a per-thread output sink. When active:
+///
+/// - [`log`] and [`warn`] append into the sink instead of writing to the
+///   terminal.
+/// - Subprocess helpers ([`run_status`], [`run_status_quiet`]) stream their
+///   child's stdout/stderr line-by-line into the sink.
+///
+/// On drop, the previous sink (if any) is restored and the captured lines
+/// are available via [`OutputScope::into_lines`].
+///
+/// Sequential code that never constructs an `OutputScope` is completely
+/// unaffected.
+pub struct OutputScope {
+    sink: Sink,
+    previous: Option<Sink>,
+}
+
+impl OutputScope {
+    pub fn new() -> Self {
+        let sink: Sink = Arc::new(Mutex::new(Vec::new()));
+        let previous = OUTPUT_SINK.with(|slot| slot.replace(Some(sink.clone())));
+        Self { sink, previous }
+    }
+
+    /// Consume the scope and return the captured lines in arrival order.
+    pub fn into_lines(self) -> Vec<CapturedLine> {
+        // The Drop impl restores the previous sink; we just need to
+        // extract our collected lines before it runs.
+        let lines = std::mem::take(&mut *self.sink.lock().unwrap_or_else(|e| e.into_inner()));
+        OUTPUT_SINK.with(|slot| *slot.borrow_mut() = self.previous.clone());
+        std::mem::forget(self);
+        lines
+    }
+}
+
+impl Default for OutputScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for OutputScope {
+    fn drop(&mut self) {
+        OUTPUT_SINK.with(|slot| *slot.borrow_mut() = self.previous.take());
+    }
+}
+
+fn with_active_sink<R>(f: impl FnOnce(&Sink) -> R) -> Option<R> {
+    OUTPUT_SINK.with(|slot| slot.borrow().as_ref().map(f))
+}
+
+fn push_to_sink(line: CapturedLine) -> bool {
+    with_active_sink(|sink| {
+        if let Ok(mut guard) = sink.lock() {
+            guard.push(line);
+        }
+    })
+    .is_some()
+}
+
+/// Flush previously-captured lines to stdout/stderr in arrival order.
+pub fn flush_captured_lines(lines: Vec<CapturedLine>) {
+    for line in lines {
+        line.flush();
+    }
 }
 
 /// External binaries the CLI shells out to. The enum captures just enough
@@ -229,6 +334,13 @@ pub fn run_capture(
 
 pub fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
     let program = program.as_ref();
+
+    // If an OutputScope is active, stream the child's stdout/stderr into
+    // the sink line-by-line so the caller's buffered block stays coherent.
+    if let Some(sink) = OUTPUT_SINK.with(|slot| slot.borrow().clone()) {
+        return run_status_into_sink(program, args, cwd, &sink);
+    }
+
     let mut cmd = Command::new(program);
     cmd.args(args);
     if let Some(cwd) = cwd {
@@ -249,6 +361,13 @@ pub fn run_status_quiet(
     cwd: Option<&Path>,
 ) -> Result<()> {
     let program = program.as_ref();
+
+    // When a sink is active, forward stdout/stderr into it even on success
+    // so the worker's output block is complete.
+    if let Some(sink) = OUTPUT_SINK.with(|slot| slot.borrow().clone()) {
+        return run_status_into_sink(program, args, cwd, &sink);
+    }
+
     let mut cmd = Command::new(program);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Some(cwd) = cwd {
@@ -268,6 +387,70 @@ pub fn run_status_quiet(
     Err(Error::failed(msg))
 }
 
+/// Spawn a child and drain its stdout+stderr into the active output sink,
+/// line by line. Used by both `run_status` and `run_status_quiet` when an
+/// [`OutputScope`] is installed on the current thread.
+///
+/// stderr lines are prefixed with `warning:` so [`flush_captured_lines`]
+/// routes them to stderr on flush, matching how [`warn`] behaves live.
+fn run_status_into_sink(
+    program: &OsStr,
+    args: &[&str],
+    cwd: Option<&Path>,
+    sink: &Sink,
+) -> Result<()> {
+    let mut cmd = Command::new(program);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    let mut child = cmd.spawn().map_err(|e| spawn_error(program, e))?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let stdout_handle = stdout.map(|pipe| {
+        let sink = Arc::clone(sink);
+        thread::spawn(move || drain_into_sink(pipe, &sink, /* stderr = */ false))
+    });
+    let stderr_handle = stderr.map(|pipe| {
+        let sink = Arc::clone(sink);
+        thread::spawn(move || drain_into_sink(pipe, &sink, /* stderr = */ true))
+    });
+
+    let status = child.wait().map_err(Error::from)?;
+
+    // Drainers must finish before we return so the caller sees the full
+    // output block in-order.
+    if let Some(h) = stdout_handle {
+        let _ = h.join();
+    }
+    if let Some(h) = stderr_handle {
+        let _ = h.join();
+    }
+
+    if status.success() {
+        return Ok(());
+    }
+    Err(Error::failed(format!(
+        "command failed with status {status}"
+    )))
+}
+
+fn drain_into_sink<R: Read>(reader: R, sink: &Sink, is_stderr: bool) {
+    let buf = BufReader::new(reader);
+    for line in buf.lines().map_while(std::result::Result::ok) {
+        let captured = if is_stderr {
+            CapturedLine::Stderr(line)
+        } else {
+            CapturedLine::Stdout(line)
+        };
+        if let Ok(mut guard) = sink.lock() {
+            guard.push(captured);
+        }
+    }
+}
+
 pub fn spawn_detached(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
     let program = program.as_ref();
     let mut cmd = Command::new(program);
@@ -279,17 +462,27 @@ pub fn spawn_detached(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Pa
 }
 
 pub fn log(message: &str) {
+    // Per-thread OutputScope takes precedence: it preserves the styled
+    // prefix so the flushed block looks identical to live output.
+    let styled = format!("{} {}", "==>".bright_blue().bold(), message);
+    if push_to_sink(CapturedLine::Stdout(styled.clone())) {
+        return;
+    }
     if capture_log_line(&format!("==> {message}")) {
         return;
     }
-    println!("{} {}", "==>".bright_blue().bold(), message);
+    println!("{styled}");
 }
 
 pub fn warn(message: &str) {
+    let styled = format!("{} {}", "warning:".yellow().bold(), message);
+    if push_to_sink(CapturedLine::Stderr(styled.clone())) {
+        return;
+    }
     if capture_log_line(&format!("warning: {message}")) {
         return;
     }
-    eprintln!("{} {}", "warning:".yellow().bold(), message);
+    eprintln!("{styled}");
 }
 
 pub fn enable_log_capture() {
@@ -590,6 +783,118 @@ mod tests {
         fn slash_in_name_triggers_filesystem_check() {
             // A relative path that contains a slash but doesn't exist
             assert!(!command_exists("relative/path/to/nothing"));
+        }
+    }
+
+    mod output_scope {
+        use super::super::{
+            CapturedLine, OUTPUT_SINK, OutputScope, log, run_status, run_status_quiet, warn,
+        };
+
+        /// Strip owo-colors ANSI escapes so assertions are readable.
+        fn strip_ansi(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut chars = s.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\u{1b}' {
+                    // Skip until the terminating letter of the CSI sequence.
+                    while let Some(&next) = chars.peek() {
+                        chars.next();
+                        if next.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        }
+
+        #[test]
+        fn captures_log_and_warn_in_order() {
+            let scope = OutputScope::new();
+            log("first");
+            warn("second");
+            log("third");
+            let lines = scope.into_lines();
+
+            assert_eq!(lines.len(), 3);
+            assert!(matches!(lines[0], CapturedLine::Stdout(_)));
+            assert!(matches!(lines[1], CapturedLine::Stderr(_)));
+            assert!(matches!(lines[2], CapturedLine::Stdout(_)));
+
+            assert_eq!(strip_ansi(lines[0].text()), "==> first");
+            assert_eq!(strip_ansi(lines[1].text()), "warning: second");
+            assert_eq!(strip_ansi(lines[2].text()), "==> third");
+        }
+
+        #[test]
+        fn without_scope_no_capture_happens() {
+            // Nothing installed → sink is None.
+            let present = OUTPUT_SINK.with(|slot| slot.borrow().as_ref().is_some());
+            assert!(!present, "no sink should be installed outside of a scope");
+        }
+
+        #[test]
+        fn drop_restores_previous_sink() {
+            let outer = OutputScope::new();
+            log("outer-before");
+            {
+                let inner = OutputScope::new();
+                log("inner-only");
+                let inner_lines = inner.into_lines();
+                assert_eq!(inner_lines.len(), 1);
+                assert!(strip_ansi(inner_lines[0].text()).contains("inner-only"));
+            }
+            log("outer-after");
+            let outer_lines = outer.into_lines();
+            assert_eq!(outer_lines.len(), 2);
+            assert!(strip_ansi(outer_lines[0].text()).contains("outer-before"));
+            assert!(strip_ansi(outer_lines[1].text()).contains("outer-after"));
+        }
+
+        #[test]
+        fn run_status_streams_subprocess_stdout_into_sink() {
+            // `true` produces no output; use `printf` to exercise stdout
+            // streaming (portable on macOS and Linux).
+            let scope = OutputScope::new();
+            run_status("printf", &["hello-from-child\\n"], None).expect("printf should succeed");
+            let lines = scope.into_lines();
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| matches!(l, CapturedLine::Stdout(s) if s == "hello-from-child")),
+                "expected child stdout line, got {lines:?}"
+            );
+        }
+
+        #[test]
+        fn run_status_quiet_streams_stderr_as_stderr_variant() {
+            let scope = OutputScope::new();
+            // Write to stderr via `sh -c`.
+            run_status_quiet("sh", &["-c", "printf 'err-msg\\n' 1>&2"], None)
+                .expect("sh should succeed");
+            let lines = scope.into_lines();
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| matches!(l, CapturedLine::Stderr(s) if s == "err-msg")),
+                "expected child stderr line, got {lines:?}"
+            );
+        }
+
+        #[test]
+        fn captured_child_output_does_not_leak_to_terminal_on_success() {
+            // Implicit: no assertion on terminal, but verify the sink got
+            // the content so a sequential printer can flush later.
+            let scope = OutputScope::new();
+            run_status("printf", &["captured-only\\n"], None).unwrap();
+            let lines = scope.into_lines();
+            assert!(
+                lines.iter().any(|l| l.text() == "captured-only"),
+                "line should be in sink, not on live stdout"
+            );
         }
     }
 }
