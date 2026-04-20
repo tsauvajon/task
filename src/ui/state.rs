@@ -298,14 +298,15 @@ impl UiState {
     /// `(status, repo, branch)`.
     ///
     /// Cursor behavior:
-    /// - When a load is in flight (`pending_task_selection` is `Some`),
-    ///   look for that pending identity in the newly sorted list.
-    ///   - Found  → anchor cursor on it, clear the pending identity.
-    ///   - Missing → pin cursor to index 0 of the current list rather
-    ///     than drifting to whatever arrived first.
-    /// - Otherwise, preserve the live selection by re-locating its
+    /// - If `pending_task_selection` is `Some` (a load is in flight and
+    ///   we captured the user's pre-refresh selection), we keep the
+    ///   cursor locked onto that identity for the whole load. Found →
+    ///   anchor cursor on it; missing → leave the cursor at index 0
+    ///   while we wait for it. The pending identity is cleared by
+    ///   `RepoRowsDone` / `TasksComplete` (or by the next `begin_load`).
+    /// - Otherwise preserve the live selection by re-locating its
     ///   identity in the new list (falls back to index 0 if it was
-    ///   filtered out).
+    ///   filtered out or the row disappeared entirely).
     pub(super) fn insert_task_rows_sorted(&mut self, rows: Vec<TaskRow>) {
         let live_identity = self
             .selected_task_row()
@@ -322,14 +323,15 @@ impl UiState {
         self.apply_task_filter();
 
         if let Some(pending) = pending_identity {
-            match self.find_task_index(&pending.0, &pending.1) {
-                Some(new_index) => {
-                    self.task_selected = new_index;
-                    self.pending_task_selection = None;
-                }
-                None => self.task_selected = 0,
-            }
+            // Keep pending set for the duration of the load so every
+            // subsequent row re-anchors. Clearing it here would let
+            // later rows fall through to the live-identity branch and
+            // drift the cursor as the sort order changes.
+            self.task_selected = self.find_task_index(&pending.0, &pending.1).unwrap_or(0);
         } else if self.task_load.is_loading() {
+            // No pending identity means this is an initial load with no
+            // prior selection. Pin the cursor to the top of the current
+            // sorted list instead of chasing whichever row arrived first.
             self.task_selected = 0;
         } else if let Some((repo, branch)) = live_identity {
             self.task_selected = self.find_task_index(&repo, &branch).unwrap_or(0);
@@ -346,10 +348,12 @@ impl UiState {
     /// Insert one repo row, preserving sort order used elsewhere
     /// (open desc, parked desc, detached desc, repo asc).
     ///
-    /// Mirrors `insert_task_rows_sorted` for cursor behavior: during a
-    /// load we prefer `pending_repo_selection` over the live selection
-    /// and pin the cursor to index 0 while we wait for the pending repo
-    /// to stream back in.
+    /// Mirrors `insert_task_rows_sorted` for cursor behavior: while a
+    /// pending pre-refresh identity is set, we keep re-anchoring the
+    /// cursor to it on every row (even after it first appears, since
+    /// later rows may shift its sort position). Outside a pending load
+    /// we preserve the live selection. An initial load with no pending
+    /// identity keeps the cursor at the top.
     pub(super) fn insert_repo_row_sorted(&mut self, row: RepoRow) {
         let live_identity = self.selected_repo_row().map(|row| row.repo.clone());
         let pending_identity = self.pending_repo_selection.clone();
@@ -366,14 +370,15 @@ impl UiState {
         self.apply_repo_filter();
 
         if let Some(pending) = pending_identity {
-            match self.find_repo_index(&pending) {
-                Some(new_index) => {
-                    self.repo_selected = new_index;
-                    self.pending_repo_selection = None;
-                }
-                None => self.repo_selected = 0,
-            }
+            // Keep pending set for the duration of the load so every
+            // subsequent row re-anchors. Clearing it on first match
+            // would let later rows fall through to the live-identity
+            // branch, which can snap the cursor to 0 as the sort order
+            // changes.
+            self.repo_selected = self.find_repo_index(&pending).unwrap_or(0);
         } else if self.repo_load.is_loading() {
+            // Initial load with no prior selection: pin to the top
+            // rather than chasing whichever row arrived first.
             self.repo_selected = 0;
         } else if let Some(repo) = live_identity {
             self.repo_selected = self.find_repo_index(&repo).unwrap_or(0);
@@ -2056,10 +2061,10 @@ mod tests {
             assert!(state.pending_task_selection.is_none());
         }
 
-        /// Once the anchor row arrives, the pending identity is cleared so
-        /// it cannot re-anchor unrelated inserts in the same load.
+        /// The pending identity is kept for the whole load so every
+        /// subsequent row re-anchors on it. `RepoRowsDone` clears it.
         #[test]
-        fn pending_repo_identity_is_cleared_after_anchor_reattaches() {
+        fn pending_repo_identity_is_cleared_on_repo_rows_done() {
             let mut state = UiState::new(
                 vec![],
                 vec![
@@ -2073,13 +2078,139 @@ mod tests {
             let generation = state.begin_load();
             assert!(state.pending_repo_selection.is_some());
 
+            // Anchor row arrives. Pending stays set so later inserts
+            // keep re-anchoring to it.
             state.apply_load_msg(LoadMsg::RepoRow {
                 generation,
                 row: detached_repo_row("github.com/org/b", 2),
             });
+            assert!(state.pending_repo_selection.is_some());
 
-            // Anchor row arrived; pending identity must now be None.
+            state.apply_load_msg(LoadMsg::RepoRowsDone { generation });
             assert!(state.pending_repo_selection.is_none());
+        }
+
+        /// Regression: once the pending repo arrives mid-stream, later
+        /// `RepoRow` inserts must not snap the cursor back to 0 while the
+        /// load is still in progress.
+        #[test]
+        fn later_repo_rows_do_not_reset_cursor_after_pending_reattaches() {
+            let mut state = UiState::new(
+                vec![],
+                vec![
+                    detached_repo_row("github.com/org/a", 1),
+                    detached_repo_row("github.com/org/b", 1),
+                    detached_repo_row("github.com/org/c", 1),
+                    detached_repo_row("github.com/org/d", 1),
+                ],
+                None,
+            );
+            state.repo_selected = 1; // "b"
+
+            let generation = state.begin_load();
+
+            // "c" arrives before the pending row.
+            state.apply_load_msg(LoadMsg::RepoRow {
+                generation,
+                row: detached_repo_row("github.com/org/c", 1),
+            });
+            // Pending row "b" arrives second and must anchor the cursor.
+            state.apply_load_msg(LoadMsg::RepoRow {
+                generation,
+                row: detached_repo_row("github.com/org/b", 1),
+            });
+            assert_eq!(
+                state.selected_repo_row().map(|r| r.repo.as_str()),
+                Some("github.com/org/b"),
+                "cursor should be on pending row after it arrives",
+            );
+            // Pending stays set so later rows keep re-anchoring.
+            assert!(state.pending_repo_selection.is_some());
+
+            // "a" then "d" arrive later in the same load; cursor must
+            // stay on "b" instead of snapping to index 0.
+            state.apply_load_msg(LoadMsg::RepoRow {
+                generation,
+                row: detached_repo_row("github.com/org/a", 1),
+            });
+            assert_eq!(
+                state.selected_repo_row().map(|r| r.repo.as_str()),
+                Some("github.com/org/b"),
+                "cursor must stay on pending row after another row arrives",
+            );
+
+            state.apply_load_msg(LoadMsg::RepoRow {
+                generation,
+                row: detached_repo_row("github.com/org/d", 1),
+            });
+            state.apply_load_msg(LoadMsg::RepoRowsDone { generation });
+
+            assert_eq!(
+                state.selected_repo_row().map(|r| r.repo.as_str()),
+                Some("github.com/org/b"),
+                "cursor must remain on pending row at end of load",
+            );
+        }
+
+        /// Regression mirror for tasks: once the pending task arrives
+        /// mid-stream, subsequent `TaskRowsForRepo` inserts must not
+        /// reset the cursor.
+        #[test]
+        fn later_task_rows_do_not_reset_cursor_after_pending_reattaches() {
+            let mut state = UiState::new(
+                vec![
+                    task_row("github.com/org/a", "feat-1"),
+                    task_row("github.com/org/b", "feat-2"),
+                    task_row("github.com/org/c", "feat-3"),
+                    task_row("github.com/org/d", "feat-4"),
+                ],
+                vec![],
+                None,
+            );
+            state.task_selected = 1; // "b/feat-2"
+
+            let generation = state.begin_load();
+
+            state.apply_load_msg(LoadMsg::TaskRowsForRepo {
+                generation,
+                repo: RepoKey::new("github.com/org/c"),
+                rows: vec![task_row("github.com/org/c", "feat-3")],
+            });
+            state.apply_load_msg(LoadMsg::TaskRowsForRepo {
+                generation,
+                repo: RepoKey::new("github.com/org/b"),
+                rows: vec![task_row("github.com/org/b", "feat-2")],
+            });
+            let selected = state.selected_task_row().expect("selection exists");
+            assert_eq!(selected.repo.as_str(), "github.com/org/b");
+            // Pending stays set so later rows keep re-anchoring.
+            assert!(state.pending_task_selection.is_some());
+
+            state.apply_load_msg(LoadMsg::TaskRowsForRepo {
+                generation,
+                repo: RepoKey::new("github.com/org/a"),
+                rows: vec![task_row("github.com/org/a", "feat-1")],
+            });
+            let selected = state.selected_task_row().expect("selection exists");
+            assert_eq!(
+                selected.repo.as_str(),
+                "github.com/org/b",
+                "cursor must stay on pending task after another row arrives",
+            );
+
+            state.apply_load_msg(LoadMsg::TaskRowsForRepo {
+                generation,
+                repo: RepoKey::new("github.com/org/d"),
+                rows: vec![task_row("github.com/org/d", "feat-4")],
+            });
+            state.apply_load_msg(LoadMsg::TasksComplete { generation });
+
+            let selected = state.selected_task_row().expect("selection exists");
+            assert_eq!(
+                selected.repo.as_str(),
+                "github.com/org/b",
+                "cursor must remain on pending task at end of load",
+            );
         }
     }
 }
