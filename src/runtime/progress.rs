@@ -23,7 +23,7 @@ use crate::runtime::spinner::FRAMES_STR;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Fetching,
-    Resetting,
+    Syncing,
     Installing,
 }
 
@@ -31,7 +31,7 @@ impl Phase {
     fn label(self) -> &'static str {
         match self {
             Self::Fetching => "Fetching",
-            Self::Resetting => "Resetting",
+            Self::Syncing => "Syncing",
             Self::Installing => "Installing",
         }
     }
