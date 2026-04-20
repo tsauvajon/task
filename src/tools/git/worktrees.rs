@@ -250,8 +250,24 @@ pub fn add_detached(gitdir: &Path, path: &Path, base_ref: &str) -> Result<()> {
 ///   git -C <path> fetch origin
 ///   git -C <path> reset --hard <resolved-base>
 pub fn update_detached(path: &Path) -> Result<()> {
+    fetch_detached(path)?;
+    reset_detached(path)
+}
+
+/// First half of [`update_detached`]: `git -C <path> fetch origin`.
+///
+/// Exposed so callers that want to report per-phase progress can drive
+/// the two git invocations independently while still going through the
+/// same helper.
+pub fn fetch_detached(path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy();
-    status(&["-C", path_str.as_ref(), "fetch", "origin"], None)?;
+    status(&["-C", path_str.as_ref(), "fetch", "origin"], None)
+}
+
+/// Second half of [`update_detached`]: hard-reset to the resolved default
+/// base ref. See [`fetch_detached`] for the rationale.
+pub fn reset_detached(path: &Path) -> Result<()> {
+    let path_str = path.to_string_lossy();
     let base_ref = resolve_detached_base_ref(path);
     status(
         &["-C", path_str.as_ref(), "reset", "--hard", &base_ref],

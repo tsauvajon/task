@@ -5,10 +5,15 @@ use rayon::prelude::*;
 
 use crate::{
     error::{Error, Result},
-    runtime::{RepoKey, environment::RuntimeEnvironment, process},
+    runtime::{
+        RepoKey,
+        environment::RuntimeEnvironment,
+        process,
+        progress::{Phase, ProgressReporter},
+    },
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs},
-        worktrees::{add_detached, update_detached},
+        worktrees::{add_detached, fetch_detached, reset_detached, update_detached},
     },
 };
 
@@ -138,34 +143,60 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
 
     drop(entries);
 
-    // Fan out per-repo work across rayon workers. Each closure installs its
-    // own [`process::OutputScope`] so all of the worker's logs and
-    // subprocess output are buffered, then flushed sequentially in the
-    // original sort order below.
+    // Build row labels (stable repo keys) for the progress reporter
+    // while preserving each path alongside its index.
+    let labels: Vec<String> = worktrees
+        .iter()
+        .map(|p| {
+            let key = repo_key_from_detached_path(detached_dir, p);
+            AsRef::<str>::as_ref(&key).to_string()
+        })
+        .collect();
+    let reporter = ProgressReporter::new("Updating", labels);
+    let install_entries = env.install_entries();
+
+    // Fan out per-repo work across rayon workers. Each closure buffers its
+    // output via `OutputScope`; captured lines are retained only for
+    // failed rows (docker-compose-style quiet happy path).
     let results: Vec<(std::path::PathBuf, Vec<process::CapturedLine>, Result<()>)> = worktrees
         .par_iter()
-        .map(|path| {
+        .enumerate()
+        .map(|(idx, path)| {
             let scope = process::OutputScope::new();
-            process::log(&format!("Updating: {}", path.display()));
-            let result = match update_detached(path) {
-                Ok(()) => {
-                    let repo_key = repo_key_from_detached_path(detached_dir, path);
-                    try_install(env, &repo_key);
-                    Ok(())
-                }
-                Err(err) => {
-                    process::warn(&format!("Failed to update {}: {err}", path.display()));
-                    Err(err)
-                }
-            };
+            let handle = reporter.begin(idx);
+            let repo_key = repo_key_from_detached_path(detached_dir, path);
+
+            let result = fetch_detached(path)
+                .and_then(|()| {
+                    handle.phase(Phase::Resetting);
+                    reset_detached(path)
+                })
+                .and_then(
+                    |()| match find_install_entry(install_entries, repo_key.as_ref()) {
+                        Some(entry) => {
+                            handle.phase(Phase::Installing);
+                            run_cargo_install(detached_dir, entry)
+                        }
+                        None => Ok(()),
+                    },
+                );
+            let has_install = find_install_entry(install_entries, repo_key.as_ref()).is_some();
+            match &result {
+                Ok(()) => handle.succeeded(if has_install { "Installed" } else { "Updated" }),
+                Err(err) => handle.failed(err.to_string()),
+            }
             (path.clone(), scope.into_lines(), result)
         })
         .collect();
 
+    reporter.finish();
+
     let mut errors: Vec<String> = Vec::new();
     for (path, lines, result) in results {
-        process::flush_captured_lines(lines);
         if let Err(err) = result {
+            // Only surface buffered output for failures — successful
+            // workers stay quiet so the progress block is the whole UX.
+            print_failure_block(&path, lines);
             errors.push(format!("{}: {err}", path.display()));
         }
     }
@@ -178,6 +209,17 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Render a `──── <label> ────` header followed by the worker's
+/// captured output. Keeps failure post-mortems grouped per-repo so
+/// concurrent workers' logs don't interleave.
+fn print_failure_block(path: &std::path::Path, lines: Vec<process::CapturedLine>) {
+    if lines.is_empty() {
+        return;
+    }
+    eprintln!("──── {} ────", path.display());
+    process::flush_captured_lines(lines);
 }
 
 pub(crate) fn remove(env: &RuntimeEnvironment, repo_arg: &str, force: bool) -> Result<()> {
@@ -259,25 +301,35 @@ pub(crate) fn install_all(env: &RuntimeEnvironment) -> Result<()> {
 
     let detached_dir = env.layout().detached_dir();
 
+    let labels: Vec<String> = entries.iter().map(|e| e.repo.clone()).collect();
+    let reporter = ProgressReporter::new("Installing", labels);
+
     // Parallelise across entries. cargo's global install lock serialises
     // the final `mv` step, but the expensive compile phase overlaps across
     // distinct detached worktrees (each has its own target/ directory).
     let results: Vec<(String, Vec<process::CapturedLine>, Result<()>)> = entries
         .par_iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(idx, entry)| {
             let scope = process::OutputScope::new();
+            let handle = reporter.begin(idx);
+            handle.phase(Phase::Installing);
             let result = run_cargo_install(detached_dir, entry);
-            if let Err(err) = &result {
-                process::warn(&format!("Failed to install {}: {err}", entry.repo));
+            match &result {
+                Ok(()) => handle.succeeded("Installed"),
+                Err(err) => handle.failed(err.to_string()),
             }
             (entry.repo.clone(), scope.into_lines(), result)
         })
         .collect();
 
+    reporter.finish();
+
     let mut errors: Vec<String> = Vec::new();
     for (repo, lines, result) in results {
-        process::flush_captured_lines(lines);
         if let Err(err) = result {
+            eprintln!("──── {repo} ────");
+            process::flush_captured_lines(lines);
             errors.push(format!("{repo}: {err}"));
         }
     }

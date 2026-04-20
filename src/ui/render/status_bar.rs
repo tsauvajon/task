@@ -7,17 +7,12 @@ use ratatui::{
 };
 
 use crate::{
-    runtime::task_rows::TaskStatus,
+    runtime::{spinner::FRAMES as SPINNER_FRAMES, task_rows::TaskStatus},
     ui::{
         state::{LoadPhase, UiState, ViewMode},
         theme::Theme,
     },
 };
-
-/// Braille spinner frames, cycled at the event-loop tick rate. Ten frames
-/// keeps the animation visibly smooth at 100ms/frame without requiring a
-/// faster tick.
-const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 pub(super) fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, theme: &Theme) {
     let mut spans: Vec<Span> = Vec::new();
