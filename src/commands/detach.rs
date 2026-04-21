@@ -1,13 +1,19 @@
 use std::fs;
 
 use clap::Subcommand;
+use rayon::prelude::*;
 
 use crate::{
     error::{Error, Result},
-    runtime::{RepoKey, environment::RuntimeEnvironment, process},
+    runtime::{
+        RepoKey,
+        environment::RuntimeEnvironment,
+        process,
+        progress::{Phase, ProgressReporter},
+    },
     tools::git::{
         refs::{detect_default_base, fetch_origin_refs},
-        worktrees::{add_detached, update_detached},
+        worktrees::{add_detached, fetch_detached, reset_detached, update_detached},
     },
 };
 
@@ -38,6 +44,12 @@ pub enum DetachCommand {
     ///
     /// Installable repos are defined in the [[install]] section of config.toml.
     /// Without arguments, installs all configured entries.
+    ///
+    /// When an [[install]] entry has no `path`, `task` inspects the repo root
+    /// manifest and, if it is a virtual workspace, uses `cargo metadata` to
+    /// pick an installable crate: the only bin member, or the bin member whose
+    /// package name matches the repo short name. Ambiguous workspaces fail
+    /// with a list of candidate paths.
     #[command(about = "Install configured detached repos via cargo")]
     Install {
         /// Repo to install. Omit to install all configured repos.
@@ -137,15 +149,61 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
 
     drop(entries);
 
-    let mut errors: Vec<String> = Vec::new();
-    for path in &worktrees {
-        process::log(&format!("Updating: {}", path.display()));
-        if let Err(err) = update_detached(path) {
-            process::warn(&format!("Failed to update {}: {err}", path.display()));
-            errors.push(format!("{}: {err}", path.display()));
-        } else {
+    // Build row labels (stable repo keys) for the progress reporter
+    // while preserving each path alongside its index.
+    let labels: Vec<String> = worktrees
+        .iter()
+        .map(|p| {
+            let key = repo_key_from_detached_path(detached_dir, p);
+            AsRef::<str>::as_ref(&key).to_string()
+        })
+        .collect();
+    let reporter = ProgressReporter::new("Updating", labels);
+    let install_entries = env.install_entries();
+
+    // Fan out per-repo work across rayon workers. Each closure buffers its
+    // output via `OutputScope`; captured lines are retained only for
+    // failed rows (docker-compose-style quiet happy path).
+    let results: Vec<(std::path::PathBuf, Vec<process::CapturedLine>, Result<()>)> = worktrees
+        .par_iter()
+        .enumerate()
+        .map(|(idx, path)| {
+            let scope = process::OutputScope::new();
+            let handle = reporter.begin(idx);
             let repo_key = repo_key_from_detached_path(detached_dir, path);
-            try_install(env, &repo_key);
+
+            let result = fetch_detached(path)
+                .and_then(|()| {
+                    handle.phase(Phase::Syncing);
+                    reset_detached(path)
+                })
+                .and_then(
+                    |()| match find_install_entry(install_entries, repo_key.as_ref()) {
+                        Some(entry) => {
+                            handle.phase(Phase::Installing);
+                            run_cargo_install(detached_dir, entry)
+                        }
+                        None => Ok(()),
+                    },
+                );
+            let has_install = find_install_entry(install_entries, repo_key.as_ref()).is_some();
+            match &result {
+                Ok(()) => handle.succeeded(if has_install { "Installed" } else { "Updated" }),
+                Err(err) => handle.failed(err.to_string()),
+            }
+            (path.clone(), scope.into_lines(), result)
+        })
+        .collect();
+
+    reporter.finish();
+
+    let mut errors: Vec<String> = Vec::new();
+    for (path, lines, result) in results {
+        if let Err(err) = result {
+            // Only surface buffered output for failures — successful
+            // workers stay quiet so the progress block is the whole UX.
+            print_failure_block(&path, lines);
+            errors.push(format!("{}: {err}", path.display()));
         }
     }
 
@@ -157,6 +215,17 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Render a `──── <label> ────` header followed by the worker's
+/// captured output. Keeps failure post-mortems grouped per-repo so
+/// concurrent workers' logs don't interleave.
+fn print_failure_block(path: &std::path::Path, lines: Vec<process::CapturedLine>) {
+    if lines.is_empty() {
+        return;
+    }
+    eprintln!("──── {} ────", path.display());
+    process::flush_captured_lines(lines);
 }
 
 pub(crate) fn remove(env: &RuntimeEnvironment, repo_arg: &str, force: bool) -> Result<()> {
@@ -237,12 +306,37 @@ pub(crate) fn install_all(env: &RuntimeEnvironment) -> Result<()> {
     }
 
     let detached_dir = env.layout().detached_dir();
-    let mut errors: Vec<String> = Vec::new();
 
-    for entry in entries {
-        if let Err(err) = run_cargo_install(detached_dir, entry) {
-            process::warn(&format!("Failed to install {}: {err}", entry.repo));
-            errors.push(format!("{}: {err}", entry.repo));
+    let labels: Vec<String> = entries.iter().map(|e| e.repo.clone()).collect();
+    let reporter = ProgressReporter::new("Installing", labels);
+
+    // Parallelise across entries. cargo's global install lock serialises
+    // the final `mv` step, but the expensive compile phase overlaps across
+    // distinct detached worktrees (each has its own target/ directory).
+    let results: Vec<(String, Vec<process::CapturedLine>, Result<()>)> = entries
+        .par_iter()
+        .enumerate()
+        .map(|(idx, entry)| {
+            let scope = process::OutputScope::new();
+            let handle = reporter.begin(idx);
+            handle.phase(Phase::Installing);
+            let result = run_cargo_install(detached_dir, entry);
+            match &result {
+                Ok(()) => handle.succeeded("Installed"),
+                Err(err) => handle.failed(err.to_string()),
+            }
+            (entry.repo.clone(), scope.into_lines(), result)
+        })
+        .collect();
+
+    reporter.finish();
+
+    let mut errors: Vec<String> = Vec::new();
+    for (repo, lines, result) in results {
+        if let Err(err) = result {
+            eprintln!("──── {repo} ────");
+            process::flush_captured_lines(lines);
+            errors.push(format!("{repo}: {err}"));
         }
     }
 
@@ -311,17 +405,7 @@ fn run_cargo_install(
         )));
     }
 
-    let install_path = match &entry.path {
-        Some(sub) => base_path.join(sub),
-        None => base_path,
-    };
-
-    if !install_path.join("Cargo.toml").exists() {
-        return Err(Error::failed(format!(
-            "No Cargo.toml found at {}",
-            install_path.display()
-        )));
-    }
+    let install_path = resolve_install_path(&base_path, entry)?;
 
     let path_str = install_path.to_string_lossy();
     process::log(&format!("Installing {} from {path_str}", entry.repo));
@@ -333,6 +417,202 @@ fn run_cargo_install(
     process::run_status("cargo", &args, None)
 }
 
+/// Resolve the directory to pass to `cargo install --path`.
+///
+/// Behavior:
+/// - If `entry.path` is set, use `base_path/entry.path` unchanged.
+/// - Else if `base_path/Cargo.toml` is a normal package manifest, use `base_path`.
+/// - Else treat `base_path/Cargo.toml` as a virtual workspace manifest and
+///   consult `cargo metadata` to pick a single installable member:
+///   - exactly one member with a bin target, or
+///   - among multiple bin members, the one whose package name matches the
+///     repo short name (the last `/`-separated segment of `entry.repo`).
+/// - Otherwise return an actionable error listing the candidates.
+fn resolve_install_path(
+    base_path: &std::path::Path,
+    entry: &crate::runtime::config::InstallEntry,
+) -> Result<std::path::PathBuf> {
+    if let Some(sub) = &entry.path {
+        let install_path = base_path.join(sub);
+        if !install_path.join("Cargo.toml").exists() {
+            return Err(Error::failed(format!(
+                "No Cargo.toml found at {}",
+                install_path.display()
+            )));
+        }
+        return Ok(install_path);
+    }
+
+    let root_manifest = base_path.join("Cargo.toml");
+    if !root_manifest.exists() {
+        return Err(Error::failed(format!(
+            "No Cargo.toml found at {}",
+            base_path.display()
+        )));
+    }
+
+    if manifest_has_package_section(&root_manifest)? {
+        return Ok(base_path.to_path_buf());
+    }
+
+    // Virtual workspace root: ask cargo metadata for the real member list.
+    let short_name = entry.repo.rsplit('/').next().unwrap_or(&entry.repo);
+    resolve_workspace_member(base_path, &root_manifest, short_name)
+}
+
+/// Returns `true` when the manifest contains a `[package]` table.
+fn manifest_has_package_section(manifest_path: &std::path::Path) -> Result<bool> {
+    let text = fs::read_to_string(manifest_path).map_err(|err| {
+        Error::failed(format!(
+            "Could not read manifest {}: {err}",
+            manifest_path.display()
+        ))
+    })?;
+    let parsed: toml::Table = toml::from_str(&text).map_err(|err| {
+        Error::failed(format!(
+            "Could not parse manifest {}: {err}",
+            manifest_path.display()
+        ))
+    })?;
+    Ok(parsed.contains_key("package"))
+}
+
+/// Run `cargo metadata --no-deps --offline` and pick the member manifest
+/// directory to install from. Errors carry the candidate list so users can
+/// set `[[install]].path` precisely.
+fn resolve_workspace_member(
+    base_path: &std::path::Path,
+    root_manifest: &std::path::Path,
+    repo_short_name: &str,
+) -> Result<std::path::PathBuf> {
+    let manifest_arg = root_manifest.to_string_lossy();
+    let output = std::process::Command::new("cargo")
+        .args([
+            "metadata",
+            "--no-deps",
+            "--offline",
+            "--format-version",
+            "1",
+            "--manifest-path",
+            manifest_arg.as_ref(),
+        ])
+        .output()
+        .map_err(|err| Error::failed(format!("Failed to run cargo metadata: {err}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::failed(format!(
+            "cargo metadata failed for {}:\n{stderr}",
+            root_manifest.display()
+        )));
+    }
+
+    let metadata: CargoMetadata = serde_json::from_slice(&output.stdout).map_err(|err| {
+        Error::failed(format!(
+            "Could not parse cargo metadata output for {}: {err}",
+            root_manifest.display()
+        ))
+    })?;
+
+    let bin_candidates = metadata.bin_candidates();
+    pick_bin_candidate(&bin_candidates, repo_short_name)
+        .map(|pkg| pkg.package_dir().to_path_buf())
+        .ok_or_else(|| bin_candidate_error(base_path, repo_short_name, &bin_candidates))
+}
+
+/// Select a bin candidate by the agreed rules.
+fn pick_bin_candidate<'a>(
+    candidates: &'a [CargoPackage],
+    repo_short_name: &str,
+) -> Option<&'a CargoPackage> {
+    if candidates.len() == 1 {
+        return candidates.first();
+    }
+    candidates.iter().find(|pkg| pkg.name == repo_short_name)
+}
+
+fn bin_candidate_error(
+    base_path: &std::path::Path,
+    repo_short_name: &str,
+    candidates: &[CargoPackage],
+) -> Error {
+    if candidates.is_empty() {
+        return Error::failed(format!(
+            "Virtual workspace at {} has no package with a `bin` target. \
+             Set `path = \"…\"` on the `[[install]]` entry to point at an \
+             installable crate.",
+            base_path.display()
+        ));
+    }
+
+    let listing = candidates
+        .iter()
+        .map(|pkg| {
+            let rel = pkg
+                .package_dir()
+                .strip_prefix(base_path)
+                .unwrap_or_else(|_| pkg.package_dir())
+                .display();
+            format!("  - {} (path = \"{rel}\")", pkg.name)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Error::failed(format!(
+        "Virtual workspace at {} has multiple installable crates and none \
+         matched the repo short name `{repo_short_name}`. Set `path = \"…\"` \
+         on the `[[install]]` entry. Candidates:\n{listing}",
+        base_path.display()
+    ))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CargoMetadata {
+    packages: Vec<CargoPackage>,
+    workspace_members: Vec<String>,
+}
+
+impl CargoMetadata {
+    /// Workspace packages that expose a `bin` target.
+    fn bin_candidates(&self) -> Vec<CargoPackage> {
+        let workspace: std::collections::HashSet<&str> =
+            self.workspace_members.iter().map(String::as_str).collect();
+        self.packages
+            .iter()
+            .filter(|pkg| workspace.contains(pkg.id.as_str()))
+            .filter(|pkg| pkg.has_bin_target())
+            .cloned()
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CargoPackage {
+    name: String,
+    id: String,
+    manifest_path: std::path::PathBuf,
+    #[serde(default)]
+    targets: Vec<CargoTarget>,
+}
+
+impl CargoPackage {
+    fn has_bin_target(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|t| t.kind.iter().any(|k| k == "bin"))
+    }
+
+    fn package_dir(&self) -> &std::path::Path {
+        self.manifest_path.parent().unwrap_or(&self.manifest_path)
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct CargoTarget {
+    #[serde(default)]
+    kind: Vec<String>,
+}
+
 /// Returns true when `path` is the root of a git worktree (has a `.git` file
 /// as created by `git worktree add`, or is a bare/worktree with `HEAD`).
 fn is_detached_worktree(path: &std::path::Path) -> bool {
@@ -340,7 +620,7 @@ fn is_detached_worktree(path: &std::path::Path) -> bool {
 }
 
 /// Recursively collect leaf directories that look like git worktrees.
-fn collect_detached_worktrees(
+pub(crate) fn collect_detached_worktrees(
     dir: &std::path::Path,
     out: &mut Vec<std::path::PathBuf>,
 ) -> Result<()> {
@@ -384,7 +664,10 @@ fn read_head_sha(path: &std::path::Path) -> Option<String> {
     }
 }
 
-fn repo_key_from_detached_path(detached_dir: &std::path::Path, path: &std::path::Path) -> RepoKey {
+pub(crate) fn repo_key_from_detached_path(
+    detached_dir: &std::path::Path,
+    path: &std::path::Path,
+) -> RepoKey {
     let relative = path
         .strip_prefix(detached_dir)
         .unwrap_or(path)
@@ -554,6 +837,58 @@ mod tests {
         assert!(ok, "git init --bare failed");
     }
 
+    /// Run a git command, isolated from the user's global config, panicking
+    /// on failure. Used by the parallel update_all fixtures below.
+    fn git(args: &[&str], cwd: &Path) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", std::env::temp_dir())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git must be available");
+        assert!(status.success(), "git {args:?} in {cwd:?} failed");
+    }
+
+    /// Create a minimal remote + clone-style detached worktree at the
+    /// given path. Returns the path the caller can hand to `update_all`.
+    ///
+    /// Layout:
+    /// - `<base>/remote.git` — bare origin with one commit on `main`.
+    /// - `<base>/detached/<repo_key>` — `git clone`d working tree.
+    fn make_clone_backed_detached(base: &Path, repo_key: &str) -> std::path::PathBuf {
+        let remote = base.join(format!("remote-{}.git", repo_key.replace('/', "-")));
+        let seed = base.join(format!("seed-{}", repo_key.replace('/', "-")));
+        fs::create_dir_all(&seed).unwrap();
+
+        git(&["init", "--bare", remote.to_str().unwrap()], base);
+        git(&["init", "-b", "main"], &seed);
+        git(&["config", "user.email", "t@example.com"], &seed);
+        git(&["config", "user.name", "T"], &seed);
+        fs::write(seed.join("README.md"), "v1\n").unwrap();
+        git(&["add", "README.md"], &seed);
+        git(&["commit", "-m", "initial"], &seed);
+        git(
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+            &seed,
+        );
+        git(&["push", "-u", "origin", "main"], &seed);
+
+        let detached = base.join("detached").join(repo_key);
+        fs::create_dir_all(detached.parent().unwrap()).unwrap();
+        git(
+            &[
+                "clone",
+                remote.to_str().unwrap(),
+                detached.to_str().unwrap(),
+            ],
+            base,
+        );
+        detached
+    }
+
     mod add_tests {
         use super::{super::add, *};
 
@@ -681,6 +1016,55 @@ mod tests {
             assert!(
                 result.is_ok(),
                 "should succeed gracefully with empty detached_dir: {result:?}"
+            );
+        }
+
+        #[test]
+        fn update_all_processes_multiple_repos_in_parallel() {
+            // Exercise the rayon par_iter path with two real detached
+            // worktrees. Each has an origin remote, so `git fetch origin`
+            // and `git reset --hard` succeed and `update_all` should return
+            // Ok(()) after updating both.
+            let dir = TempDir::new("update-all-parallel");
+            let base = dir.path();
+            let env = make_env(base);
+
+            let wt_a = make_clone_backed_detached(base, "github.com/org/a");
+            let wt_b = make_clone_backed_detached(base, "github.com/org/b");
+
+            let result = update_all(&env);
+            assert!(
+                result.is_ok(),
+                "update_all should succeed for two valid detached worktrees: {result:?}"
+            );
+            assert!(wt_a.join(".git").exists());
+            assert!(wt_b.join(".git").exists());
+        }
+
+        #[test]
+        fn update_all_aggregates_errors_across_repos() {
+            // One healthy worktree, one broken (no `.git`). The broken one
+            // is still a leaf directory but lacks any git metadata, so
+            // `update_detached` will fail for it. `update_all` must surface
+            // the failure AND still process the healthy one.
+            let dir = TempDir::new("update-all-mixed");
+            let base = dir.path();
+            let env = make_env(base);
+
+            let _good = make_clone_backed_detached(base, "github.com/org/good");
+
+            // Create a broken leaf that looks like a worktree (has a .git
+            // file) but points at nothing, so `git fetch origin` fails.
+            let broken = base.join("detached/github.com/org/broken");
+            fs::create_dir_all(&broken).unwrap();
+            fs::write(broken.join(".git"), "gitdir: /nonexistent/path").unwrap();
+
+            let result = update_all(&env);
+            assert!(result.is_err(), "broken worktree should trigger an error");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("failed to update"),
+                "error should mention failed updates: {msg}"
             );
         }
     }
@@ -920,6 +1304,196 @@ mod tests {
             assert!(
                 msg.contains("Cargo.toml"),
                 "expected Cargo.toml error even with extra_flags: {msg}"
+            );
+        }
+    }
+
+    mod resolve_install_path_tests {
+        use super::{super::resolve_install_path, *};
+
+        /// Minimal library crate layout with a `src/lib.rs`.
+        fn write_library_package(dir: &std::path::Path, name: &str) {
+            fs::create_dir_all(dir.join("src")).unwrap();
+            fs::write(dir.join("src/lib.rs"), "").unwrap();
+            fs::write(
+                dir.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}\"\nversion = \"0.0.1\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        /// Minimal binary crate layout with a `src/main.rs`.
+        fn write_binary_package(dir: &std::path::Path, name: &str) {
+            fs::create_dir_all(dir.join("src")).unwrap();
+            fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+            fs::write(
+                dir.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}\"\nversion = \"0.0.1\"\nedition = \"2021\"\n\n[[bin]]\nname = \"{name}\"\npath = \"src/main.rs\"\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        /// Workspace `Cargo.toml` with the provided members, virtual (no `[package]`).
+        fn write_virtual_workspace(dir: &std::path::Path, members: &[&str]) {
+            fs::create_dir_all(dir).unwrap();
+            let members_toml = members
+                .iter()
+                .map(|m| format!("\"{m}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            fs::write(
+                dir.join("Cargo.toml"),
+                format!("[workspace]\nresolver = \"2\"\nmembers = [{members_toml}]\n"),
+            )
+            .unwrap();
+        }
+
+        #[test]
+        fn explicit_path_is_honored_without_invoking_cargo_metadata() {
+            let dir = TempDir::new("resolve-explicit-path");
+            let wt = dir.path().join("github.com/org/workspace");
+            let sub = wt.join("crates/cli");
+            fs::create_dir_all(&sub).unwrap();
+            fs::write(sub.join("Cargo.toml"), "[package]\nname = \"cli\"\n").unwrap();
+
+            let entry = InstallEntry {
+                repo: "github.com/org/workspace".to_string(),
+                path: Some("crates/cli".to_string()),
+                extra_flags: vec![],
+            };
+
+            let resolved = resolve_install_path(&wt, &entry).unwrap();
+            assert_eq!(resolved, sub);
+        }
+
+        #[test]
+        fn normal_package_manifest_uses_base_path() {
+            let dir = TempDir::new("resolve-normal-package");
+            let wt = dir.path().join("github.com/org/tool");
+            fs::create_dir_all(&wt).unwrap();
+            fs::write(
+                wt.join("Cargo.toml"),
+                "[package]\nname = \"tool\"\nversion = \"0.0.1\"\nedition = \"2021\"\n",
+            )
+            .unwrap();
+
+            let entry = InstallEntry {
+                repo: "github.com/org/tool".to_string(),
+                path: None,
+                extra_flags: vec![],
+            };
+
+            let resolved = resolve_install_path(&wt, &entry).unwrap();
+            assert_eq!(resolved, wt);
+        }
+
+        #[test]
+        fn errors_when_base_path_has_no_manifest() {
+            let dir = TempDir::new("resolve-no-manifest");
+            let wt = dir.path().join("github.com/org/tool");
+            fs::create_dir_all(&wt).unwrap();
+
+            let entry = InstallEntry {
+                repo: "github.com/org/tool".to_string(),
+                path: None,
+                extra_flags: vec![],
+            };
+
+            let result = resolve_install_path(&wt, &entry);
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("Cargo.toml"),
+                "expected Cargo.toml error: {msg}"
+            );
+        }
+
+        #[test]
+        fn workspace_with_single_bin_crate_resolves_that_crate() {
+            let dir = TempDir::new("resolve-ws-single-bin");
+            let wt = dir.path().join("github.com/org/ws");
+            write_virtual_workspace(&wt, &["crates/lib-a", "crates/tool"]);
+            write_library_package(&wt.join("crates/lib-a"), "lib-a");
+            write_binary_package(&wt.join("crates/tool"), "tool");
+
+            let entry = InstallEntry {
+                repo: "github.com/org/ws".to_string(),
+                path: None,
+                extra_flags: vec![],
+            };
+
+            let resolved = resolve_install_path(&wt, &entry).unwrap();
+            assert_eq!(resolved, wt.join("crates/tool"));
+        }
+
+        #[test]
+        fn workspace_with_multiple_bins_matches_repo_short_name() {
+            let dir = TempDir::new("resolve-ws-match-short-name");
+            let wt = dir.path().join("github.com/org/dumap");
+            write_virtual_workspace(&wt, &["crates/dumap-cli", "crates/dumap"]);
+            write_binary_package(&wt.join("crates/dumap-cli"), "dumap-cli");
+            write_binary_package(&wt.join("crates/dumap"), "dumap");
+
+            let entry = InstallEntry {
+                repo: "github.com/org/dumap".to_string(),
+                path: None,
+                extra_flags: vec![],
+            };
+
+            let resolved = resolve_install_path(&wt, &entry).unwrap();
+            assert_eq!(resolved, wt.join("crates/dumap"));
+        }
+
+        #[test]
+        fn workspace_with_multiple_bins_and_no_short_name_match_errors_with_candidates() {
+            let dir = TempDir::new("resolve-ws-ambiguous");
+            let wt = dir.path().join("github.com/org/multi");
+            write_virtual_workspace(&wt, &["crates/alpha", "crates/beta"]);
+            write_binary_package(&wt.join("crates/alpha"), "alpha");
+            write_binary_package(&wt.join("crates/beta"), "beta");
+
+            let entry = InstallEntry {
+                repo: "github.com/org/multi".to_string(),
+                path: None,
+                extra_flags: vec![],
+            };
+
+            let result = resolve_install_path(&wt, &entry);
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("multiple installable crates"),
+                "expected ambiguity error: {msg}"
+            );
+            assert!(msg.contains("alpha"), "expected candidate alpha: {msg}");
+            assert!(msg.contains("beta"), "expected candidate beta: {msg}");
+            assert!(
+                msg.contains("path = \"crates/alpha\"") && msg.contains("path = \"crates/beta\""),
+                "expected path hints in ambiguity error: {msg}"
+            );
+        }
+
+        #[test]
+        fn workspace_without_any_bin_returns_actionable_error() {
+            let dir = TempDir::new("resolve-ws-no-bin");
+            let wt = dir.path().join("github.com/org/libs");
+            write_virtual_workspace(&wt, &["crates/lib-a", "crates/lib-b"]);
+            write_library_package(&wt.join("crates/lib-a"), "lib-a");
+            write_library_package(&wt.join("crates/lib-b"), "lib-b");
+
+            let entry = InstallEntry {
+                repo: "github.com/org/libs".to_string(),
+                path: None,
+                extra_flags: vec![],
+            };
+
+            let result = resolve_install_path(&wt, &entry);
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("no package with a `bin` target"),
+                "expected no-bin error: {msg}"
             );
         }
     }

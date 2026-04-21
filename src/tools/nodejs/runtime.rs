@@ -1,37 +1,28 @@
 use std::path::Path;
 
-use crate::{
-    error::Result,
-    runtime::{nix_store::NixRunner, process::ManagedTool},
-};
-
-// pnpm and corepack ship from the same nixpkgs package (nodejs), but we
-// resolve each binary separately so the NixRunner stores the right path.
-static PNPM: NixRunner = NixRunner::new(ManagedTool::Pnpm);
-static COREPACK: NixRunner = NixRunner::new(ManagedTool::Corepack);
-static NODE: NixRunner = NixRunner::new(ManagedTool::Node);
+use crate::{error::Result, runtime::process};
 
 pub fn pnpm_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
-    PNPM.status(args, cwd)
+    process::run_status("pnpm", args, cwd)
 }
 
 pub fn corepack_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
-    COREPACK.status(args, cwd)
+    process::run_status("corepack", args, cwd)
 }
 
-/// Returns `true` if the `node` binary can be resolved in the Nix store.
+/// Returns `true` if the `node` binary is on PATH.
 pub fn node_binary_available() -> bool {
-    NODE.available()
+    process::command_exists("node")
 }
 
-/// Returns `true` if the `pnpm` binary can be resolved in the Nix store.
+/// Returns `true` if the `pnpm` binary is on PATH.
 pub fn pnpm_binary_available() -> bool {
-    PNPM.available()
+    process::command_exists("pnpm")
 }
 
-/// Returns `true` if the `corepack` binary can be resolved in the Nix store.
+/// Returns `true` if the `corepack` binary is on PATH.
 pub fn corepack_binary_available() -> bool {
-    COREPACK.available()
+    process::command_exists("corepack")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +40,10 @@ pub fn corepack_available() -> bool {
 }
 
 pub fn enable_corepack() -> Result<()> {
+    // `corepack enable` writes shims into the directory that contains the
+    // running `corepack` binary, so it relies on `node` being installed in
+    // the same bin directory on PATH (the normal case for `nix profile install
+    // nixpkgs#nodejs`, asdf, brew, etc.).
     corepack_status(&["enable"], None)
 }
 

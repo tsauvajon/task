@@ -20,7 +20,6 @@ pub fn run(_env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()>
     if path.join("Cargo.toml").exists() {
         checked = true;
         process::log("Running Rust checks");
-        ensure_nix_available(process::nix_available())?;
         rust::run_checks(&path)?;
     }
 
@@ -45,35 +44,11 @@ fn resolve_check_path(worktree_path: Option<&str>) -> PathBuf {
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-fn ensure_nix_available(nix_available: bool) -> Result<()> {
-    if nix_available {
-        return Ok(());
-    }
-    Err(Error::failed(
-        "nix is required for Rust checks. Install nix and retry 'task check'.",
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{ensure_nix_available, resolve_check_path};
-
-    mod ensure_nix_available {
-        use super::*;
-
-        #[test]
-        fn allows_checks_when_present() {
-            ensure_nix_available(true).expect("nix should be available");
-        }
-
-        #[test]
-        fn rejects_when_missing() {
-            let err = ensure_nix_available(false).expect_err("error");
-            assert!(err.to_string().contains("nix is required"));
-        }
-    }
+    use super::resolve_check_path;
 
     mod resolve_check_path {
         use super::*;

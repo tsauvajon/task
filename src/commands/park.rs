@@ -1,9 +1,12 @@
 use crate::{
     error::{Error, Result},
     runtime::{environment::RuntimeEnvironment, process},
-    tools::tmux::{
-        sessions::is_available,
-        workflow::{ParkResult, park},
+    tools::{
+        git::worktrees,
+        tmux::{
+            sessions::is_available,
+            workflow::{ParkResult, park},
+        },
     },
 };
 
@@ -17,7 +20,9 @@ pub fn run(context: &RuntimeEnvironment) -> Result<()> {
         ));
     }
 
-    let park_result = park(&repo_key, &branch, &root)?;
+    let wt_name = worktrees::worktree_name(context.layout().wt_dir(), &repo_key, &root);
+    let title = format!("{repo_key} {branch}");
+    let park_result = park(&repo_key, &wt_name, &root, &title)?;
     process::log(&park_log_message(&park_result, &repo_key, &branch));
 
     println!("{}", root.display());

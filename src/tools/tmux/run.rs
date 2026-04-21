@@ -1,21 +1,19 @@
 use std::path::Path;
 
-use crate::runtime::{nix_store::NixRunner, process::ManagedTool};
-
-static TMUX: NixRunner = NixRunner::new(ManagedTool::Tmux);
+use crate::runtime::process;
 
 pub(super) fn available() -> bool {
-    crate::runtime::process::command_exists("tmux")
+    process::command_exists("tmux")
 }
 
 pub(super) fn capture(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<String> {
-    TMUX.capture(args, cwd)
+    process::run_capture("tmux", args, cwd)
 }
 
 pub(super) fn status(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<()> {
-    TMUX.status(args, cwd)
+    process::run_status("tmux", args, cwd)
 }
 
 pub(super) fn status_quiet(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<()> {
-    TMUX.status_quiet(args, cwd)
+    process::run_status_quiet("tmux", args, cwd)
 }

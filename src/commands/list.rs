@@ -3,7 +3,6 @@ use rayon::prelude::*;
 use crate::{
     error::{Error, Result},
     runtime::{environment::RuntimeEnvironment, process, task_rows::TaskRow},
-    tools::git,
 };
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
@@ -34,11 +33,6 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
         }
         return Ok(());
     }
-
-    // Resolve the nix store path for git before entering the parallel section:
-    // the OnceLock inside NixRunner would otherwise block every rayon thread on
-    // the first caller (~0.5s) while the rest stall idle.
-    git::warmup();
 
     // Collect all (key, gitdir) pairs first (fast sequential scan), then
     // fan out all `git worktree list` subprocess calls in one flat parallel pass.

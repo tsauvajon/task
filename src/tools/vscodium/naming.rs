@@ -2,8 +2,12 @@ use std::path::PathBuf;
 
 use crate::tools::tmux::naming::session_name;
 
-pub fn key(repo_key: &str, branch: &str) -> String {
-    session_name(repo_key, branch)
+/// VSCodium profile key derived from repo key and stable worktree identity.
+///
+/// Uses the same sanitization as tmux session names so that both tools
+/// agree on the identity even after a Git branch rename.
+pub fn key(repo_key: &str, worktree_name: &str) -> String {
+    session_name(repo_key, worktree_name)
 }
 
 pub fn codium_state_root() -> PathBuf {
@@ -27,8 +31,8 @@ fn codium_state_root_from(xdg_state_home: Option<&str>, home: Option<&str>) -> P
         .join("codium")
 }
 
-pub fn user_data_dir(repo_key: &str, branch: &str) -> PathBuf {
-    codium_state_root().join(key(repo_key, branch))
+pub fn user_data_dir(repo_key: &str, worktree_name: &str) -> PathBuf {
+    codium_state_root().join(key(repo_key, worktree_name))
 }
 
 #[cfg(test)]

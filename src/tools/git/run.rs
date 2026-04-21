@@ -1,20 +1,15 @@
 use std::path::Path;
 
-use crate::runtime::{nix_store::NixRunner, process::ManagedTool};
+use crate::{error::Result, runtime::process};
 
-static GIT: NixRunner = NixRunner::new(ManagedTool::Git);
+// The underlying `process::run_*` helpers map `ErrorKind::NotFound` on the
+// program lookup into `Error::tool_missing(ExternalTool::Git)` with a Nix
+// install hint, so no explicit preflight is needed here.
 
-/// Eagerly resolve the nix store path for git, so the first real git call
-/// does not pay the `nix path-info` cost (~0.5s) inside a parallel section
-/// where all other threads would stall waiting on the `OnceLock`.
-pub fn warmup() {
-    let _ = GIT.available();
+pub(super) fn capture(args: &[&str], cwd: Option<&Path>) -> Result<String> {
+    process::run_capture("git", args, cwd)
 }
 
-pub(super) fn capture(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<String> {
-    GIT.capture(args, cwd)
-}
-
-pub(super) fn status(args: &[&str], cwd: Option<&Path>) -> crate::error::Result<()> {
-    GIT.status_quiet(args, cwd)
+pub(super) fn status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    process::run_status_quiet("git", args, cwd)
 }

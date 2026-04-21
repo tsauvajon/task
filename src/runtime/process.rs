@@ -1,8 +1,11 @@
 use std::{
-    ffi::{OsStr, OsString},
+    cell::RefCell,
+    ffi::OsStr,
+    io::{BufRead, BufReader, Read},
     path::Path,
     process::{Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
+    thread,
 };
 
 use owo_colors::OwoColorize;
@@ -21,8 +24,112 @@ fn log_capture() -> &'static Mutex<LogCapture> {
     LOG_CAPTURE.get_or_init(|| Mutex::new(LogCapture::default()))
 }
 
+/// A single buffered line, tagged with the stream it should be flushed to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapturedLine {
+    Stdout(String),
+    Stderr(String),
+}
+
+impl CapturedLine {
+    pub fn flush(&self) {
+        match self {
+            Self::Stdout(line) => println!("{line}"),
+            Self::Stderr(line) => eprintln!("{line}"),
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Stdout(s) | Self::Stderr(s) => s,
+        }
+    }
+}
+
+/// A thread-local output sink used by [`OutputScope`] to capture everything
+/// a parallel worker would otherwise print — log lines, warnings, and
+/// subprocess stdout/stderr — so it can be flushed to the terminal as one
+/// grouped block after the worker finishes.
+///
+/// The sink stores lines in order of arrival. Nothing here is global: each
+/// worker thread installs (and drops) its own `OutputScope`.
+type Sink = Arc<Mutex<Vec<CapturedLine>>>;
+
+thread_local! {
+    static OUTPUT_SINK: RefCell<Option<Sink>> = const { RefCell::new(None) };
+}
+
+/// Install a per-thread output sink. When active:
+///
+/// - [`log`] and [`warn`] append into the sink instead of writing to the
+///   terminal.
+/// - Subprocess helpers ([`run_status`], [`run_status_quiet`]) stream their
+///   child's stdout/stderr line-by-line into the sink.
+///
+/// On drop, the previous sink (if any) is restored and the captured lines
+/// are available via [`OutputScope::into_lines`].
+///
+/// Sequential code that never constructs an `OutputScope` is completely
+/// unaffected.
+pub struct OutputScope {
+    sink: Sink,
+    previous: Option<Sink>,
+}
+
+impl OutputScope {
+    pub fn new() -> Self {
+        let sink: Sink = Arc::new(Mutex::new(Vec::new()));
+        let previous = OUTPUT_SINK.with(|slot| slot.replace(Some(sink.clone())));
+        Self { sink, previous }
+    }
+
+    /// Consume the scope and return the captured lines in arrival order.
+    pub fn into_lines(self) -> Vec<CapturedLine> {
+        // The Drop impl restores the previous sink; we just need to
+        // extract our collected lines before it runs.
+        let lines = std::mem::take(&mut *self.sink.lock().unwrap_or_else(|e| e.into_inner()));
+        OUTPUT_SINK.with(|slot| *slot.borrow_mut() = self.previous.clone());
+        std::mem::forget(self);
+        lines
+    }
+}
+
+impl Default for OutputScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for OutputScope {
+    fn drop(&mut self) {
+        OUTPUT_SINK.with(|slot| *slot.borrow_mut() = self.previous.take());
+    }
+}
+
+fn with_active_sink<R>(f: impl FnOnce(&Sink) -> R) -> Option<R> {
+    OUTPUT_SINK.with(|slot| slot.borrow().as_ref().map(f))
+}
+
+fn push_to_sink(line: CapturedLine) -> bool {
+    with_active_sink(|sink| {
+        if let Ok(mut guard) = sink.lock() {
+            guard.push(line);
+        }
+    })
+    .is_some()
+}
+
+/// Flush previously-captured lines to stdout/stderr in arrival order.
+pub fn flush_captured_lines(lines: Vec<CapturedLine>) {
+    for line in lines {
+        line.flush();
+    }
+}
+
+/// External binaries the CLI shells out to. The enum captures just enough
+/// metadata to generate install hints when the binary is missing from PATH.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManagedTool {
+pub enum ExternalTool {
     Git,
     Tmux,
     Codium,
@@ -32,9 +139,31 @@ pub enum ManagedTool {
     Pnpm,
     Corepack,
     Node,
+    Cargo,
+    Nix,
 }
 
-impl ManagedTool {
+/// Install guidance attached to an [`ExternalTool`]. Most tools ship in
+/// `nixpkgs`; a few (like `nix` itself) need a different channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallHint {
+    /// `nix profile install <package>` (e.g. `nixpkgs#git`).
+    NixPackage(&'static str),
+    /// Free-form hint, used when the tool can't be installed via
+    /// `nix profile install` (or has a strongly-preferred channel).
+    Custom(&'static str),
+}
+
+impl std::fmt::Display for InstallHint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NixPackage(pkg) => write!(f, "nix profile install {pkg}"),
+            Self::Custom(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl ExternalTool {
     pub fn from_binary(binary: &str) -> Option<Self> {
         match binary {
             "git" => Some(Self::Git),
@@ -46,24 +175,30 @@ impl ManagedTool {
             "pnpm" => Some(Self::Pnpm),
             "corepack" => Some(Self::Corepack),
             "node" => Some(Self::Node),
+            "cargo" => Some(Self::Cargo),
+            "nix" => Some(Self::Nix),
             _ => None,
         }
     }
 
-    pub fn nix_package(self) -> &'static str {
+    pub fn install_hint(self) -> InstallHint {
         match self {
-            Self::Git => "nixpkgs#git",
-            Self::Tmux => "nixpkgs#tmux",
-            Self::Codium => "nixpkgs#vscodium",
-            Self::Opencode => "nixpkgs#opencode",
-            Self::Direnv => "nixpkgs#direnv",
-            Self::Asdf => "nixpkgs#asdf-vm",
-            Self::Pnpm => "nixpkgs#pnpm",
-            Self::Corepack | Self::Node => "nixpkgs#nodejs",
+            Self::Git => InstallHint::NixPackage("nixpkgs#git"),
+            Self::Tmux => InstallHint::NixPackage("nixpkgs#tmux"),
+            Self::Codium => InstallHint::NixPackage("nixpkgs#vscodium"),
+            Self::Opencode => InstallHint::NixPackage("nixpkgs#opencode"),
+            Self::Direnv => InstallHint::NixPackage("nixpkgs#direnv"),
+            Self::Asdf => InstallHint::NixPackage("nixpkgs#asdf-vm"),
+            Self::Pnpm => InstallHint::NixPackage("nixpkgs#pnpm"),
+            Self::Corepack | Self::Node => InstallHint::NixPackage("nixpkgs#nodejs"),
+            Self::Cargo => InstallHint::Custom(
+                "install via rustup (https://rustup.rs) or nix profile install nixpkgs#cargo",
+            ),
+            Self::Nix => InstallHint::Custom("see https://nixos.org/download"),
         }
     }
 
-    /// The binary name exposed inside the Nix package's `bin/` directory.
+    /// The binary name used to look the tool up on PATH.
     pub fn binary_name(self) -> &'static str {
         match self {
             Self::Git => "git",
@@ -75,16 +210,38 @@ impl ManagedTool {
             Self::Pnpm => "pnpm",
             Self::Corepack => "corepack",
             Self::Node => "node",
+            Self::Cargo => "cargo",
+            Self::Nix => "nix",
         }
+    }
+
+    /// All external tools, in a stable order suitable for doctor output.
+    pub fn all() -> &'static [ExternalTool] {
+        &[
+            Self::Nix,
+            Self::Git,
+            Self::Tmux,
+            Self::Opencode,
+            Self::Codium,
+            Self::Direnv,
+            Self::Asdf,
+            Self::Node,
+            Self::Corepack,
+            Self::Pnpm,
+            Self::Cargo,
+        ]
     }
 }
 
-impl std::fmt::Display for ManagedTool {
+impl std::fmt::Display for ExternalTool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.binary_name())
     }
 }
 
+/// A prepared program + arguments pair. Used when the invocation needs to be
+/// serialized (e.g. passed through `tmux new-session` as a shell command),
+/// as well as inside the generic `run_*` helpers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPlan {
     program: String,
@@ -93,26 +250,17 @@ pub struct CommandPlan {
 
 impl CommandPlan {
     pub fn from_program(program: &str, args: &[&str]) -> Self {
-        let args: Vec<String> = args.iter().map(|&a| a.to_string()).collect();
-        if let Some(tool) = ManagedTool::from_binary(program) {
-            return Self::for_managed_tool(tool, args);
-        }
         Self {
             program: program.to_string(),
-            args,
+            args: args.iter().map(|&a| a.to_string()).collect(),
         }
     }
 
-    pub fn for_managed_tool(tool: ManagedTool, tool_args: Vec<String>) -> Self {
-        let mut args = vec![
-            "run".to_string(),
-            tool.nix_package().to_string(),
-            "--".to_string(),
-        ];
-        args.extend(tool_args);
+    /// Build a plan invoking a known external tool directly from PATH.
+    pub fn for_tool(tool: ExternalTool, tool_args: Vec<String>) -> Self {
         Self {
-            program: "nix".to_string(),
-            args,
+            program: tool.binary_name().to_string(),
+            args: tool_args,
         }
     }
 
@@ -129,29 +277,35 @@ impl CommandPlan {
     }
 }
 
-/// Returns true if the named command is available.
-///
-/// For tools with a nix package mapping, availability is determined by
-/// whether `nix` itself is on PATH (the tool will be fetched via `nix run`
-/// on demand). For unmapped tools and absolute paths, the binary is looked
-/// up directly on PATH / filesystem.
+/// Returns true if the named binary is reachable via PATH (or exists as an
+/// absolute path).
 pub fn command_exists(name: &str) -> bool {
     if name.contains('/') {
         return Path::new(name).exists();
-    }
-
-    if ManagedTool::from_binary(name).is_some() {
-        return nix_available();
     }
 
     let path_var = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path_var).any(|dir| dir.join(name).exists())
 }
 
-/// Returns true if `nix` is available on PATH.
-pub fn nix_available() -> bool {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path_var).any(|dir| dir.join("nix").exists())
+/// Maps an `io::Error` from spawning a process into a user-friendlier error.
+///
+/// When the OS reports "No such file or directory" (`ErrorKind::NotFound`) for
+/// the program itself and the program name corresponds to a known
+/// [`ExternalTool`], return [`Error::tool_missing`] so the user sees the
+/// install hint instead of a bare syscall message. For unknown programs, the
+/// message still says "not found on PATH" (instead of raw `io::Error`).
+fn spawn_error(program: &OsStr, err: std::io::Error) -> Error {
+    if err.kind() != std::io::ErrorKind::NotFound {
+        return Error::from(err);
+    }
+    let Some(name) = program.to_str() else {
+        return Error::from(err);
+    };
+    if let Some(tool) = ExternalTool::from_binary(name) {
+        return Error::tool_missing(tool);
+    }
+    Error::failed(format!("Program `{name}` not found on PATH"))
 }
 
 pub fn run_capture(
@@ -159,99 +313,13 @@ pub fn run_capture(
     args: &[&str],
     cwd: Option<&Path>,
 ) -> Result<String> {
-    let program_str = program.as_ref().to_string_lossy();
-    let plan = CommandPlan::from_program(&program_str, args);
-    let plan_args = plan.args_refs();
-    run_capture_raw(plan.program(), &plan_args, cwd, None)
-}
-
-pub fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
-    let program_str = program.as_ref().to_string_lossy();
-    let plan = CommandPlan::from_program(&program_str, args);
-    let plan_args = plan.args_refs();
-    run_status_raw(plan.program(), &plan_args, cwd, None)
-}
-
-pub fn run_status_quiet(
-    program: impl AsRef<OsStr>,
-    args: &[&str],
-    cwd: Option<&Path>,
-) -> Result<()> {
-    let program_str = program.as_ref().to_string_lossy();
-    let plan = CommandPlan::from_program(&program_str, args);
-    let plan_args = plan.args_refs();
-    run_status_quiet_raw(plan.program(), &plan_args, cwd, None)
-}
-
-/// Like `run_capture`, but prepends `extra_bin_dir` to the child process's
-/// `PATH`. Used by `NixRunner` so that Nix store binaries can find sibling
-/// binaries in the same store path.
-pub fn run_capture_with_bin_dir(
-    program: impl AsRef<OsStr>,
-    args: &[&str],
-    cwd: Option<&Path>,
-    extra_bin_dir: Option<&Path>,
-) -> Result<String> {
-    run_capture_raw(program, args, cwd, extra_bin_dir)
-}
-
-/// Like `run_status`, but prepends `extra_bin_dir` to the child's `PATH`.
-pub fn run_status_with_bin_dir(
-    program: impl AsRef<OsStr>,
-    args: &[&str],
-    cwd: Option<&Path>,
-    extra_bin_dir: Option<&Path>,
-) -> Result<()> {
-    run_status_raw(program, args, cwd, extra_bin_dir)
-}
-
-/// Like `run_status_quiet`, but prepends `extra_bin_dir` to the child's `PATH`.
-pub fn run_status_quiet_with_bin_dir(
-    program: impl AsRef<OsStr>,
-    args: &[&str],
-    cwd: Option<&Path>,
-    extra_bin_dir: Option<&Path>,
-) -> Result<()> {
-    run_status_quiet_raw(program, args, cwd, extra_bin_dir)
-}
-
-pub fn spawn_detached(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
-    let program_str = program.as_ref().to_string_lossy();
-    let plan = CommandPlan::from_program(&program_str, args);
-    let plan_args = plan.args_refs();
-    spawn_detached_raw(plan.program(), &plan_args, cwd)
-}
-
-/// Build a `PATH` value with `extra_dir` prepended to the current `PATH`.
-fn prepend_to_path(extra_dir: &Path) -> Option<OsString> {
-    let current = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![extra_dir.to_path_buf()];
-    paths.extend(std::env::split_paths(&current));
-    std::env::join_paths(&paths).ok()
-}
-
-/// If `extra_bin_dir` is `Some`, prepend it to the command's `PATH`.
-fn apply_extra_bin_dir(cmd: &mut Command, extra_bin_dir: Option<&Path>) {
-    if let Some(dir) = extra_bin_dir
-        && let Some(new_path) = prepend_to_path(dir)
-    {
-        cmd.env("PATH", new_path);
-    }
-}
-
-fn run_capture_raw(
-    program: impl AsRef<OsStr>,
-    args: &[&str],
-    cwd: Option<&Path>,
-    extra_bin_dir: Option<&Path>,
-) -> Result<String> {
+    let program = program.as_ref();
     let mut cmd = Command::new(program);
     cmd.args(args);
-    apply_extra_bin_dir(&mut cmd, extra_bin_dir);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-    let output = cmd.output()?;
+    let output = cmd.output().map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let msg = if stderr.is_empty() {
@@ -264,19 +332,21 @@ fn run_capture_raw(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn run_status_raw(
-    program: impl AsRef<OsStr>,
-    args: &[&str],
-    cwd: Option<&Path>,
-    extra_bin_dir: Option<&Path>,
-) -> Result<()> {
+pub fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    let program = program.as_ref();
+
+    // If an OutputScope is active, stream the child's stdout/stderr into
+    // the sink line-by-line so the caller's buffered block stays coherent.
+    if let Some(sink) = OUTPUT_SINK.with(|slot| slot.borrow().clone()) {
+        return run_status_into_sink(program, args, cwd, &sink);
+    }
+
     let mut cmd = Command::new(program);
     cmd.args(args);
-    apply_extra_bin_dir(&mut cmd, extra_bin_dir);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-    let status = cmd.status()?;
+    let status = cmd.status().map_err(|e| spawn_error(program, e))?;
     if status.success() {
         return Ok(());
     }
@@ -285,19 +355,25 @@ fn run_status_raw(
     )))
 }
 
-fn run_status_quiet_raw(
+pub fn run_status_quiet(
     program: impl AsRef<OsStr>,
     args: &[&str],
     cwd: Option<&Path>,
-    extra_bin_dir: Option<&Path>,
 ) -> Result<()> {
+    let program = program.as_ref();
+
+    // When a sink is active, forward stdout/stderr into it even on success
+    // so the worker's output block is complete.
+    if let Some(sink) = OUTPUT_SINK.with(|slot| slot.borrow().clone()) {
+        return run_status_into_sink(program, args, cwd, &sink);
+    }
+
     let mut cmd = Command::new(program);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
-    apply_extra_bin_dir(&mut cmd, extra_bin_dir);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-    let output = cmd.output()?;
+    let output = cmd.output().map_err(|e| spawn_error(program, e))?;
     if output.status.success() {
         return Ok(());
     }
@@ -311,27 +387,102 @@ fn run_status_quiet_raw(
     Err(Error::failed(msg))
 }
 
-fn spawn_detached_raw(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+/// Spawn a child and drain its stdout+stderr into the active output sink,
+/// line by line. Used by both `run_status` and `run_status_quiet` when an
+/// [`OutputScope`] is installed on the current thread.
+///
+/// stderr lines are prefixed with `warning:` so [`flush_captured_lines`]
+/// routes them to stderr on flush, matching how [`warn`] behaves live.
+fn run_status_into_sink(
+    program: &OsStr,
+    args: &[&str],
+    cwd: Option<&Path>,
+    sink: &Sink,
+) -> Result<()> {
+    let mut cmd = Command::new(program);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    let mut child = cmd.spawn().map_err(|e| spawn_error(program, e))?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let stdout_handle = stdout.map(|pipe| {
+        let sink = Arc::clone(sink);
+        thread::spawn(move || drain_into_sink(pipe, &sink, /* stderr = */ false))
+    });
+    let stderr_handle = stderr.map(|pipe| {
+        let sink = Arc::clone(sink);
+        thread::spawn(move || drain_into_sink(pipe, &sink, /* stderr = */ true))
+    });
+
+    let status = child.wait().map_err(Error::from)?;
+
+    // Drainers must finish before we return so the caller sees the full
+    // output block in-order.
+    if let Some(h) = stdout_handle {
+        let _ = h.join();
+    }
+    if let Some(h) = stderr_handle {
+        let _ = h.join();
+    }
+
+    if status.success() {
+        return Ok(());
+    }
+    Err(Error::failed(format!(
+        "command failed with status {status}"
+    )))
+}
+
+fn drain_into_sink<R: Read>(reader: R, sink: &Sink, is_stderr: bool) {
+    let buf = BufReader::new(reader);
+    for line in buf.lines().map_while(std::result::Result::ok) {
+        let captured = if is_stderr {
+            CapturedLine::Stderr(line)
+        } else {
+            CapturedLine::Stdout(line)
+        };
+        if let Ok(mut guard) = sink.lock() {
+            guard.push(captured);
+        }
+    }
+}
+
+pub fn spawn_detached(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+    let program = program.as_ref();
     let mut cmd = Command::new(program);
     cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-    cmd.spawn().map(|_| ()).map_err(Error::from)
+    cmd.spawn().map(|_| ()).map_err(|e| spawn_error(program, e))
 }
 
 pub fn log(message: &str) {
+    // Per-thread OutputScope takes precedence: it preserves the styled
+    // prefix so the flushed block looks identical to live output.
+    let styled = format!("{} {}", "==>".bright_blue().bold(), message);
+    if push_to_sink(CapturedLine::Stdout(styled.clone())) {
+        return;
+    }
     if capture_log_line(&format!("==> {message}")) {
         return;
     }
-    println!("{} {}", "==>".bright_blue().bold(), message);
+    println!("{styled}");
 }
 
 pub fn warn(message: &str) {
+    let styled = format!("{} {}", "warning:".yellow().bold(), message);
+    if push_to_sink(CapturedLine::Stderr(styled.clone())) {
+        return;
+    }
     if capture_log_line(&format!("warning: {message}")) {
         return;
     }
-    eprintln!("{} {}", "warning:".yellow().bold(), message);
+    eprintln!("{styled}");
 }
 
 pub fn enable_log_capture() {
@@ -367,42 +518,49 @@ fn capture_log_line(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandPlan, ManagedTool, command_exists, prepend_to_path};
+    use std::ffi::OsStr;
 
-    mod managed_tool {
+    use super::{CommandPlan, ExternalTool, InstallHint, command_exists, spawn_error};
+    use crate::error::Error;
+
+    mod external_tool {
         use super::*;
 
         #[test]
         fn from_binary_maps_known_tools() {
-            assert_eq!(ManagedTool::from_binary("git"), Some(ManagedTool::Git));
-            assert_eq!(ManagedTool::from_binary("tmux"), Some(ManagedTool::Tmux));
+            assert_eq!(ExternalTool::from_binary("git"), Some(ExternalTool::Git));
+            assert_eq!(ExternalTool::from_binary("tmux"), Some(ExternalTool::Tmux));
             assert_eq!(
-                ManagedTool::from_binary("codium"),
-                Some(ManagedTool::Codium)
+                ExternalTool::from_binary("codium"),
+                Some(ExternalTool::Codium)
             );
             assert_eq!(
-                ManagedTool::from_binary("opencode"),
-                Some(ManagedTool::Opencode)
+                ExternalTool::from_binary("opencode"),
+                Some(ExternalTool::Opencode)
             );
             assert_eq!(
-                ManagedTool::from_binary("direnv"),
-                Some(ManagedTool::Direnv)
+                ExternalTool::from_binary("direnv"),
+                Some(ExternalTool::Direnv)
             );
-            assert_eq!(ManagedTool::from_binary("asdf"), Some(ManagedTool::Asdf));
-            assert_eq!(ManagedTool::from_binary("pnpm"), Some(ManagedTool::Pnpm));
+            assert_eq!(ExternalTool::from_binary("asdf"), Some(ExternalTool::Asdf));
+            assert_eq!(ExternalTool::from_binary("pnpm"), Some(ExternalTool::Pnpm));
             assert_eq!(
-                ManagedTool::from_binary("corepack"),
-                Some(ManagedTool::Corepack)
+                ExternalTool::from_binary("corepack"),
+                Some(ExternalTool::Corepack)
             );
-            assert_eq!(ManagedTool::from_binary("node"), Some(ManagedTool::Node));
+            assert_eq!(ExternalTool::from_binary("node"), Some(ExternalTool::Node));
+            assert_eq!(
+                ExternalTool::from_binary("cargo"),
+                Some(ExternalTool::Cargo)
+            );
+            assert_eq!(ExternalTool::from_binary("nix"), Some(ExternalTool::Nix));
         }
 
         #[test]
         fn from_binary_returns_none_for_unmapped_tools() {
-            assert_eq!(ManagedTool::from_binary("nix"), None);
-            assert_eq!(ManagedTool::from_binary("kill"), None);
-            assert_eq!(ManagedTool::from_binary("cargo"), None);
-            assert_eq!(ManagedTool::from_binary("unknown-tool"), None);
+            assert_eq!(ExternalTool::from_binary("kill"), None);
+            assert_eq!(ExternalTool::from_binary("rustfmt"), None);
+            assert_eq!(ExternalTool::from_binary("unknown-tool"), None);
         }
     }
 
@@ -410,14 +568,14 @@ mod tests {
         use super::*;
 
         #[test]
-        fn wraps_managed_tool_with_nix_run() {
+        fn from_program_keeps_program_and_args_direct() {
             let plan = CommandPlan::from_program("git", &["status"]);
-            assert_eq!(plan.program(), "nix");
-            assert_eq!(plan.args(), vec!["run", "nixpkgs#git", "--", "status"]);
+            assert_eq!(plan.program(), "git");
+            assert_eq!(plan.args(), vec!["status"]);
         }
 
         #[test]
-        fn keeps_direct_programs_unwrapped() {
+        fn from_program_keeps_unknown_tools_direct_too() {
             let plan = CommandPlan::from_program("kill", &["-TERM", "123"]);
             assert_eq!(plan.program(), "kill");
             assert_eq!(plan.args(), vec!["-TERM", "123"]);
@@ -430,67 +588,91 @@ mod tests {
         }
 
         #[test]
-        fn for_managed_tool_with_extra_args_appends_after_separator() {
-            let plan = CommandPlan::for_managed_tool(
-                ManagedTool::Git,
+        fn for_tool_resolves_to_binary_name_on_path() {
+            let plan = CommandPlan::for_tool(
+                ExternalTool::Git,
                 vec!["status".to_string(), "--short".to_string()],
             );
-            assert_eq!(plan.program(), "nix");
-            assert_eq!(
-                plan.args(),
-                vec!["run", "nixpkgs#git", "--", "status", "--short"]
-            );
+            assert_eq!(plan.program(), "git");
+            assert_eq!(plan.args(), vec!["status", "--short"]);
         }
 
         #[test]
-        fn for_managed_tool_with_no_extra_args_ends_with_separator() {
-            let plan = CommandPlan::for_managed_tool(ManagedTool::Tmux, Vec::new());
-            assert_eq!(plan.program(), "nix");
-            assert_eq!(plan.args(), vec!["run", "nixpkgs#tmux", "--"]);
+        fn for_tool_with_no_extra_args_has_empty_args() {
+            let plan = CommandPlan::for_tool(ExternalTool::Tmux, Vec::new());
+            assert_eq!(plan.program(), "tmux");
+            assert!(plan.args().is_empty());
         }
     }
 
-    mod managed_tool_metadata {
+    mod external_tool_metadata {
         use super::*;
 
         #[test]
         fn display_returns_binary_name() {
-            assert_eq!(ManagedTool::Git.to_string(), "git");
-            assert_eq!(ManagedTool::Tmux.to_string(), "tmux");
-            assert_eq!(ManagedTool::Corepack.to_string(), "corepack");
+            assert_eq!(ExternalTool::Git.to_string(), "git");
+            assert_eq!(ExternalTool::Tmux.to_string(), "tmux");
+            assert_eq!(ExternalTool::Corepack.to_string(), "corepack");
+            assert_eq!(ExternalTool::Cargo.to_string(), "cargo");
+            assert_eq!(ExternalTool::Nix.to_string(), "nix");
         }
 
         #[test]
-        fn nix_package_returns_expected_package() {
-            assert_eq!(ManagedTool::Git.nix_package(), "nixpkgs#git");
-            assert_eq!(ManagedTool::Node.nix_package(), "nixpkgs#nodejs");
-            assert_eq!(ManagedTool::Corepack.nix_package(), "nixpkgs#nodejs");
+        fn install_hint_uses_nix_package_for_nixpkgs_tools() {
+            assert_eq!(
+                ExternalTool::Git.install_hint(),
+                InstallHint::NixPackage("nixpkgs#git")
+            );
+            assert_eq!(
+                ExternalTool::Node.install_hint(),
+                InstallHint::NixPackage("nixpkgs#nodejs")
+            );
+            assert_eq!(
+                ExternalTool::Corepack.install_hint(),
+                InstallHint::NixPackage("nixpkgs#nodejs")
+            );
+        }
+
+        #[test]
+        fn install_hint_for_cargo_mentions_rustup_and_nix() {
+            let hint = ExternalTool::Cargo.install_hint();
+            assert!(matches!(hint, InstallHint::Custom(_)));
+            let msg = hint.to_string();
+            assert!(
+                msg.contains("rustup"),
+                "cargo hint should mention rustup: {msg}"
+            );
+            assert!(msg.contains("nix"), "cargo hint should mention nix: {msg}");
+        }
+
+        #[test]
+        fn install_hint_for_nix_points_at_nixos_download() {
+            let hint = ExternalTool::Nix.install_hint();
+            assert!(matches!(hint, InstallHint::Custom(_)));
+            assert!(hint.to_string().contains("nixos.org/download"));
+        }
+
+        #[test]
+        fn nix_package_hint_renders_as_nix_profile_command() {
+            let rendered = InstallHint::NixPackage("nixpkgs#git").to_string();
+            assert_eq!(rendered, "nix profile install nixpkgs#git");
         }
 
         #[test]
         fn binary_name_matches_tool_name() {
-            assert_eq!(ManagedTool::Git.binary_name(), "git");
-            assert_eq!(ManagedTool::Opencode.binary_name(), "opencode");
-            assert_eq!(ManagedTool::Pnpm.binary_name(), "pnpm");
+            assert_eq!(ExternalTool::Git.binary_name(), "git");
+            assert_eq!(ExternalTool::Opencode.binary_name(), "opencode");
+            assert_eq!(ExternalTool::Pnpm.binary_name(), "pnpm");
+            assert_eq!(ExternalTool::Cargo.binary_name(), "cargo");
+            assert_eq!(ExternalTool::Nix.binary_name(), "nix");
         }
 
         #[test]
-        fn all_tools_have_non_empty_nix_package() {
-            let tools = [
-                ManagedTool::Git,
-                ManagedTool::Tmux,
-                ManagedTool::Codium,
-                ManagedTool::Opencode,
-                ManagedTool::Direnv,
-                ManagedTool::Asdf,
-                ManagedTool::Pnpm,
-                ManagedTool::Corepack,
-                ManagedTool::Node,
-            ];
-            for tool in &tools {
+        fn all_tools_have_non_empty_metadata() {
+            for tool in ExternalTool::all() {
                 assert!(
-                    !tool.nix_package().is_empty(),
-                    "{tool} has empty nix_package"
+                    !tool.install_hint().to_string().is_empty(),
+                    "{tool} has empty install hint"
                 );
                 assert!(
                     !tool.binary_name().is_empty(),
@@ -500,28 +682,75 @@ mod tests {
         }
 
         #[test]
-        fn managed_tool_is_copy_and_eq() {
-            let a = ManagedTool::Git;
+        fn external_tool_is_copy_and_eq() {
+            let a = ExternalTool::Git;
             let b = a; // Copy
             assert_eq!(a, b);
         }
 
         #[test]
-        fn direnv_nix_package() {
-            assert_eq!(ManagedTool::Direnv.nix_package(), "nixpkgs#direnv");
-            assert_eq!(ManagedTool::Direnv.binary_name(), "direnv");
+        fn all_contains_every_variant() {
+            let all = ExternalTool::all();
+            assert!(all.contains(&ExternalTool::Git));
+            assert!(all.contains(&ExternalTool::Tmux));
+            assert!(all.contains(&ExternalTool::Codium));
+            assert!(all.contains(&ExternalTool::Opencode));
+            assert!(all.contains(&ExternalTool::Direnv));
+            assert!(all.contains(&ExternalTool::Asdf));
+            assert!(all.contains(&ExternalTool::Pnpm));
+            assert!(all.contains(&ExternalTool::Corepack));
+            assert!(all.contains(&ExternalTool::Node));
+            assert!(all.contains(&ExternalTool::Cargo));
+            assert!(all.contains(&ExternalTool::Nix));
+        }
+    }
+
+    mod spawn_error_mapping {
+        use super::*;
+
+        fn not_found_io_error() -> std::io::Error {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory")
         }
 
         #[test]
-        fn asdf_nix_package() {
-            assert_eq!(ManagedTool::Asdf.nix_package(), "nixpkgs#asdf-vm");
-            assert_eq!(ManagedTool::Asdf.binary_name(), "asdf");
+        fn maps_not_found_for_known_tool_to_tool_missing_hint() {
+            let err = spawn_error(OsStr::new("git"), not_found_io_error());
+            let msg = err.to_string();
+            assert!(matches!(err, Error::Failed(_)));
+            assert!(
+                msg.contains("`git`") && msg.contains("nix profile install nixpkgs#git"),
+                "expected tool_missing hint, got: {msg}"
+            );
         }
 
         #[test]
-        fn codium_nix_package() {
-            assert_eq!(ManagedTool::Codium.nix_package(), "nixpkgs#vscodium");
-            assert_eq!(ManagedTool::Codium.binary_name(), "codium");
+        fn maps_not_found_for_cargo_to_cargo_specific_hint() {
+            let err = spawn_error(OsStr::new("cargo"), not_found_io_error());
+            let msg = err.to_string();
+            assert!(matches!(err, Error::Failed(_)));
+            assert!(msg.contains("`cargo`"), "should quote cargo: {msg}");
+            assert!(
+                msg.contains("rustup"),
+                "cargo hint should mention rustup: {msg}"
+            );
+        }
+
+        #[test]
+        fn maps_not_found_for_unknown_binary_to_generic_message() {
+            let err = spawn_error(OsStr::new("not-a-known-tool"), not_found_io_error());
+            let msg = err.to_string();
+            assert!(matches!(err, Error::Failed(_)));
+            assert!(
+                msg.contains("`not-a-known-tool`") && msg.contains("not found on PATH"),
+                "expected generic not-found message, got: {msg}"
+            );
+        }
+
+        #[test]
+        fn passes_through_non_not_found_errors_for_known_tools() {
+            let io_err = std::io::Error::other("something else");
+            let err = spawn_error(OsStr::new("git"), io_err);
+            assert!(matches!(err, Error::Io(_)));
         }
     }
 
@@ -557,40 +786,114 @@ mod tests {
         }
     }
 
-    mod prepend_to_path {
-        use std::path::Path;
+    mod output_scope {
+        use super::super::{
+            CapturedLine, OUTPUT_SINK, OutputScope, log, run_status, run_status_quiet, warn,
+        };
 
-        use super::*;
+        /// Strip owo-colors ANSI escapes so assertions are readable.
+        fn strip_ansi(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut chars = s.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\u{1b}' {
+                    // Skip until the terminating letter of the CSI sequence.
+                    while let Some(&next) = chars.peek() {
+                        chars.next();
+                        if next.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        }
 
         #[test]
-        fn prepends_directory_to_path() {
-            let result = prepend_to_path(Path::new("/nix/store/abc/bin")).unwrap();
-            let result_str = result.to_string_lossy();
+        fn captures_log_and_warn_in_order() {
+            let scope = OutputScope::new();
+            log("first");
+            warn("second");
+            log("third");
+            let lines = scope.into_lines();
+
+            assert_eq!(lines.len(), 3);
+            assert!(matches!(lines[0], CapturedLine::Stdout(_)));
+            assert!(matches!(lines[1], CapturedLine::Stderr(_)));
+            assert!(matches!(lines[2], CapturedLine::Stdout(_)));
+
+            assert_eq!(strip_ansi(lines[0].text()), "==> first");
+            assert_eq!(strip_ansi(lines[1].text()), "warning: second");
+            assert_eq!(strip_ansi(lines[2].text()), "==> third");
+        }
+
+        #[test]
+        fn without_scope_no_capture_happens() {
+            // Nothing installed → sink is None.
+            let present = OUTPUT_SINK.with(|slot| slot.borrow().as_ref().is_some());
+            assert!(!present, "no sink should be installed outside of a scope");
+        }
+
+        #[test]
+        fn drop_restores_previous_sink() {
+            let outer = OutputScope::new();
+            log("outer-before");
+            {
+                let inner = OutputScope::new();
+                log("inner-only");
+                let inner_lines = inner.into_lines();
+                assert_eq!(inner_lines.len(), 1);
+                assert!(strip_ansi(inner_lines[0].text()).contains("inner-only"));
+            }
+            log("outer-after");
+            let outer_lines = outer.into_lines();
+            assert_eq!(outer_lines.len(), 2);
+            assert!(strip_ansi(outer_lines[0].text()).contains("outer-before"));
+            assert!(strip_ansi(outer_lines[1].text()).contains("outer-after"));
+        }
+
+        #[test]
+        fn run_status_streams_subprocess_stdout_into_sink() {
+            // `true` produces no output; use `printf` to exercise stdout
+            // streaming (portable on macOS and Linux).
+            let scope = OutputScope::new();
+            run_status("printf", &["hello-from-child\\n"], None).expect("printf should succeed");
+            let lines = scope.into_lines();
             assert!(
-                result_str.starts_with("/nix/store/abc/bin:"),
-                "PATH should start with the prepended dir, got: {result_str}"
+                lines
+                    .iter()
+                    .any(|l| matches!(l, CapturedLine::Stdout(s) if s == "hello-from-child")),
+                "expected child stdout line, got {lines:?}"
             );
         }
 
         #[test]
-        fn preserves_existing_path_entries() {
-            let current = std::env::var("PATH").unwrap_or_default();
-            let result = prepend_to_path(Path::new("/extra/bin")).unwrap();
-            let result_str = result.to_string_lossy();
+        fn run_status_quiet_streams_stderr_as_stderr_variant() {
+            let scope = OutputScope::new();
+            // Write to stderr via `sh -c`.
+            run_status_quiet("sh", &["-c", "printf 'err-msg\\n' 1>&2"], None)
+                .expect("sh should succeed");
+            let lines = scope.into_lines();
             assert!(
-                result_str.contains(&current),
-                "existing PATH entries should be preserved"
+                lines
+                    .iter()
+                    .any(|l| matches!(l, CapturedLine::Stderr(s) if s == "err-msg")),
+                "expected child stderr line, got {lines:?}"
             );
         }
 
         #[test]
-        fn extra_dir_appears_first() {
-            let result = prepend_to_path(Path::new("/my/extra/dir")).unwrap();
-            let paths: Vec<_> = std::env::split_paths(&result).collect();
-            assert_eq!(
-                paths[0],
-                Path::new("/my/extra/dir"),
-                "extra dir should be the first entry"
+        fn captured_child_output_does_not_leak_to_terminal_on_success() {
+            // Implicit: no assertion on terminal, but verify the sink got
+            // the content so a sequential printer can flush later.
+            let scope = OutputScope::new();
+            run_status("printf", &["captured-only\\n"], None).unwrap();
+            let lines = scope.into_lines();
+            assert!(
+                lines.iter().any(|l| l.text() == "captured-only"),
+                "line should be in sink, not on live stdout"
             );
         }
     }

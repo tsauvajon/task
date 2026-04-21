@@ -1,6 +1,6 @@
 [package]
 name = "task"
-version = "4.3.0"
+version = "5.3.0"
 edition = "2024"
 
 [dependencies]
@@ -9,6 +9,7 @@ clap_complete = "4.6.0"
 comfy-table = "7.2.2"
 crossterm = "0.29.0"
 dialoguer = "0.12.0"
+indicatif = "0.18"
 owo-colors = "4.3.0"
 ratatui = "0.30.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }

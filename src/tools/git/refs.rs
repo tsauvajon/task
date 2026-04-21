@@ -66,6 +66,16 @@ pub fn ensure_origin_fetch_refspec(gitdir: &Path) -> Result<()> {
     GitDir::new(gitdir).status(&["config", "remote.origin.fetch", ORIGIN_FETCH_REFSPEC])
 }
 
+pub fn set_branch_upstream(gitdir: &Path, branch: &str, remote: &str) -> Result<()> {
+    let remote_key = format!("branch.{branch}.remote");
+    let merge_key = format!("branch.{branch}.merge");
+    let merge_ref = format!("refs/heads/{branch}");
+
+    let gitdir = GitDir::new(gitdir);
+    gitdir.status(&["config", &remote_key, remote])?;
+    gitdir.status(&["config", &merge_key, &merge_ref])
+}
+
 pub fn ref_exists(gitdir: &Path, reference: &str) -> bool {
     GitDir::new(gitdir)
         .status(&["show-ref", "--verify", "--quiet", reference])

@@ -6,7 +6,9 @@ use std::{
 use crate::{
     runtime::{branch_name::BranchName, repo_key::RepoKey},
     tools::{
-        git::worktrees::{WorktreeEntry, branch_from_ref, branch_from_worktree_path},
+        git::worktrees::{
+            WorktreeEntry, branch_from_ref, branch_from_worktree_path, worktree_name,
+        },
         tmux::naming::session_name,
     },
 };
@@ -16,6 +18,10 @@ pub struct TaskRow {
     pub status: TaskStatus,
     pub repo: RepoKey,
     pub branch: BranchName,
+    /// Stable worktree directory identity — the path relative to
+    /// `wt/<repo>/`, set at `task start` time. Use this for session
+    /// and profile naming instead of `branch` (which can change).
+    pub worktree_name: String,
     pub path: PathBuf,
 }
 
@@ -62,7 +68,10 @@ pub fn build_task_rows(
                 })
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let session = session_name(repo_key, &branch);
+            // Stable identity: derived from the worktree directory path,
+            // not the (potentially renamed) Git branch.
+            let wt_name = worktree_name(wt_dir, repo_key, &entry.path);
+            let session = session_name(repo_key, &wt_name);
             let status = if open_sessions.iter().any(|name| name == &session) {
                 TaskStatus::Open
             } else {
@@ -73,6 +82,7 @@ pub fn build_task_rows(
                 status,
                 repo: repo_key.clone(),
                 branch: BranchName::new(branch),
+                worktree_name: wt_name,
                 path: entry.path.clone(),
             }
         })
@@ -142,12 +152,14 @@ mod tests {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/tsauvajon/task"),
                         branch: BranchName::new("rewrite-in-rust"),
+                        worktree_name: "rewrite-in-rust".to_string(),
                         path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
                     },
                     TaskRow {
                         status: TaskStatus::Parked,
                         repo: RepoKey::new("github.com/tsauvajon/task"),
                         branch: BranchName::new("bump-deps"),
+                        worktree_name: "bump-deps".to_string(),
                         path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
                     },
                 ]

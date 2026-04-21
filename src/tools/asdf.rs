@@ -3,19 +3,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{
-    error::Result,
-    runtime::{nix_store::NixRunner, process::ManagedTool},
-};
-
-static ASDF: NixRunner = NixRunner::new(ManagedTool::Asdf);
+use crate::{error::Result, runtime::process};
 
 fn capture(args: &[&str], cwd: Option<&Path>) -> Result<String> {
-    ASDF.capture(args, cwd)
+    process::run_capture("asdf", args, cwd)
 }
 
 fn status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
-    ASDF.status(args, cwd)
+    process::run_status("asdf", args, cwd)
 }
 
 const NODEJS_PLUGIN_REPO: &str = "https://github.com/asdf-vm/asdf-nodejs.git";

@@ -10,7 +10,7 @@ use crate::{error::Result, runtime::process};
 
 pub fn open_window(
     repo_key: &str,
-    branch: &str,
+    worktree_name: &str,
     worktree_path: &Path,
     codium_trusted_roots: &[std::path::PathBuf],
 ) -> Result<()> {
@@ -18,7 +18,7 @@ pub fn open_window(
         return Ok(());
     }
 
-    let user_data_dir = user_data_dir(repo_key, branch);
+    let user_data_dir = user_data_dir(repo_key, worktree_name);
     fs::create_dir_all(&user_data_dir)?;
     if let Err(err) = seed_trusted_roots(&user_data_dir, codium_trusted_roots) {
         process::warn(&format!(
@@ -40,10 +40,10 @@ pub fn open_window(
 
 pub fn seed_task_trusted_roots(
     repo_key: &str,
-    branch: &str,
+    worktree_name: &str,
     codium_trusted_roots: &[std::path::PathBuf],
 ) {
-    let user_data_dir = user_data_dir(repo_key, branch);
+    let user_data_dir = user_data_dir(repo_key, worktree_name);
     if let Err(err) = fs::create_dir_all(&user_data_dir) {
         process::warn(&format!(
             "Could not create VSCodium profile directory for {}: {err}",
@@ -81,8 +81,8 @@ pub enum CodiumState {
     NotRunning,
 }
 
-pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState> {
-    let user_data_dir = user_data_dir(repo_key, branch);
+pub fn codium_state(repo_key: &str, worktree_name: &str) -> Result<CodiumState> {
+    let user_data_dir = user_data_dir(repo_key, worktree_name);
     let pids = codium_pids_for_user_data_dir(&user_data_dir);
     if pids.is_empty() {
         Ok(CodiumState::NotRunning)
@@ -91,16 +91,16 @@ pub fn codium_state(repo_key: &str, branch: &str) -> Result<CodiumState> {
     }
 }
 
-pub fn close_windows(repo_key: &str, branch: &str) -> Result<()> {
-    let user_data_dir = user_data_dir(repo_key, branch);
+pub fn close_windows(repo_key: &str, worktree_name: &str) -> Result<()> {
+    let user_data_dir = user_data_dir(repo_key, worktree_name);
     for pid in codium_pids_for_user_data_dir(&user_data_dir) {
         terminate_pid(pid)?;
     }
     Ok(())
 }
 
-pub fn cleanup(repo_key: &str, branch: &str) -> Result<()> {
-    let user_data_dir = user_data_dir(repo_key, branch);
+pub fn cleanup(repo_key: &str, worktree_name: &str) -> Result<()> {
+    let user_data_dir = user_data_dir(repo_key, worktree_name);
     cleanup_user_data_dir(&user_data_dir)
 }
 

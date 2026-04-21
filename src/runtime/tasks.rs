@@ -27,7 +27,9 @@ use crate::{
                 ResolveResult, clone_bare_repo, is_valid_bare_repo, parse_repo_input,
                 resolve_repo_query,
             },
-            worktrees::{branch_from_worktree_path, list_porcelain, parse_worktree_porcelain},
+            worktrees::{
+                self, branch_from_worktree_path, list_porcelain, parse_worktree_porcelain,
+            },
         },
         nodejs,
         tmux::{
@@ -193,29 +195,22 @@ impl TaskResolver {
         )))
     }
 
-    pub fn launch_workspace(
-        &self,
-        repo_key: &RepoKey,
-        branch: &BranchName,
-        path: &Path,
-    ) -> Result<()> {
-        self.launch_workspace_impl(repo_key, branch, path, is_interactive_terminal(), false)
+    pub fn launch_workspace(&self, repo_key: &RepoKey, path: &Path) -> Result<()> {
+        self.launch_workspace_impl(repo_key, path, is_interactive_terminal(), false)
     }
 
     pub fn launch_workspace_no_open(
         &self,
         repo_key: &RepoKey,
-        branch: &BranchName,
         path: &Path,
         no_open: bool,
     ) -> Result<()> {
-        self.launch_workspace_impl(repo_key, branch, path, is_interactive_terminal(), no_open)
+        self.launch_workspace_impl(repo_key, path, is_interactive_terminal(), no_open)
     }
 
     fn launch_workspace_impl(
         &self,
         repo_key: &RepoKey,
-        branch: &BranchName,
         path: &Path,
         interactive: bool,
         no_open: bool,
@@ -236,7 +231,9 @@ impl TaskResolver {
             }
         }
 
-        if open_session(repo_key, branch, path, &self.codium_trusted_roots)? == OpenResult::Attached
+        let wt_name = worktrees::worktree_name(self.layout.wt_dir(), repo_key, path);
+        if open_session(repo_key, &wt_name, path, &self.codium_trusted_roots)?
+            == OpenResult::Attached
         {
             return Ok(());
         }
@@ -425,10 +422,6 @@ impl TaskResolver {
 
     fn all_tasks(&self) -> Result<Vec<TaskRow>> {
         let open_sessions = self.tmux_sessions();
-        // Resolve the nix store path for git before entering the parallel
-        // section: the OnceLock inside NixRunner would otherwise block every
-        // rayon thread on the first caller while the rest stall idle.
-        crate::tools::git::warmup();
         self.available_repos()?
             .into_par_iter()
             .map(|(repo_key, gitdir)| self.repo_task_rows(&repo_key, &gitdir, &open_sessions))
@@ -1290,11 +1283,10 @@ mod tests {
             let resolver = resolver_for(&repos_dir, &wt_dir);
 
             let repo_key = RepoKey::new("github.com/me/app");
-            let branch = BranchName::new("feat-x");
             let path = dir.path().join("worktree");
 
             // interactive=false, no_open=false → non-interactive path; must succeed
-            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, false, false);
+            let result = resolver.launch_workspace_impl(&repo_key, &path, false, false);
             assert!(
                 result.is_ok(),
                 "non-interactive launch_workspace should succeed"
@@ -1311,11 +1303,10 @@ mod tests {
             let resolver = resolver_for(&repos_dir, &wt_dir);
 
             let repo_key = RepoKey::new("github.com/me/app");
-            let branch = BranchName::new("feat-y");
             // Intentionally point at a path that does not exist on disk.
             let path = dir.path().join("no-such-worktree");
 
-            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, false, false);
+            let result = resolver.launch_workspace_impl(&repo_key, &path, false, false);
             assert!(
                 result.is_ok(),
                 "non-interactive launch_workspace should succeed even with missing path"
@@ -1330,11 +1321,10 @@ mod tests {
             let resolver = resolver_for(&repos_dir, &wt_dir);
 
             let repo_key = RepoKey::new("github.com/me/app");
-            let branch = BranchName::new("feat-z");
             let path = dir.path().join("worktree");
 
             // interactive=true but no_open=true → must also skip tools and succeed
-            let result = resolver.launch_workspace_impl(&repo_key, &branch, &path, true, true);
+            let result = resolver.launch_workspace_impl(&repo_key, &path, true, true);
             assert!(
                 result.is_ok(),
                 "no_open=true should skip tools and succeed even in an interactive terminal"
