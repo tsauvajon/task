@@ -110,8 +110,8 @@ fn resolve_match_impl(
     context: &str,
     allow_prompt: bool,
 ) -> Result<TaskRow> {
-    if matches.len() == 1 {
-        return Ok(matches[0].0.clone());
+    if let [(row, _)] = matches {
+        return Ok(row.clone());
     }
 
     let exact: Vec<TaskRow> = matches
@@ -119,8 +119,8 @@ fn resolve_match_impl(
         .filter(|(_, kind)| *kind == MatchKind::Exact)
         .map(|(row, _)| row.clone())
         .collect();
-    if exact.len() == 1 {
-        return Ok(exact[0].clone());
+    if let [row] = exact.as_slice() {
+        return Ok(row.clone());
     }
 
     // Still ambiguous — build the label list once for both the error message
@@ -155,7 +155,10 @@ fn choose_task_interactive(
     let Some(i) = index else {
         return Err(Error::Cancelled);
     };
-    Ok(matches[i].0.clone())
+    matches
+        .get(i)
+        .map(|(row, _)| row.clone())
+        .ok_or(Error::Cancelled)
 }
 
 fn match_task_name(row: &TaskRow, query: &str) -> Option<MatchKind> {
@@ -206,6 +209,7 @@ mod tests {
                 branch: BranchName::new(branch),
                 worktree_name: branch.to_string(),
                 path: PathBuf::from("/tmp/wt/tool/feat/login"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             }
         }
 
@@ -239,6 +243,7 @@ mod tests {
                 branch: BranchName::new("feat/login"),
                 worktree_name: "feat/login".to_string(),
                 path: PathBuf::from("/tmp/wt/tool/feat/login"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             }
         }
 
@@ -281,6 +286,7 @@ mod tests {
                 branch: BranchName::new(branch),
                 worktree_name: branch.to_string(),
                 path: PathBuf::from(format!("/tmp/wt/{repo}/{branch}")),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             }
         }
 
@@ -406,6 +412,7 @@ mod tests {
                 branch: BranchName::new(branch),
                 worktree_name: branch.to_string(),
                 path: PathBuf::from("/tmp/wt/tool/feat"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             }
         }
 
@@ -439,6 +446,7 @@ mod tests {
                 branch: BranchName::new("feat/login"),
                 worktree_name: "feat/login".to_string(),
                 path: PathBuf::from("/tmp/wt/tool/feat/login"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             }
         }
 

@@ -6,10 +6,12 @@ use crate::tools::tmux::naming::session_name;
 ///
 /// Uses the same sanitization as tmux session names so that both tools
 /// agree on the identity even after a Git branch rename.
+#[must_use]
 pub fn key(repo_key: &str, worktree_name: &str) -> String {
     session_name(repo_key, worktree_name)
 }
 
+#[must_use]
 pub fn codium_state_root() -> PathBuf {
     let xdg = std::env::var("XDG_STATE_HOME").ok();
     let home = std::env::var("HOME").ok();
@@ -31,6 +33,7 @@ fn codium_state_root_from(xdg_state_home: Option<&str>, home: Option<&str>) -> P
         .join("codium")
 }
 
+#[must_use]
 pub fn user_data_dir(repo_key: &str, worktree_name: &str) -> PathBuf {
     codium_state_root().join(key(repo_key, worktree_name))
 }

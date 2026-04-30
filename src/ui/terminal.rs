@@ -26,10 +26,10 @@ impl TerminalGuard {
         })
     }
 
-    pub(super) fn terminal_mut(&mut self) -> &mut AppTerminal {
+    pub(super) fn terminal_mut(&mut self) -> crate::error::Result<&mut AppTerminal> {
         self.terminal
             .as_mut()
-            .expect("terminal guard must contain terminal")
+            .ok_or_else(|| crate::error::Error::failed("terminal guard is missing terminal"))
     }
 }
 

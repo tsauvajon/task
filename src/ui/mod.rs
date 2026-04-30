@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
@@ -30,9 +30,13 @@ mod theme;
 /// messages are drained from the channel.
 const TICK: Duration = Duration::from_millis(100);
 
+/// Cadence of the background OpenCode-state refresher. Short enough to
+/// feel live while the user reads the Tasks view.
+const OPENCODE_REFRESH_INTERVAL: Duration = Duration::from_millis(600);
+
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     context.tasks().ensure_layout()?;
-    let task_repo_scope = initial_repo_scope(context, repo_arg);
+    let task_repo_scope = initial_repo_scope(repo_arg);
     // Progressive loading: build an empty state, enter the terminal,
     // draw the first frame immediately, and only then spawn the loader.
     // The loader does *all* of the expensive work (tmux snapshot, FS
@@ -44,7 +48,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
 
     let mut terminal = TerminalGuard::new()?;
     let _process_log_capture = ProcessLogCaptureGuard::new();
-    let ui_result = run_event_loop(context, terminal.terminal_mut(), &mut state, loader);
+    let ui_result = run_event_loop(context, terminal.terminal_mut()?, &mut state, loader);
 
     match ui_result? {
         UiAction::Quit => Ok(()),
@@ -76,11 +80,46 @@ fn run_event_loop(
     state: &mut UiState,
     mut loader: LoaderHandle,
 ) -> Result<UiAction> {
+    // Short-lived OpenCode refreshers run independently of the main
+    // loader so they don't contend with per-repo git work. `Option`
+    // because no refresher is active until the first tick deadline.
+    let mut opencode_refresh: Option<LoaderHandle> = None;
+    // Back-date the "last refresh" timestamp so the first tick fires
+    // immediately on startup. `checked_sub` guards against the case
+    // where the platform's monotonic clock starts close to zero (e.g.
+    // a freshly-booted box) — `Instant::now() - duration` would panic.
+    let mut last_opencode_refresh = Instant::now()
+        .checked_sub(OPENCODE_REFRESH_INTERVAL)
+        .unwrap_or_else(Instant::now);
+
     loop {
         // Drain background loader messages before each frame.
         while let Some(msg) = loader.try_recv() {
             state.apply_load_msg(msg);
         }
+        if let Some(handle) = &opencode_refresh {
+            let mut got_tick = false;
+            while let Some(msg) = handle.try_recv() {
+                got_tick = true;
+                state.apply_load_msg(msg);
+            }
+            // The refresher emits exactly one message and exits. Drop
+            // the handle so the next interval can spawn a new one.
+            if got_tick {
+                opencode_refresh = None;
+            }
+        }
+
+        // Start a new OpenCode refresh when the interval elapses and
+        // nothing is in flight. Gated on having task rows — no point
+        // paying for the sysinfo scan when the list is empty.
+        maybe_spawn_opencode_refresh(
+            state,
+            &mut opencode_refresh,
+            &mut last_opencode_refresh,
+            Instant::now(),
+        );
+
         state.append_activity_lines(crate::runtime::process::take_captured_logs());
         terminal.draw(|frame| render(frame, &mut *state))?;
 
@@ -123,7 +162,7 @@ fn run_event_loop(
                         }
                     }
                 }
-                _ => {}
+                Event::FocusGained | Event::FocusLost | Event::Paste(_) | Event::Resize(..) => {}
             }
             continue;
         }
@@ -133,9 +172,16 @@ fn run_event_loop(
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollDown => UiIntent::MoveNext,
                 MouseEventKind::ScrollUp => UiIntent::MovePrev,
-                _ => UiIntent::Noop,
+                MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::Drag(_)
+                | MouseEventKind::Moved
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight => UiIntent::Noop,
             },
-            _ => UiIntent::Noop,
+            Event::FocusGained | Event::FocusLost | Event::Paste(_) | Event::Resize(..) => {
+                UiIntent::Noop
+            }
         };
         if let Some(action) = apply_intent(context, state, &mut loader, intent)? {
             return Ok(action);
@@ -150,6 +196,37 @@ fn restart_loader(context: &RuntimeEnvironment, state: &mut UiState, loader: &mu
     let generation = state.begin_load();
     let new_handle = loader::spawn(context.clone(), state.task_repo_scope.clone(), generation);
     let _ = std::mem::replace(loader, new_handle);
+}
+
+/// Spawn a fresh OpenCode refresher when the interval has elapsed,
+/// there is no refresher already in flight, and there is at least one
+/// task row to classify. Dropping the previous handle (even if still
+/// running) sets its stop flag so we never accumulate background work.
+///
+/// `now` is passed in so tests can drive the scheduler with a
+/// controlled clock; production always passes `Instant::now()`.
+fn maybe_spawn_opencode_refresh(
+    state: &UiState,
+    handle: &mut Option<LoaderHandle>,
+    last_refresh: &mut Instant,
+    now: Instant,
+) {
+    // A refresher is already running — let it finish before starting a
+    // new one. The channel will drain into `apply_load_msg` on the next
+    // frame.
+    if handle.is_some() {
+        return;
+    }
+    if now.saturating_duration_since(*last_refresh) < OPENCODE_REFRESH_INTERVAL {
+        return;
+    }
+    if state.task_rows.is_empty() {
+        return;
+    }
+
+    let paths: Vec<_> = state.task_rows.iter().map(|row| row.path.clone()).collect();
+    *handle = Some(loader::spawn_opencode_refresh(paths));
+    *last_refresh = now;
 }
 
 fn apply_intent(
@@ -298,6 +375,16 @@ fn apply_intent(
                 Ok(msg) => state.message = msg,
                 Err(err) => state.message = err.to_string(),
             }
+            Ok(None)
+        }
+        UiIntent::ToggleSidebar => {
+            let width = state.last_frame_width;
+            state.toggle_sidebar(width);
+            state.message = if state.sidebar_visible(width) {
+                "Sidebar shown".to_string()
+            } else {
+                "Sidebar hidden".to_string()
+            };
             Ok(None)
         }
 
@@ -552,6 +639,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
             TaskRow {
                 status: TaskStatus::Open,
@@ -559,6 +647,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/c"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
         ];
         let mut state = UiState::new(rows, vec![], None);
@@ -590,6 +679,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
             TaskRow {
                 status: TaskStatus::Open,
@@ -597,6 +687,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/c"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
         ];
         let mut state = UiState::new(rows, vec![], None);
@@ -630,6 +721,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from(format!("/tmp/{i}")),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             })
             .collect();
         let mut state = UiState::new(rows, vec![], None);
@@ -662,6 +754,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from(format!("/tmp/{i}")),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             })
             .collect();
         let mut state = UiState::new(rows, vec![], None);
@@ -694,6 +787,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from(format!("/tmp/{i}")),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             })
             .collect();
         let mut state = UiState::new(rows, vec![], None);
@@ -725,6 +819,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from(format!("/tmp/{i}")),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             })
             .collect();
         let mut state = UiState::new(rows, vec![], None);
@@ -907,6 +1002,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
             TaskRow {
                 status: TaskStatus::Open,
@@ -914,6 +1010,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/b"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
         ];
         let mut state = UiState::new(rows, vec![], None);
@@ -1343,6 +1440,7 @@ mod tests {
             branch: BranchName::new("my-branch"),
             worktree_name: "my-branch".to_string(),
             path: PathBuf::from("/tmp/a"),
+            opencode: crate::tools::opencode::status::OpenCodeState::None,
         };
         let mut state = UiState::new(vec![row], vec![], None);
         let result = apply_intent(
@@ -1378,5 +1476,102 @@ mod tests {
             "message should mention empty branch: {}",
             state.message
         );
+    }
+
+    mod opencode_refresh_scheduler {
+        use std::{path::PathBuf, time::Instant};
+
+        use super::{
+            super::{OPENCODE_REFRESH_INTERVAL, maybe_spawn_opencode_refresh},
+            *,
+        };
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        fn state_with_one_task() -> UiState {
+            let row = TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new("github.com/a/b"),
+                branch: BranchName::new("main"),
+                worktree_name: "main".to_string(),
+                path: PathBuf::from("/tmp/a/main"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
+            };
+            UiState::new(vec![row], vec![], None)
+        }
+
+        /// `now` that is strictly past the refresh interval from
+        /// `last_refresh`, so the interval-gate branch never blocks
+        /// when a test wants a spawn to happen.
+        fn past_interval(last: Instant) -> Instant {
+            last.checked_add(OPENCODE_REFRESH_INTERVAL + std::time::Duration::from_millis(1))
+                .expect("instant overflow")
+        }
+
+        #[test]
+        fn skips_when_handle_in_flight() {
+            let state = state_with_one_task();
+            let last = Instant::now() - OPENCODE_REFRESH_INTERVAL * 10;
+            let mut last_refresh = last;
+            let mut handle: Option<LoaderHandle> = Some(LoaderHandle::noop());
+            let now = past_interval(last);
+
+            maybe_spawn_opencode_refresh(&state, &mut handle, &mut last_refresh, now);
+
+            // Existing handle must not be replaced; last_refresh untouched.
+            assert!(handle.is_some());
+            assert_eq!(last_refresh, last);
+        }
+
+        #[test]
+        fn skips_before_interval_elapsed() {
+            let state = state_with_one_task();
+            let last = Instant::now();
+            let mut last_refresh = last;
+            let mut handle: Option<LoaderHandle> = None;
+            // `now` is less than the interval after `last_refresh`.
+            let now = last;
+
+            maybe_spawn_opencode_refresh(&state, &mut handle, &mut last_refresh, now);
+
+            assert!(handle.is_none());
+            assert_eq!(last_refresh, last);
+        }
+
+        #[test]
+        fn skips_when_task_rows_empty() {
+            let state = UiState::new(vec![], vec![], None);
+            let last = Instant::now() - OPENCODE_REFRESH_INTERVAL * 10;
+            let mut last_refresh = last;
+            let mut handle: Option<LoaderHandle> = None;
+            let now = past_interval(last);
+
+            maybe_spawn_opencode_refresh(&state, &mut handle, &mut last_refresh, now);
+
+            assert!(handle.is_none());
+            assert_eq!(
+                last_refresh, last,
+                "last_refresh should not advance when we didn't spawn",
+            );
+        }
+
+        #[test]
+        fn spawns_when_preconditions_met_and_bumps_last_refresh() {
+            let state = state_with_one_task();
+            let last = Instant::now() - OPENCODE_REFRESH_INTERVAL * 10;
+            let mut last_refresh = last;
+            let mut handle: Option<LoaderHandle> = None;
+            let now = past_interval(last);
+
+            maybe_spawn_opencode_refresh(&state, &mut handle, &mut last_refresh, now);
+
+            assert!(handle.is_some(), "scheduler should spawn a refresher");
+            assert_eq!(
+                last_refresh, now,
+                "last_refresh should advance to the injected `now`",
+            );
+        }
     }
 }

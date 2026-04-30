@@ -92,7 +92,10 @@ fn loading_label(state: &UiState) -> Option<String> {
     let LoadPhase::Loading { done, total } = phase else {
         return None;
     };
-    let frame = SPINNER_FRAMES[(state.spinner_frame as usize) % SPINNER_FRAMES.len()];
+    let frame = SPINNER_FRAMES
+        .get((state.spinner_frame as usize) % SPINNER_FRAMES.len())
+        .copied()
+        .unwrap_or('⠋');
     let label = match state.view {
         ViewMode::Tasks => "Loading tasks",
         ViewMode::Repos => "Loading repos",

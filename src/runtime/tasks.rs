@@ -13,7 +13,7 @@ use crate::{
     error::{Error, Result},
     runtime::{
         BranchName, RepoKey,
-        config::is_interactive_terminal,
+        config::{EditorKind, is_interactive_terminal},
         paths::WorkspacePaths,
         process,
         task_rows::{TaskRow, TaskStatus, build_task_rows},
@@ -43,29 +43,40 @@ use crate::{
 pub struct TaskResolver {
     layout: WorkspacePaths,
     codium_trusted_roots: Vec<PathBuf>,
+    editor: EditorKind,
     interactive: bool,
 }
 
 impl TaskResolver {
+    #[must_use]
     pub fn new(
         layout: WorkspacePaths,
         codium_trusted_roots: Vec<PathBuf>,
+        editor: EditorKind,
         interactive: bool,
     ) -> Self {
         Self {
             layout,
             codium_trusted_roots,
+            editor,
             interactive,
         }
     }
 
+    #[must_use]
     pub fn layout(&self) -> &WorkspacePaths {
         &self.layout
     }
 
     #[cfg(test)]
+    #[must_use]
     pub fn codium_trusted_roots(&self) -> &[PathBuf] {
         &self.codium_trusted_roots
+    }
+
+    #[must_use]
+    pub fn editor(&self) -> EditorKind {
+        self.editor
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
@@ -232,8 +243,13 @@ impl TaskResolver {
         }
 
         let wt_name = worktrees::worktree_name(self.layout.wt_dir(), repo_key, path);
-        if open_session(repo_key, &wt_name, path, &self.codium_trusted_roots)?
-            == OpenResult::Attached
+        if open_session(
+            repo_key,
+            &wt_name,
+            path,
+            self.editor,
+            &self.codium_trusted_roots,
+        )? == OpenResult::Attached
         {
             return Ok(());
         }
@@ -259,6 +275,7 @@ impl TaskResolver {
         ))
     }
 
+    #[must_use]
     pub fn resolve_worktree_path(&self, repo_key: &RepoKey, branch: &BranchName) -> PathBuf {
         let fallback = self.layout.worktree_path(repo_key, branch);
         let gitdir = self.layout.repo_gitdir_path(repo_key);
@@ -303,8 +320,8 @@ impl TaskResolver {
 
         let mut matches: Vec<&TaskRow> = tasks.iter().filter(|r| *r.branch == *query).collect();
         matches.sort_by_key(sort_key);
-        if matches.len() == 1 {
-            return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
+        if let [row] = matches.as_slice() {
+            return Ok((row.repo.clone(), row.branch.clone()));
         }
         if !matches.is_empty() {
             return choose_task_interactive(query, &matches, self.interactive);
@@ -313,8 +330,8 @@ impl TaskResolver {
         let mut matches: Vec<&TaskRow> =
             tasks.iter().filter(|r| r.branch.contains(query)).collect();
         matches.sort_by_key(sort_key);
-        if matches.len() == 1 {
-            return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
+        if let [row] = matches.as_slice() {
+            return Ok((row.repo.clone(), row.branch.clone()));
         }
         if !matches.is_empty() {
             return choose_task_interactive(query, &matches, self.interactive);
@@ -326,8 +343,8 @@ impl TaskResolver {
         if matches.is_empty() {
             return Err(Error::not_found(format!("No task matched '{query}'.")));
         }
-        if matches.len() == 1 {
-            return Ok((matches[0].repo.clone(), matches[0].branch.clone()));
+        if let [row] = matches.as_slice() {
+            return Ok((row.repo.clone(), row.branch.clone()));
         }
 
         choose_task_interactive(query, &matches, self.interactive)
@@ -356,6 +373,7 @@ impl TaskResolver {
         println!("{table}");
     }
 
+    #[must_use]
     pub fn tmux_sessions(&self) -> HashSet<String> {
         list_sessions()
     }
@@ -385,6 +403,7 @@ impl TaskResolver {
         Ok((repo_key, BranchName::new(branch), root))
     }
 
+    #[must_use]
     pub fn current_repo_key(&self) -> Option<RepoKey> {
         self.current_task_info()
             .ok()
@@ -478,7 +497,9 @@ fn choose_repo_key_interactive(
         .default(0)
         .interact_opt()?;
 
-    index.map(|i| choices[i].clone()).ok_or(Error::Cancelled)
+    index
+        .and_then(|i| choices.get(i).cloned())
+        .ok_or(Error::Cancelled)
 }
 
 fn choose_task_interactive(
@@ -507,7 +528,9 @@ fn choose_task_interactive(
     let Some(i) = index else {
         return Err(Error::Cancelled);
     };
-    let row = choices[i];
+    let Some(row) = choices.get(i) else {
+        return Err(Error::Cancelled);
+    };
     Ok((row.repo.clone(), row.branch.clone()))
 }
 
@@ -516,7 +539,7 @@ mod tests {
     use std::{env, fs, path::PathBuf};
 
     use super::{TaskResolver, collect_gitdirs};
-    use crate::runtime::{BranchName, RepoKey, paths::WorkspacePaths};
+    use crate::runtime::{BranchName, RepoKey, config::EditorKind, paths::WorkspacePaths};
 
     /// RAII guard that removes its directory on drop, including on test failure.
     struct TempDir(PathBuf);
@@ -558,7 +581,7 @@ mod tests {
     /// Build a `TaskResolver` from temp repos, wt, and detached dirs.
     fn resolver_for(repos_dir: &std::path::Path, wt_dir: &std::path::Path) -> TaskResolver {
         let layout = WorkspacePaths::new(repos_dir, wt_dir, std::path::Path::new("/tmp/detached"));
-        TaskResolver::new(layout, Vec::new(), false)
+        TaskResolver::new(layout, Vec::new(), EditorKind::default(), false)
     }
 
     mod collect_gitdirs {

@@ -29,6 +29,25 @@ task open <name>    Re-open a parked task
 task finish <name>  Remove a finished task worktree
 ```
 
+## Editor
+
+By default, `task start` opens VSCodium in a separate window and runs
+opencode + a shell in a tmux session. To use [Helix](https://helix-editor.com)
+inside a tmux pane instead, set the top-level `editor` key in
+`~/.config/task/config.toml`:
+
+```toml
+editor = "helix"
+```
+
+The helix layout splits the tmux window into three panes — opencode top-left,
+a shell bottom-left, and `hx .` on the right. `task park` and `task finish`
+still tear the session down the same way.
+
+Note: both commands kill the tmux session, which terminates `hx` and
+discards any unsaved buffers. Save with `:w` inside Helix before parking
+or finishing.
+
 ## Build and test
 
 ```bash

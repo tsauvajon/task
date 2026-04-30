@@ -49,6 +49,7 @@ impl Error {
 
     /// Build a user-facing error for a required external tool that is not on
     /// PATH. Includes the tool's install hint so the message is actionable.
+    #[must_use]
     pub fn tool_missing(tool: ExternalTool) -> Self {
         Self::Failed(format!(
             "Required tool `{binary}` not found on PATH. Install with: {hint}",

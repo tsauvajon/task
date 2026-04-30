@@ -15,6 +15,7 @@ pub enum ResolveResult {
     Ambiguous(Vec<String>),
 }
 
+#[must_use]
 pub fn parse_repo_input(input: &str) -> RepoInput {
     let trimmed = input.trim();
     let repo_key = normalize_repo_key(trimmed);
@@ -29,6 +30,7 @@ pub fn parse_repo_input(input: &str) -> RepoInput {
     }
 }
 
+#[must_use]
 pub fn default_clone_url(input: &str) -> String {
     let trimmed = input.trim();
     if is_git_url(trimmed) {
@@ -40,6 +42,7 @@ pub fn default_clone_url(input: &str) -> String {
     trimmed.to_string()
 }
 
+#[must_use]
 pub fn normalize_repo_key(input: &str) -> String {
     let mut key = input.trim().to_string();
 
@@ -52,8 +55,9 @@ pub fn normalize_repo_key(input: &str) -> String {
     let boundary = first_slash.min(first_colon);
     if let Some(at_index) = key.find('@')
         && at_index < boundary
+        && let Some(rest) = key.get((at_index + 1)..)
     {
-        key = key[(at_index + 1)..].to_string();
+        key = rest.to_string();
     }
 
     if let Some(colon_index) = key.find(':')
@@ -76,6 +80,7 @@ pub fn normalize_repo_key(input: &str) -> String {
     key
 }
 
+#[must_use]
 pub fn resolve_repo_query(query: &str, available_keys: &[String]) -> ResolveResult {
     let normalized = normalize_repo_key(query);
 
@@ -105,6 +110,7 @@ pub fn resolve_repo_query(query: &str, available_keys: &[String]) -> ResolveResu
     }
 }
 
+#[must_use]
 pub fn is_valid_bare_repo(gitdir: &Path) -> bool {
     if !gitdir.is_dir() {
         return false;

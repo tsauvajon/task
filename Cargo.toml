@@ -1,11 +1,11 @@
 [package]
 name = "task"
-version = "5.3.0"
+version = "5.8.2"
 edition = "2024"
 
 [dependencies]
-clap = { version = "4.6.0", features = ["derive"] }
-clap_complete = "4.6.0"
+clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = "4.6.3"
 comfy-table = "7.2.2"
 crossterm = "0.29.0"
 dialoguer = "0.12.0"
@@ -16,6 +16,23 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-rayon = "1"
+rayon = "1.12"
 thiserror = "2"
-toml = "1.1.0"
+toml = "1.1.2"
+strum = { version = "0.28", features = ["derive"] }
+
+[lints.clippy]
+indexing_slicing = "deny"
+fallible_impl_from = "deny"
+wildcard_enum_match_arm = "deny"
+unneeded_field_pattern = "deny"
+fn_params_excessive_bools = "deny"
+must_use_candidate = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+allow_attributes = "deny"
+mem_forget = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

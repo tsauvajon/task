@@ -160,6 +160,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             };
             let mut state = UiState::new(vec![row], vec![], None);
             state.create_branch = "my-new-feature".to_string();
@@ -190,6 +191,7 @@ mod tests {
                 branch: BranchName::new("main"),
                 worktree_name: "main".to_string(),
                 path: PathBuf::from("/tmp/a"),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
             };
             let mut state = UiState::new(vec![row], vec![], None);
             state.create_branch = "  trimmed-branch  ".to_string();

@@ -11,16 +11,19 @@ pub fn corepack_status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
 }
 
 /// Returns `true` if the `node` binary is on PATH.
+#[must_use]
 pub fn node_binary_available() -> bool {
     process::command_exists("node")
 }
 
 /// Returns `true` if the `pnpm` binary is on PATH.
+#[must_use]
 pub fn pnpm_binary_available() -> bool {
     process::command_exists("pnpm")
 }
 
 /// Returns `true` if the `corepack` binary is on PATH.
+#[must_use]
 pub fn corepack_binary_available() -> bool {
     process::command_exists("corepack")
 }
@@ -31,10 +34,12 @@ pub enum Runner {
     Corepack,
 }
 
+#[must_use]
 pub fn node_available() -> bool {
     node_binary_available()
 }
 
+#[must_use]
 pub fn corepack_available() -> bool {
     corepack_binary_available()
 }
@@ -47,6 +52,7 @@ pub fn enable_corepack() -> Result<()> {
     corepack_status(&["enable"], None)
 }
 
+#[must_use]
 pub fn resolve_runner() -> Option<Runner> {
     if pnpm_binary_available() {
         return Some(Runner::Pnpm);

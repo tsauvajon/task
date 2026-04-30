@@ -17,10 +17,12 @@ pub struct GitDir<'a> {
 }
 
 impl<'a> GitDir<'a> {
+    #[must_use]
     pub fn new(path: &'a Path) -> Self {
         Self { path }
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         self.path
     }

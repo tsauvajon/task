@@ -19,8 +19,7 @@ pub(super) struct Theme {
     pub success: Color,
     /// "Parked" / warning state.
     pub warning: Color,
-    /// Error / destructive state (e.g. future confirmation dialogs).
-    #[expect(dead_code)]
+    /// Error / destructive state (stuck OpenCode sessions, confirmation dialogs).
     pub error: Color,
     /// Informational / cyan accent (detach indicator, create mode).
     pub info: Color,
@@ -76,7 +75,7 @@ impl Theme {
     }
 
     /// Style for a keybind label in the actions / help panels.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn key_style(&self) -> Style {
         Style::default().fg(self.accent)
     }

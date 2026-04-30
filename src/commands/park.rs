@@ -21,8 +21,7 @@ pub fn run(context: &RuntimeEnvironment) -> Result<()> {
     }
 
     let wt_name = worktrees::worktree_name(context.layout().wt_dir(), &repo_key, &root);
-    let title = format!("{repo_key} {branch}");
-    let park_result = park(&repo_key, &wt_name, &root, &title)?;
+    let park_result = park(&repo_key, &wt_name, &root)?;
     process::log(&park_log_message(&park_result, &repo_key, &branch));
 
     println!("{}", root.display());

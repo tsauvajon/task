@@ -24,6 +24,7 @@ pub(crate) fn parse_ls_remote_branch(output: &str) -> Option<&str> {
     None
 }
 
+#[must_use]
 pub fn detect_default_base(gitdir: &Path) -> String {
     let gd = GitDir::new(gitdir);
     if let Ok(output) = gd.capture(&["ls-remote", "--symref", "origin", "HEAD"])
@@ -76,12 +77,14 @@ pub fn set_branch_upstream(gitdir: &Path, branch: &str, remote: &str) -> Result<
     gitdir.status(&["config", &merge_key, &merge_ref])
 }
 
+#[must_use]
 pub fn ref_exists(gitdir: &Path, reference: &str) -> bool {
     GitDir::new(gitdir)
         .status(&["show-ref", "--verify", "--quiet", reference])
         .is_ok()
 }
 
+#[must_use]
 pub fn rev_exists(gitdir: &Path, revision: &str) -> bool {
     let value = format!("{revision}^{{commit}}");
     GitDir::new(gitdir)
@@ -89,6 +92,7 @@ pub fn rev_exists(gitdir: &Path, revision: &str) -> bool {
         .is_ok()
 }
 
+#[must_use]
 pub fn current_branch(root: &Path) -> Option<String> {
     let root_str = root.to_string_lossy();
     capture(

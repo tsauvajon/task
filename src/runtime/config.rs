@@ -19,6 +19,58 @@ pub struct InstallEntry {
     pub extra_flags: Vec<String>,
 }
 
+/// Pins a detached worktree to a specific branch.
+///
+/// Without an entry, `task detach add` / `task detach update` track the
+/// remote's default branch (typically `main`/`master`). With one, both
+/// commands operate against `origin/<branch>` instead.
+///
+/// ## `repo` matching
+///
+/// `repo` should be the fully-qualified repo key, i.e.
+/// `host/owner/name` (for example `github.com/mattwparas/helix`).
+/// Command-line arguments to `task detach add|update` are matched
+/// against this field either by exact equality, or by unambiguous
+/// short-name (the last `/`-separated segment). Ambiguous short-name
+/// queries produce a hard error — a partial value like `owner/name`
+/// without the host **must** equal the resolved repo key, otherwise
+/// the pin will be skipped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachedEntry {
+    pub repo: String,
+    pub branch: String,
+}
+
+/// Which editor to open for a task worktree.
+///
+/// Selected via the top-level `editor = "..."` key in `config.toml`.
+/// Defaults to [`EditorKind::Vscodium`] for backward compatibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EditorKind {
+    #[default]
+    Vscodium,
+    Helix,
+}
+
+impl EditorKind {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "vscodium" | "codium" => Ok(Self::Vscodium),
+            "helix" | "hx" => Ok(Self::Helix),
+            other => Err(Error::failed(format!(
+                "Unknown editor `{other}` in config. Allowed values: \"vscodium\", \"helix\"."
+            ))),
+        }
+    }
+
+    fn as_config_string(self) -> &'static str {
+        match self {
+            Self::Vscodium => "vscodium",
+            Self::Helix => "helix",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TaskConfig {
     pub repos_dir: PathBuf,
@@ -26,6 +78,8 @@ pub struct TaskConfig {
     pub detached_dir: PathBuf,
     pub codium_trusted_roots: Vec<PathBuf>,
     pub install_entries: Vec<InstallEntry>,
+    pub detached_entries: Vec<DetachedEntry>,
+    pub editor: EditorKind,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,10 +87,14 @@ struct TaskConfigFile {
     repos_dir: String,
     wt_dir: String,
     detached_dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    editor: Option<String>,
     #[serde(default)]
     vscodium: Option<VscodiumConfigFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     install: Vec<InstallEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    detached: Vec<DetachedEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,8 +170,10 @@ fn bootstrap_config(config_path: &Path) -> Result<TaskConfig> {
         repos_dir,
         wt_dir,
         detached_dir,
+        editor: None,
         vscodium: None,
         install: Vec::new(),
+        detached: Vec::new(),
     })?;
     write_config(config_path, &config)?;
     Ok(config)
@@ -133,6 +193,11 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<()> {
         repos_dir: config.repos_dir.display().to_string(),
         wt_dir: config.wt_dir.display().to_string(),
         detached_dir: config.detached_dir.display().to_string(),
+        editor: if config.editor == EditorKind::default() {
+            None
+        } else {
+            Some(config.editor.as_config_string().to_string())
+        },
         vscodium: if config.codium_trusted_roots.is_empty() {
             None
         } else {
@@ -145,6 +210,7 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<()> {
             })
         },
         install: config.install_entries.clone(),
+        detached: config.detached_entries.clone(),
     };
     let text = toml::to_string_pretty(&file)?;
     fs::write(config_path, text).map_err(|err| {
@@ -169,13 +235,37 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig> {
         })
         .transpose()?
         .unwrap_or_default();
+    validate_detached_entries(&file.detached)?;
+    let editor = match file.editor.as_deref().map(str::trim) {
+        None | Some("") => EditorKind::default(),
+        Some(value) => EditorKind::parse(value)?,
+    };
     Ok(TaskConfig {
         repos_dir,
         wt_dir,
         detached_dir,
         codium_trusted_roots,
         install_entries: file.install,
+        detached_entries: file.detached,
+        editor,
     })
+}
+
+fn validate_detached_entries(entries: &[DetachedEntry]) -> Result<()> {
+    for entry in entries {
+        if entry.repo.trim().is_empty() {
+            return Err(Error::failed(
+                "[[detached]] entry has an empty `repo` field",
+            ));
+        }
+        if entry.branch.trim().is_empty() {
+            return Err(Error::failed(format!(
+                "[[detached]] entry for `{}` has an empty `branch` field",
+                entry.repo
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn expand_path(value: &str, home: &Path) -> Result<PathBuf> {
@@ -220,6 +310,7 @@ fn home_dir() -> Result<PathBuf> {
         .map_err(|_| Error::failed("HOME is not set"))
 }
 
+#[must_use]
 pub fn is_interactive_terminal() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
@@ -228,7 +319,10 @@ pub fn is_interactive_terminal() -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{InstallEntry, TaskConfigFile, VscodiumConfigFile, expand_path, to_runtime_config};
+    use super::{
+        DetachedEntry, EditorKind, InstallEntry, TaskConfigFile, VscodiumConfigFile, expand_path,
+        to_runtime_config,
+    };
 
     mod expand_path {
         use super::*;
@@ -282,8 +376,10 @@ mod tests {
                 repos_dir: "~/dev/repos".to_string(),
                 wt_dir: "~/dev/wt".to_string(),
                 detached_dir: "~/dev/detached".to_string(),
+                editor: None,
                 vscodium: None,
                 install: Vec::new(),
+                detached: Vec::new(),
             })
             .expect("runtime config");
 
@@ -296,10 +392,12 @@ mod tests {
                 repos_dir: "~/dev/repos".to_string(),
                 wt_dir: "~/dev/wt".to_string(),
                 detached_dir: "~/dev/detached".to_string(),
+                editor: None,
                 vscodium: Some(VscodiumConfigFile {
                     trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_string()],
                 }),
                 install: Vec::new(),
+                detached: Vec::new(),
             })
             .expect("runtime config");
 
@@ -313,8 +411,10 @@ mod tests {
                 repos_dir: "~/repos".to_string(),
                 wt_dir: "~/wt".to_string(),
                 detached_dir: "~/detached".to_string(),
+                editor: None,
                 vscodium: None,
                 install: Vec::new(),
+                detached: Vec::new(),
             })
             .expect("runtime config");
 
@@ -341,8 +441,10 @@ mod tests {
                 repos_dir: "/tmp/repos".to_string(),
                 wt_dir: "/tmp/wt".to_string(),
                 detached_dir: "/tmp/detached".to_string(),
+                editor: None,
                 vscodium: None,
                 install: entries.clone(),
+                detached: Vec::new(),
             })
             .expect("runtime config");
 
@@ -355,12 +457,184 @@ mod tests {
                 repos_dir: "/tmp/repos".to_string(),
                 wt_dir: "/tmp/wt".to_string(),
                 detached_dir: "/tmp/detached".to_string(),
+                editor: None,
                 vscodium: None,
                 install: Vec::new(),
+                detached: Vec::new(),
             })
             .expect("runtime config");
 
             assert!(config.install_entries.is_empty());
+        }
+
+        #[test]
+        fn passes_through_detached_entries() {
+            let entries = vec![
+                DetachedEntry {
+                    repo: "github.com/mattwparas/helix".to_string(),
+                    branch: "steel-event-system".to_string(),
+                },
+                DetachedEntry {
+                    repo: "github.com/org/fork".to_string(),
+                    branch: "custom".to_string(),
+                },
+            ];
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "/tmp/repos".to_string(),
+                wt_dir: "/tmp/wt".to_string(),
+                detached_dir: "/tmp/detached".to_string(),
+                vscodium: None,
+                install: Vec::new(),
+                editor: None,
+                detached: entries.clone(),
+            })
+            .expect("runtime config");
+
+            assert_eq!(config.detached_entries, entries);
+        }
+
+        #[test]
+        fn empty_detached_entries_by_default() {
+            let config = to_runtime_config(TaskConfigFile {
+                repos_dir: "/tmp/repos".to_string(),
+                wt_dir: "/tmp/wt".to_string(),
+                detached_dir: "/tmp/detached".to_string(),
+                vscodium: None,
+                install: Vec::new(),
+                editor: None,
+                detached: Vec::new(),
+            })
+            .expect("runtime config");
+
+            assert!(config.detached_entries.is_empty());
+        }
+
+        #[test]
+        fn rejects_detached_entry_with_empty_branch() {
+            let err = to_runtime_config(TaskConfigFile {
+                repos_dir: "/tmp/repos".to_string(),
+                wt_dir: "/tmp/wt".to_string(),
+                detached_dir: "/tmp/detached".to_string(),
+                vscodium: None,
+                install: Vec::new(),
+                editor: None,
+                detached: vec![DetachedEntry {
+                    repo: "github.com/org/repo".to_string(),
+                    branch: "".to_string(),
+                }],
+            })
+            .unwrap_err();
+
+            let msg = err.to_string();
+            assert!(msg.contains("branch"), "expected branch error: {msg}");
+            assert!(
+                msg.contains("github.com/org/repo"),
+                "expected repo name in error: {msg}"
+            );
+        }
+
+        #[test]
+        fn rejects_detached_entry_with_whitespace_only_branch() {
+            let err = to_runtime_config(TaskConfigFile {
+                repos_dir: "/tmp/repos".to_string(),
+                wt_dir: "/tmp/wt".to_string(),
+                detached_dir: "/tmp/detached".to_string(),
+                vscodium: None,
+                install: Vec::new(),
+                editor: None,
+                detached: vec![DetachedEntry {
+                    repo: "github.com/org/repo".to_string(),
+                    branch: "   ".to_string(),
+                }],
+            })
+            .unwrap_err();
+
+            assert!(err.to_string().contains("branch"));
+        }
+
+        #[test]
+        fn rejects_detached_entry_with_empty_repo() {
+            let err = to_runtime_config(TaskConfigFile {
+                repos_dir: "/tmp/repos".to_string(),
+                wt_dir: "/tmp/wt".to_string(),
+                detached_dir: "/tmp/detached".to_string(),
+                vscodium: None,
+                install: Vec::new(),
+                editor: None,
+                detached: vec![DetachedEntry {
+                    repo: "".to_string(),
+                    branch: "main".to_string(),
+                }],
+            })
+            .unwrap_err();
+
+            assert!(err.to_string().contains("repo"));
+        }
+    }
+
+    mod editor_kind {
+        use super::*;
+
+        fn file_with_editor(editor: Option<&str>) -> TaskConfigFile {
+            TaskConfigFile {
+                repos_dir: "/tmp/repos".to_string(),
+                wt_dir: "/tmp/wt".to_string(),
+                detached_dir: "/tmp/detached".to_string(),
+                editor: editor.map(str::to_string),
+                vscodium: None,
+                install: Vec::new(),
+                detached: Vec::new(),
+            }
+        }
+
+        #[test]
+        fn defaults_to_vscodium_when_absent() {
+            let config = to_runtime_config(file_with_editor(None)).expect("runtime config");
+            assert_eq!(config.editor, EditorKind::Vscodium);
+        }
+
+        #[test]
+        fn defaults_to_vscodium_when_empty_string() {
+            let config = to_runtime_config(file_with_editor(Some(""))).expect("runtime config");
+            assert_eq!(config.editor, EditorKind::Vscodium);
+        }
+
+        #[test]
+        fn parses_helix_value() {
+            let config =
+                to_runtime_config(file_with_editor(Some("helix"))).expect("runtime config");
+            assert_eq!(config.editor, EditorKind::Helix);
+        }
+
+        #[test]
+        fn parses_hx_alias() {
+            let config = to_runtime_config(file_with_editor(Some("hx"))).expect("runtime config");
+            assert_eq!(config.editor, EditorKind::Helix);
+        }
+
+        #[test]
+        fn parses_vscodium_value() {
+            let config =
+                to_runtime_config(file_with_editor(Some("vscodium"))).expect("runtime config");
+            assert_eq!(config.editor, EditorKind::Vscodium);
+        }
+
+        #[test]
+        fn rejects_unknown_editor() {
+            let err = to_runtime_config(file_with_editor(Some("emacs"))).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("emacs"), "error should name the value: {msg}");
+            assert!(
+                msg.contains("vscodium") && msg.contains("helix"),
+                "error should list allowed values: {msg}"
+            );
+        }
+
+        #[test]
+        fn trims_whitespace() {
+            let config =
+                to_runtime_config(file_with_editor(Some("  helix  "))).expect("runtime config");
+            assert_eq!(config.editor, EditorKind::Helix);
         }
     }
 
@@ -433,7 +707,7 @@ mod tests {
     mod load_config_tests {
         use std::{env, fs, path::PathBuf};
 
-        use super::super::load_config;
+        use super::super::{EditorKind, load_config};
 
         struct TempDir(PathBuf);
 
@@ -562,6 +836,52 @@ repo = "github.com/org/other"
         }
 
         #[test]
+        fn loads_config_with_detached_entries() {
+            let dir = TempDir::new("load-detached");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                r#"repos_dir = "/tmp/repos"
+wt_dir = "/tmp/wt"
+detached_dir = "/tmp/detached"
+
+[[detached]]
+repo = "github.com/mattwparas/helix"
+branch = "steel-event-system"
+
+[[detached]]
+repo = "github.com/org/fork"
+branch = "custom"
+"#,
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load detached config");
+            assert_eq!(config.detached_entries.len(), 2);
+            assert_eq!(
+                config.detached_entries[0].repo,
+                "github.com/mattwparas/helix"
+            );
+            assert_eq!(config.detached_entries[0].branch, "steel-event-system");
+            assert_eq!(config.detached_entries[1].repo, "github.com/org/fork");
+            assert_eq!(config.detached_entries[1].branch, "custom");
+        }
+
+        #[test]
+        fn loads_config_without_detached_section() {
+            let dir = TempDir::new("load-no-detached");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n",
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load config without detached");
+            assert!(config.detached_entries.is_empty());
+        }
+
+        #[test]
         fn errors_on_invalid_toml() {
             let dir = TempDir::new("load-invalid");
             let config_path = dir.path().join("config.toml");
@@ -593,12 +913,55 @@ repo = "github.com/org/other"
                     || err.to_string().contains("detached_dir")
             );
         }
+
+        #[test]
+        fn loads_helix_editor() {
+            let dir = TempDir::new("load-editor-helix");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\neditor = \"helix\"\n",
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load editor config");
+            assert_eq!(config.editor, EditorKind::Helix);
+        }
+
+        #[test]
+        fn defaults_editor_when_key_absent() {
+            let dir = TempDir::new("load-editor-default");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n",
+            )
+            .unwrap();
+
+            let config = load_config(&config_path).expect("load default editor");
+            assert_eq!(config.editor, EditorKind::Vscodium);
+        }
+
+        #[test]
+        fn errors_on_unknown_editor() {
+            let dir = TempDir::new("load-editor-unknown");
+            let config_path = dir.path().join("config.toml");
+            fs::write(
+                &config_path,
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\neditor = \"nano\"\n",
+            )
+            .unwrap();
+
+            let err = load_config(&config_path).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("nano"), "error should name the value: {msg}");
+        }
     }
 
     mod write_config_tests {
         use std::{env, fs, path::PathBuf};
 
-        use super::super::{TaskConfig, load_config, write_config};
+        use super::super::{EditorKind, TaskConfig, load_config, write_config};
 
         struct TempDir(PathBuf);
 
@@ -631,6 +994,8 @@ repo = "github.com/org/other"
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: vec![PathBuf::from("/tmp/trusted")],
                 install_entries: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -653,6 +1018,8 @@ repo = "github.com/org/other"
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
                 install_entries: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -669,6 +1036,8 @@ repo = "github.com/org/other"
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
                 install_entries: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -697,6 +1066,8 @@ repo = "github.com/org/other"
                         extra_flags: vec![],
                     },
                 ],
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -733,6 +1104,8 @@ repo = "github.com/org/other"
                         extra_flags: vec![],
                     },
                 ],
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -766,6 +1139,8 @@ repo = "github.com/org/other"
                     path: None,
                     extra_flags: vec![],
                 }],
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -786,6 +1161,8 @@ repo = "github.com/org/other"
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
                 install_entries: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -794,6 +1171,138 @@ repo = "github.com/org/other"
                 !content.contains("[[install]]"),
                 "empty install should be omitted from config"
             );
+        }
+
+        #[test]
+        fn round_trips_detached_entries() {
+            let dir = TempDir::new("write-detached-round-trip");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
+                detached_entries: vec![
+                    super::super::DetachedEntry {
+                        repo: "github.com/mattwparas/helix".to_string(),
+                        branch: "steel-event-system".to_string(),
+                    },
+                    super::super::DetachedEntry {
+                        repo: "github.com/org/fork".to_string(),
+                        branch: "custom".to_string(),
+                    },
+                ],
+                editor: EditorKind::default(),
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let loaded = load_config(&config_path).expect("load written config");
+
+            assert_eq!(loaded.detached_entries, config.detached_entries);
+        }
+
+        #[test]
+        fn omits_detached_section_when_empty() {
+            let dir = TempDir::new("write-no-detached");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(
+                !content.contains("[[detached]]"),
+                "empty detached should be omitted from config"
+            );
+        }
+
+        #[test]
+        fn round_trips_non_default_editor() {
+            let dir = TempDir::new("write-editor-helix");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::Helix,
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(
+                content.contains("editor = \"helix\""),
+                "helix editor should be serialized: {content}"
+            );
+
+            let loaded = load_config(&config_path).expect("load written config");
+            assert_eq!(loaded.editor, EditorKind::Helix);
+        }
+
+        #[test]
+        fn omits_editor_key_when_default() {
+            let dir = TempDir::new("write-editor-default");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::Vscodium,
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).unwrap();
+            assert!(
+                !content.contains("editor ="),
+                "default editor should be omitted: {content}"
+            );
+        }
+
+        /// Guards against future serializer changes that might couple the
+        /// ordering or representation of top-level keys and `[[detached]]`
+        /// table arrays. A config carrying both a non-default editor and
+        /// one-or-more detached pins must round-trip losslessly.
+        #[test]
+        fn round_trips_editor_and_detached_entries_together() {
+            let dir = TempDir::new("write-editor-and-detached");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                install_entries: Vec::new(),
+                detached_entries: vec![
+                    super::super::DetachedEntry {
+                        repo: "github.com/mattwparas/helix".to_string(),
+                        branch: "steel-event-system".to_string(),
+                    },
+                    super::super::DetachedEntry {
+                        repo: "github.com/org/fork".to_string(),
+                        branch: "custom".to_string(),
+                    },
+                ],
+                editor: EditorKind::Helix,
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let loaded = load_config(&config_path).expect("load written config");
+
+            assert_eq!(loaded.editor, EditorKind::Helix);
+            assert_eq!(loaded.detached_entries, config.detached_entries);
         }
     }
 
@@ -819,8 +1328,10 @@ repo = "github.com/org/other"
                 repos_dir: "  /tmp/repos  ".to_string(),
                 wt_dir: "  /tmp/wt  ".to_string(),
                 detached_dir: "  /tmp/detached  ".to_string(),
+                editor: None,
                 vscodium: None,
                 install: Vec::new(),
+                detached: Vec::new(),
             })
             .expect("runtime config");
 

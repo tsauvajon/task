@@ -17,12 +17,14 @@ fn completion_values(
     context: Option<&RuntimeEnvironment>,
     words: &[String],
 ) -> Result<Vec<String>> {
-    if words.is_empty() || (words.len() == 1 && words[0].is_empty()) {
+    let Some((command, args)) = words.split_first() else {
+        return Ok(top_level_commands());
+    };
+    if args.is_empty() && command.is_empty() {
         return Ok(top_level_commands());
     }
 
-    let command = words[0].as_str();
-    let args = &words[1..];
+    let command = command.as_str();
 
     // Single word that isn't an exact command match — filter top-level commands by prefix.
     if args.is_empty() {
@@ -54,7 +56,7 @@ fn completion_values(
                 values.extend(repo_candidates(context)?);
                 values
             } else if arg_count == 2 {
-                task_candidates(context, Some(&args[0]))?
+                task_candidates(context, args.first().map(String::as_str))?
             } else {
                 Vec::new()
             }
@@ -67,7 +69,7 @@ fn completion_values(
                     repo_candidates(context)?
                 }
             } else if arg_count == 2 {
-                task_candidates(context, Some(&args[0]))?
+                task_candidates(context, args.first().map(String::as_str))?
             } else if command == "finish" && arg_count == 3 && current.starts_with('-') {
                 vec!["--force".to_string()]
             } else {
@@ -80,7 +82,7 @@ fn completion_values(
                 values.extend(repo_candidates(context)?);
                 values
             } else if arg_count == 2 {
-                task_candidates(context, Some(&args[0]))?
+                task_candidates(context, args.first().map(String::as_str))?
             } else {
                 Vec::new()
             }
@@ -159,8 +161,10 @@ fn repo_subcommand_completions(
         return Ok(repo_subcommands);
     }
 
-    let subcmd = args[0].as_str();
-    let sub_args = &args[1..];
+    let Some((subcmd, sub_args)) = args.split_first() else {
+        return Ok(repo_subcommands);
+    };
+    let subcmd = subcmd.as_str();
     let sub_arg_count = sub_args.len();
 
     match subcmd {
@@ -191,8 +195,10 @@ fn detach_subcommand_completions(
         return Ok(detach_subcommands);
     }
 
-    let subcmd = args[0].as_str();
-    let sub_args = &args[1..];
+    let Some((subcmd, sub_args)) = args.split_first() else {
+        return Ok(detach_subcommands);
+    };
+    let subcmd = subcmd.as_str();
     let sub_arg_count = sub_args.len();
     let current = sub_args.last().map(String::as_str).unwrap_or_default();
 

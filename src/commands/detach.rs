@@ -19,16 +19,22 @@ use crate::{
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum DetachCommand {
-    /// Create (or update) a detached worktree pinned to the default branch.
+    /// Create (or update) a detached worktree pinned to the default branch,
+    /// or to a branch configured via a [[detached]] entry in config.toml.
     ///
     /// If the worktree already exists, this is equivalent to `task detach update <repo>`.
-    #[command(about = "Create or update a detached default-branch worktree")]
+    #[command(
+        about = "Create or update a detached worktree (default branch, or pinned via [[detached]])"
+    )]
     Add { repo: String },
-    /// Update one or all detached worktrees by fetching and hard-resetting to origin/HEAD.
+    /// Update one or all detached worktrees by fetching and hard-resetting to origin/HEAD,
+    /// or to `origin/<branch>` when a [[detached]] entry pins that repo.
     ///
     /// Repos with a matching [[install]] entry in config are automatically reinstalled
     /// after a successful update.
-    #[command(about = "Fetch and reset a detached worktree to the latest remote default branch")]
+    #[command(
+        about = "Fetch and reset a detached worktree to origin/HEAD (or origin/<branch> when pinned via [[detached]])"
+    )]
     Update {
         /// Repo to update. Omit to update all detached worktrees.
         repo: Option<String>,
@@ -81,6 +87,8 @@ pub(crate) fn add(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
     let repo_key = env.tasks().resolve_existing_repo_key(repo_arg)?;
     let gitdir = layout.repo_gitdir_path(&repo_key);
     let path = layout.detached_path(&repo_key);
+    let pinned_branch = find_detached_entry(env.detached_entries(), repo_key.as_ref())?
+        .map(|entry| entry.branch.clone());
 
     // If worktree already on disk and is a git worktree, update it instead.
     if path.join(".git").exists() || is_detached_worktree(&path) {
@@ -88,13 +96,26 @@ pub(crate) fn add(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
             "Updating existing detached worktree: {}",
             path.display()
         ));
-        return update_detached(&path);
+        return update_detached(&path, pinned_branch.as_deref());
     }
 
     process::log(&format!("Fetching origin refs for {repo_key}"));
     fetch_origin_refs(&gitdir)?;
 
-    let base_ref = detect_default_base(&gitdir);
+    let base_ref = match pinned_branch.as_deref() {
+        Some(branch) => {
+            let remote_ref = format!("origin/{branch}");
+            if !crate::tools::git::refs::rev_exists(&gitdir, &remote_ref) {
+                return Err(Error::failed(format!(
+                    "[[detached]] entry for '{repo_key}' pins branch '{branch}', \
+                     but '{remote_ref}' does not exist on origin. \
+                     Check the branch name in config.toml or push the branch upstream."
+                )));
+            }
+            remote_ref
+        }
+        None => detect_default_base(&gitdir),
+    };
     process::log(&format!(
         "Creating detached worktree at {} (base: {base_ref})",
         path.display()
@@ -118,8 +139,11 @@ pub(crate) fn update_one(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()>
         )));
     }
 
+    let pinned_branch = find_detached_entry(env.detached_entries(), repo_key.as_ref())?
+        .map(|entry| entry.branch.clone());
+
     process::log(&format!("Updating detached worktree: {}", path.display()));
-    update_detached(&path)?;
+    update_detached(&path, pinned_branch.as_deref())?;
 
     try_install(env, &repo_key);
     Ok(())
@@ -160,6 +184,7 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
         .collect();
     let reporter = ProgressReporter::new("Updating", labels);
     let install_entries = env.install_entries();
+    let detached_entries = env.detached_entries();
 
     // Fan out per-repo work across rayon workers. Each closure buffers its
     // output via `OutputScope`; captured lines are retained only for
@@ -169,24 +194,41 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
         .enumerate()
         .map(|(idx, path)| {
             let scope = process::OutputScope::new();
-            let handle = reporter.begin(idx);
+            let Some(handle) = reporter.begin(idx) else {
+                return (
+                    path.clone(),
+                    scope.into_lines(),
+                    Err(Error::failed("progress row index out of range")),
+                );
+            };
             let repo_key = repo_key_from_detached_path(detached_dir, path);
 
-            let result = fetch_detached(path)
-                .and_then(|()| {
-                    handle.phase(Phase::Syncing);
-                    reset_detached(path)
-                })
-                .and_then(
-                    |()| match find_install_entry(install_entries, repo_key.as_ref()) {
+            // Resolve config lookups up-front: ambiguous short-name
+            // matches are surfaced as hard errors, not silently ignored.
+            let pinned_entry = find_detached_entry(detached_entries, repo_key.as_ref());
+            let install_entry = find_install_entry(install_entries, repo_key.as_ref());
+
+            let result = pinned_entry.and_then(|pinned| {
+                let install = install_entry?;
+                let pinned_branch = pinned.map(|entry| entry.branch.as_str());
+                fetch_detached(path)
+                    .and_then(|()| {
+                        handle.phase(Phase::Syncing);
+                        reset_detached(path, pinned_branch)
+                    })
+                    .and_then(|()| match install {
                         Some(entry) => {
                             handle.phase(Phase::Installing);
                             run_cargo_install(detached_dir, entry)
                         }
                         None => Ok(()),
-                    },
-                );
-            let has_install = find_install_entry(install_entries, repo_key.as_ref()).is_some();
+                    })
+            });
+
+            let has_install = matches!(
+                find_install_entry(install_entries, repo_key.as_ref()),
+                Ok(Some(_))
+            );
             match &result {
                 Ok(()) => handle.succeeded(if has_install { "Installed" } else { "Updated" }),
                 Err(err) => handle.failed(err.to_string()),
@@ -287,7 +329,7 @@ pub(crate) fn list(env: &RuntimeEnvironment) -> Result<()> {
 
 pub(crate) fn install_one(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
     let entries = env.install_entries();
-    let entry = find_install_entry(entries, repo_arg).ok_or_else(|| {
+    let entry = find_install_entry(entries, repo_arg)?.ok_or_else(|| {
         Error::failed(format!(
             "No [[install]] entry for '{repo_arg}' in config.toml. \
              Add one to enable cargo install for this repo."
@@ -318,7 +360,13 @@ pub(crate) fn install_all(env: &RuntimeEnvironment) -> Result<()> {
         .enumerate()
         .map(|(idx, entry)| {
             let scope = process::OutputScope::new();
-            let handle = reporter.begin(idx);
+            let Some(handle) = reporter.begin(idx) else {
+                return (
+                    entry.repo.clone(),
+                    scope.into_lines(),
+                    Err(Error::failed("progress row index out of range")),
+                );
+            };
             handle.phase(Phase::Installing);
             let result = run_cargo_install(detached_dir, entry);
             match &result {
@@ -348,11 +396,19 @@ pub(crate) fn install_all(env: &RuntimeEnvironment) -> Result<()> {
 }
 
 /// Try to install a repo if it has a matching [[install]] entry.
-/// Failures are logged as warnings and do not propagate.
+///
+/// Ambiguity and install failures are logged as warnings and do not
+/// propagate — the caller's update already succeeded and we don't want
+/// to fail the whole command just because the install step misbehaved.
 fn try_install(env: &RuntimeEnvironment, repo_key: &RepoKey) {
     let entries = env.install_entries();
-    let Some(entry) = find_install_entry(entries, repo_key.as_ref()) else {
-        return;
+    let entry = match find_install_entry(entries, repo_key.as_ref()) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return,
+        Err(err) => {
+            process::warn(&format!("Skipping install for {repo_key}: {err}"));
+            return;
+        }
     };
 
     let detached_dir = env.layout().detached_dir();
@@ -363,30 +419,74 @@ fn try_install(env: &RuntimeEnvironment, repo_key: &RepoKey) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/// Find an [[install]] entry whose `repo` field matches the given argument.
+/// Find an entry whose `repo` field matches `query`, by exact repo key
+/// or unambiguous short-name (last path component) match.
 ///
-/// Matches against the full repo key, or against the trailing repo name
-/// (the last path component) when there is exactly one match.
-fn find_install_entry<'a>(
-    entries: &'a [crate::runtime::config::InstallEntry],
+/// Returns `Ok(None)` when nothing matches. Returns `Err` when a short-name
+/// query matches multiple entries — callers must surface this rather than
+/// silently falling back to default behaviour, otherwise a user-configured
+/// pin is ignored without warning.
+///
+/// `section` names the config section for the error message (e.g.
+/// `"[[detached]]"`), and `repo_field` extracts the `repo` field from each
+/// entry.
+fn find_entry_by_repo<'a, T>(
+    entries: &'a [T],
     query: &str,
-) -> Option<&'a crate::runtime::config::InstallEntry> {
+    section: &str,
+    repo_field: impl Fn(&T) -> &str,
+) -> Result<Option<&'a T>> {
     // Exact match on full repo key.
-    if let Some(entry) = entries.iter().find(|e| e.repo == query) {
-        return Some(entry);
+    if let Some(entry) = entries.iter().find(|e| repo_field(e) == query) {
+        return Ok(Some(entry));
     }
 
     // Short-name suffix match: compare against last path component.
-    let matches: Vec<_> = entries
+    let matches: Vec<&T> = entries
         .iter()
-        .filter(|e| e.repo.rsplit('/').next().is_some_and(|name| name == query))
+        .filter(|e| {
+            repo_field(e)
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name == query)
+        })
         .collect();
 
-    if matches.len() == 1 {
-        return Some(matches[0]);
+    match matches.as_slice() {
+        [] => Ok(None),
+        [entry] => Ok(Some(*entry)),
+        _ => {
+            let candidates = matches
+                .iter()
+                .map(|e| format!("  - {}", repo_field(e)))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Err(Error::failed(format!(
+                "'{query}' matches multiple {section} entries in config.toml. \
+                 Use the fully-qualified repo key (host/owner/name). Candidates:\n{candidates}"
+            )))
+        }
     }
+}
 
-    None
+/// Find an [[install]] entry whose `repo` field matches the given argument.
+///
+/// See [`find_entry_by_repo`] for matching rules and error semantics.
+fn find_install_entry<'a>(
+    entries: &'a [crate::runtime::config::InstallEntry],
+    query: &str,
+) -> Result<Option<&'a crate::runtime::config::InstallEntry>> {
+    find_entry_by_repo(entries, query, "[[install]]", |e| e.repo.as_str())
+}
+
+/// Find a [[detached]] entry whose `repo` field matches the given argument.
+///
+/// See [`find_entry_by_repo`] for matching rules and error semantics.
+fn find_detached_entry<'a>(
+    entries: &'a [crate::runtime::config::DetachedEntry],
+    query: &str,
+) -> Result<Option<&'a crate::runtime::config::DetachedEntry>> {
+    find_entry_by_repo(entries, query, "[[detached]]", |e| e.repo.as_str())
 }
 
 /// Run `cargo install --path <install_path> --locked [extra_flags...]` for a single install entry.
@@ -852,6 +952,85 @@ mod tests {
         assert!(status.success(), "git {args:?} in {cwd:?} failed");
     }
 
+    /// Build a workspace with a bare repo under `<base>/repos/<repo_key>.git`
+    /// whose `origin` has both `main` (default) and `feat` branches.
+    ///
+    /// Returns the path to the bare repo. Callers that need to advance
+    /// `origin/feat` afterward can reuse the seed clone exposed by
+    /// [`FeatBranchWorkspace`].
+    fn seed_bare_repo_with_feat_branch(base: &Path, repo_key: &str) -> std::path::PathBuf {
+        seed_feat_branch_workspace(base, repo_key).bare
+    }
+
+    /// Full handles returned by [`seed_feat_branch_workspace`]: the bare
+    /// repo under `<base>/repos/<repo_key>.git` and the seed clone used to
+    /// create it. Tests that need to push further commits to `origin/feat`
+    /// after the initial seeding use the seed clone.
+    struct FeatBranchWorkspace {
+        bare: std::path::PathBuf,
+        seed: std::path::PathBuf,
+    }
+
+    /// Richer variant of [`seed_bare_repo_with_feat_branch`] that returns
+    /// the seed clone alongside the bare path.
+    fn seed_feat_branch_workspace(base: &Path, repo_key: &str) -> FeatBranchWorkspace {
+        let remote = base.join(format!("remote-{}.git", repo_key.replace('/', "-")));
+        let seed = base.join(format!("seed-{}", repo_key.replace('/', "-")));
+        let bare = base.join("repos").join(format!("{repo_key}.git"));
+        fs::create_dir_all(&seed).unwrap();
+        fs::create_dir_all(bare.parent().unwrap()).unwrap();
+
+        git(&["init", "--bare", remote.to_str().unwrap()], base);
+        git(&["init", "-b", "main"], &seed);
+        git(&["config", "user.email", "t@example.com"], &seed);
+        git(&["config", "user.name", "T"], &seed);
+        fs::write(seed.join("README.md"), "main-v1\n").unwrap();
+        git(&["add", "README.md"], &seed);
+        git(&["commit", "-m", "initial"], &seed);
+        git(
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+            &seed,
+        );
+        git(&["push", "-u", "origin", "main"], &seed);
+
+        // Create a second branch with a distinct commit so HEAD differs
+        // from main.
+        git(&["checkout", "-b", "feat"], &seed);
+        fs::write(seed.join("README.md"), "feat-v1\n").unwrap();
+        git(&["commit", "-am", "feat change"], &seed);
+        git(&["push", "-u", "origin", "feat"], &seed);
+
+        // Bare repo pointing at the same origin.
+        git(&["init", "--bare", bare.to_str().unwrap()], base);
+        git(
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+            &bare,
+        );
+        git(
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+            &bare,
+        );
+        git(&["fetch", "origin"], &bare);
+        FeatBranchWorkspace { bare, seed }
+    }
+
+    /// Run a git command and capture stdout. Panics on failure.
+    fn git_stdout(args: &[&str], cwd: &Path) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", std::env::temp_dir())
+            .output()
+            .expect("git must be available");
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     /// Create a minimal remote + clone-style detached worktree at the
     /// given path. Returns the path the caller can hand to `update_all`.
     ///
@@ -948,6 +1127,82 @@ mod tests {
                 );
             }
             // If it returned Ok (e.g. already exists), that's also fine.
+        }
+
+        #[test]
+        fn pinned_branch_is_used_as_base_ref() {
+            // Seed a bare repo whose origin has `main` (default) and `feat`.
+            // A [[detached]] entry pins the repo to `feat`. After `add`, the
+            // detached worktree's HEAD must match `origin/feat`, not `origin/main`.
+            let dir = TempDir::new("add-pinned-branch");
+            let base = dir.path();
+            fs::create_dir_all(base.join("repos")).unwrap();
+            fs::create_dir_all(base.join("wt")).unwrap();
+            fs::create_dir_all(base.join("detached")).unwrap();
+
+            let bare = seed_bare_repo_with_feat_branch(base, "github.com/org/forked");
+            let env =
+                make_env(base).with_detached_entries(vec![crate::runtime::config::DetachedEntry {
+                    repo: "github.com/org/forked".to_string(),
+                    branch: "feat".to_string(),
+                }]);
+
+            add(&env, "github.com/org/forked").expect("add should succeed");
+
+            let detached = base.join("detached/github.com/org/forked");
+            let head = git_stdout(&["rev-parse", "HEAD"], &detached);
+            let origin_feat = git_stdout(&["rev-parse", "origin/feat"], &bare);
+            assert_eq!(head, origin_feat, "detached HEAD should match origin/feat");
+        }
+
+        #[test]
+        fn without_pinned_branch_uses_default_base() {
+            // No [[detached]] entry → falls back to origin/main behaviour.
+            let dir = TempDir::new("add-default-base");
+            let base = dir.path();
+            fs::create_dir_all(base.join("repos")).unwrap();
+            fs::create_dir_all(base.join("wt")).unwrap();
+            fs::create_dir_all(base.join("detached")).unwrap();
+
+            let bare = seed_bare_repo_with_feat_branch(base, "github.com/org/app");
+            let env = make_env(base);
+
+            add(&env, "github.com/org/app").expect("add should succeed");
+
+            let detached = base.join("detached/github.com/org/app");
+            let head = git_stdout(&["rev-parse", "HEAD"], &detached);
+            let origin_main = git_stdout(&["rev-parse", "origin/main"], &bare);
+            assert_eq!(head, origin_main, "detached HEAD should match origin/main");
+        }
+
+        #[test]
+        fn errors_when_pinned_branch_does_not_exist_on_origin() {
+            // A typo or deleted upstream branch should produce an
+            // actionable error that names the offending entry, not a raw
+            // `git worktree add: invalid reference` message.
+            let dir = TempDir::new("add-pinned-missing");
+            let base = dir.path();
+            fs::create_dir_all(base.join("repos")).unwrap();
+            fs::create_dir_all(base.join("wt")).unwrap();
+            fs::create_dir_all(base.join("detached")).unwrap();
+
+            let _bare = seed_bare_repo_with_feat_branch(base, "github.com/org/broken");
+            let env =
+                make_env(base).with_detached_entries(vec![crate::runtime::config::DetachedEntry {
+                    repo: "github.com/org/broken".to_string(),
+                    branch: "does-not-exist".to_string(),
+                }]);
+
+            let err = add(&env, "github.com/org/broken").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("does-not-exist"),
+                "error must mention the pinned branch: {msg}"
+            );
+            assert!(
+                msg.contains("[[detached]]") || msg.contains("origin/does-not-exist"),
+                "error must hint at config or missing remote ref: {msg}"
+            );
         }
     }
 
@@ -1067,6 +1322,152 @@ mod tests {
                 "error should mention failed updates: {msg}"
             );
         }
+
+        #[test]
+        fn update_one_resets_to_pinned_branch() {
+            // End-to-end: create a detached worktree that tracks `main`,
+            // pin it to `feat` via config, advance `feat` on the remote,
+            // then `update_one` — the worktree HEAD must land on
+            // `origin/feat`, not `origin/main`.
+            let dir = TempDir::new("update-one-pinned");
+            let base = dir.path();
+            let repo_key = "github.com/org/pinned";
+
+            fs::create_dir_all(base.join("repos")).unwrap();
+            fs::create_dir_all(base.join("wt")).unwrap();
+            fs::create_dir_all(base.join("detached")).unwrap();
+
+            // Seed remote + bare repo with main + feat branches.
+            let workspace = seed_feat_branch_workspace(base, repo_key);
+            let bare = &workspace.bare;
+            let seed = &workspace.seed;
+            let detached = base.join(format!("detached/{repo_key}"));
+            fs::create_dir_all(detached.parent().unwrap()).unwrap();
+
+            // Create the detached worktree pointing at origin/main
+            // (simulates the pre-pinning state).
+            git(
+                &[
+                    "--git-dir",
+                    bare.to_str().unwrap(),
+                    "worktree",
+                    "add",
+                    "--detach",
+                    detached.to_str().unwrap(),
+                    "origin/main",
+                ],
+                base,
+            );
+
+            let repos_dir = base.join("repos");
+            let wt_dir = base.join("wt");
+            let detached_dir = base.join("detached");
+            let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir)
+                .with_detached_entries(vec![crate::runtime::config::DetachedEntry {
+                    repo: repo_key.to_string(),
+                    branch: "feat".to_string(),
+                }]);
+
+            // Advance origin/feat so the reset is observable.
+            fs::write(seed.join("README.md"), "feat-v2\n").unwrap();
+            git(&["commit", "-am", "feat v2"], seed);
+            git(&["push", "origin", "feat"], seed);
+
+            update_one(&env, repo_key).expect("update_one should succeed");
+
+            let head = git_stdout(&["rev-parse", "HEAD"], &detached);
+            let origin_feat = git_stdout(&["rev-parse", "origin/feat"], &detached);
+            let origin_main = git_stdout(&["rev-parse", "origin/main"], &detached);
+            assert_eq!(head, origin_feat, "HEAD should match origin/feat");
+            assert_ne!(head, origin_main, "HEAD should not be left on origin/main");
+        }
+
+        #[test]
+        fn update_all_resets_to_pinned_branch_for_matching_repo() {
+            // Pinned repo lands on `origin/feat`; unpinned companion lands
+            // on `origin/main`. Proves the per-row lookup in `update_all`.
+            let dir = TempDir::new("update-all-pinned");
+            let base = dir.path();
+
+            let pinned_key = "github.com/org/pinned";
+            let other_key = "github.com/org/other";
+
+            // Seed two remotes, two bare repos, two clone-backed detached
+            // worktrees. The "pinned" one has an extra `feat` branch.
+            let pinned_remote = base.join("pinned-remote.git");
+            let pinned_seed = base.join("pinned-seed");
+            let pinned_detached = base.join(format!("detached/{pinned_key}"));
+            fs::create_dir_all(&pinned_seed).unwrap();
+            fs::create_dir_all(pinned_detached.parent().unwrap()).unwrap();
+            fs::create_dir_all(base.join("wt")).unwrap();
+            fs::create_dir_all(base.join("repos")).unwrap();
+
+            git(&["init", "--bare", pinned_remote.to_str().unwrap()], base);
+            git(&["init", "-b", "main"], &pinned_seed);
+            git(&["config", "user.email", "t@example.com"], &pinned_seed);
+            git(&["config", "user.name", "T"], &pinned_seed);
+            fs::write(pinned_seed.join("README.md"), "main\n").unwrap();
+            git(&["add", "README.md"], &pinned_seed);
+            git(&["commit", "-m", "main"], &pinned_seed);
+            git(
+                &["remote", "add", "origin", pinned_remote.to_str().unwrap()],
+                &pinned_seed,
+            );
+            git(&["push", "-u", "origin", "main"], &pinned_seed);
+            git(&["checkout", "-b", "feat"], &pinned_seed);
+            fs::write(pinned_seed.join("README.md"), "feat\n").unwrap();
+            git(&["commit", "-am", "feat"], &pinned_seed);
+            git(&["push", "-u", "origin", "feat"], &pinned_seed);
+
+            // Clone into the detached location, tracking main so update
+            // starts on main.
+            git(
+                &[
+                    "clone",
+                    "-b",
+                    "main",
+                    pinned_remote.to_str().unwrap(),
+                    pinned_detached.to_str().unwrap(),
+                ],
+                base,
+            );
+
+            // Unpinned companion — simple clone-backed detached worktree.
+            let other_detached = make_clone_backed_detached(base, other_key);
+
+            let repos_dir = base.join("repos");
+            let wt_dir = base.join("wt");
+            let detached_dir = base.join("detached");
+            let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir)
+                .with_detached_entries(vec![crate::runtime::config::DetachedEntry {
+                    repo: pinned_key.to_string(),
+                    branch: "feat".to_string(),
+                }]);
+
+            update_all(&env).expect("update_all should succeed");
+
+            let pinned_head = git_stdout(&["rev-parse", "HEAD"], &pinned_detached);
+            let pinned_feat = git_stdout(&["rev-parse", "origin/feat"], &pinned_detached);
+            let pinned_main = git_stdout(&["rev-parse", "origin/main"], &pinned_detached);
+            assert_eq!(
+                pinned_head, pinned_feat,
+                "pinned repo HEAD should match origin/feat"
+            );
+            assert_ne!(
+                pinned_head, pinned_main,
+                "pinned repo HEAD should not be left on origin/main"
+            );
+
+            // The unpinned companion must land on its own origin/main,
+            // proving `update_all` resolves the pinned branch per-repo
+            // rather than applying the pin globally.
+            let other_head = git_stdout(&["rev-parse", "HEAD"], &other_detached);
+            let other_main = git_stdout(&["rev-parse", "origin/main"], &other_detached);
+            assert_eq!(
+                other_head, other_main,
+                "unpinned repo HEAD should match origin/main"
+            );
+        }
     }
 
     mod list_tests {
@@ -1173,25 +1574,30 @@ mod tests {
         #[test]
         fn matches_full_repo_key() {
             let e = entries();
-            let found = find_install_entry(&e, "github.com/org/tool");
-            assert_eq!(found.unwrap().repo, "github.com/org/tool");
+            let found = find_install_entry(&e, "github.com/org/tool")
+                .expect("lookup")
+                .expect("match");
+            assert_eq!(found.repo, "github.com/org/tool");
         }
 
         #[test]
         fn matches_short_name() {
             let e = entries();
-            let found = find_install_entry(&e, "tool");
-            assert_eq!(found.unwrap().repo, "github.com/org/tool");
+            let found = find_install_entry(&e, "tool")
+                .expect("lookup")
+                .expect("match");
+            assert_eq!(found.repo, "github.com/org/tool");
         }
 
         #[test]
         fn returns_none_when_no_match() {
             let e = entries();
-            assert!(find_install_entry(&e, "nonexistent").is_none());
+            let found = find_install_entry(&e, "nonexistent").expect("lookup");
+            assert!(found.is_none());
         }
 
         #[test]
-        fn returns_none_when_ambiguous_short_name() {
+        fn errors_when_ambiguous_short_name() {
             let entries = vec![
                 InstallEntry {
                     repo: "github.com/a/cli".to_string(),
@@ -1204,20 +1610,106 @@ mod tests {
                     extra_flags: vec![],
                 },
             ];
-            assert!(find_install_entry(&entries, "cli").is_none());
+            let err = find_install_entry(&entries, "cli").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("multiple [[install]] entries"),
+                "expected ambiguity error mentioning section: {msg}"
+            );
+            assert!(
+                msg.contains("github.com/a/cli") && msg.contains("gitlab.com/b/cli"),
+                "expected candidate list: {msg}"
+            );
         }
 
         #[test]
         fn returns_entry_with_sub_path() {
             let e = entries();
-            let found = find_install_entry(&e, "gitlab.com/team/app");
-            assert_eq!(found.unwrap().path.as_deref(), Some("crates/cli"));
+            let found = find_install_entry(&e, "gitlab.com/team/app")
+                .expect("lookup")
+                .expect("match");
+            assert_eq!(found.path.as_deref(), Some("crates/cli"));
         }
 
         #[test]
         fn returns_none_for_empty_entries() {
             let empty: Vec<InstallEntry> = Vec::new();
-            assert!(find_install_entry(&empty, "anything").is_none());
+            let found = find_install_entry(&empty, "anything").expect("lookup");
+            assert!(found.is_none());
+        }
+    }
+
+    mod find_detached_entry_tests {
+        use super::super::find_detached_entry;
+        use crate::runtime::config::DetachedEntry;
+
+        fn entries() -> Vec<DetachedEntry> {
+            vec![
+                DetachedEntry {
+                    repo: "github.com/mattwparas/helix".to_string(),
+                    branch: "steel-event-system".to_string(),
+                },
+                DetachedEntry {
+                    repo: "github.com/org/fork".to_string(),
+                    branch: "custom".to_string(),
+                },
+            ]
+        }
+
+        #[test]
+        fn matches_full_repo_key() {
+            let e = entries();
+            let found = find_detached_entry(&e, "github.com/mattwparas/helix")
+                .expect("lookup")
+                .expect("match");
+            assert_eq!(found.branch, "steel-event-system");
+        }
+
+        #[test]
+        fn matches_short_name() {
+            let e = entries();
+            let found = find_detached_entry(&e, "helix")
+                .expect("lookup")
+                .expect("match");
+            assert_eq!(found.branch, "steel-event-system");
+        }
+
+        #[test]
+        fn returns_none_when_no_match() {
+            let e = entries();
+            let found = find_detached_entry(&e, "nonexistent").expect("lookup");
+            assert!(found.is_none());
+        }
+
+        #[test]
+        fn errors_when_ambiguous_short_name() {
+            let entries = vec![
+                DetachedEntry {
+                    repo: "github.com/a/app".to_string(),
+                    branch: "x".to_string(),
+                },
+                DetachedEntry {
+                    repo: "github.com/b/app".to_string(),
+                    branch: "y".to_string(),
+                },
+            ];
+            let err = find_detached_entry(&entries, "app").unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("multiple [[detached]] entries"),
+                "expected ambiguity error mentioning section: {msg}"
+            );
+            assert!(
+                msg.contains("github.com/a/app") && msg.contains("github.com/b/app"),
+                "expected candidate list: {msg}"
+            );
+        }
+
+        #[test]
+        fn returns_none_for_empty_entries() {
+            let empty: Vec<DetachedEntry> = Vec::new();
+            let found = find_detached_entry(&empty, "anything").expect("lookup");
+            assert!(found.is_none());
         }
     }
 

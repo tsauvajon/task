@@ -24,13 +24,15 @@ use crate::{
     },
 };
 
-pub(super) fn initial_repo_scope(
-    context: &RuntimeEnvironment,
-    repo_arg: Option<&str>,
-) -> Option<String> {
-    repo_arg
-        .map(str::to_string)
-        .or_else(|| context.tasks().current_repo_key().map(String::from))
+/// Initial repo scope for the Tasks view.
+///
+/// The UI defaults to an **unscoped** view (all tasks across all
+/// repos) even when invoked from inside a worktree or task directory.
+/// Only an explicit `--repo` CLI flag narrows the view. This matches
+/// user expectation that `task ui` is a dashboard, not an
+/// auto-filtered subset driven by CWD.
+pub(super) fn initial_repo_scope(repo_arg: Option<&str>) -> Option<String> {
+    repo_arg.map(str::to_string)
 }
 
 /// Synchronously load every task row across the workspace.
@@ -204,8 +206,7 @@ pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) 
         ));
     }
 
-    let title = format!("{} {}", row.repo, row.branch);
-    match park(&row.repo, &row.worktree_name, &row.path, &title)? {
+    match park(&row.repo, &row.worktree_name, &row.path)? {
         ParkResult::Parked => state.message = format!("Parked task: {} {}", row.repo, row.branch),
         ParkResult::AlreadyParked => {
             state.message = format!("Task already parked: {} {}", row.repo, row.branch)
@@ -273,7 +274,10 @@ fn parse_clone_input_args(input: &str) -> Result<(&str, Option<String>)> {
         return Err(Error::failed("Use format: <repo-url> [repo-key]"));
     }
 
-    Ok((tokens[0], tokens.get(1).map(|token| (*token).to_string())))
+    let Some(repo_url) = tokens.first() else {
+        return Err(Error::failed("Clone input cannot be empty"));
+    };
+    Ok((repo_url, tokens.get(1).map(|token| (*token).to_string())))
 }
 
 #[cfg(test)]
@@ -315,10 +319,13 @@ mod tests {
     mod task_row_sort_order {
         use std::path::PathBuf;
 
-        use crate::runtime::{
-            RepoKey,
-            branch_name::BranchName,
-            task_rows::{TaskRow, TaskStatus},
+        use crate::{
+            runtime::{
+                RepoKey,
+                branch_name::BranchName,
+                task_rows::{TaskRow, TaskStatus},
+            },
+            tools::opencode::status::OpenCodeState,
         };
 
         fn row(status: TaskStatus, repo: &str, branch: &str) -> TaskRow {
@@ -328,6 +335,7 @@ mod tests {
                 branch: BranchName::new(branch),
                 worktree_name: branch.to_string(),
                 path: PathBuf::from("/tmp"),
+                opencode: OpenCodeState::None,
             }
         }
 
@@ -546,35 +554,22 @@ mod tests {
     }
 
     mod initial_repo_scope_tests {
-        use std::{env, fs};
-
         use super::super::initial_repo_scope;
-        use crate::runtime::environment::RuntimeEnvironment;
-
-        fn env_no_context() -> RuntimeEnvironment {
-            let base = env::temp_dir().join("task-rs-ui-tasks-scope-no-ctx");
-            let repos_dir = base.join("repos");
-            let wt_dir = base.join("wt");
-            let detached_dir = base.join("detached");
-            let _ = fs::remove_dir_all(&base);
-            fs::create_dir_all(&repos_dir).unwrap();
-            fs::create_dir_all(&wt_dir).unwrap();
-            RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir)
-        }
 
         #[test]
         fn returns_repo_arg_when_provided() {
-            let env = env_no_context();
-            let scope = initial_repo_scope(&env, Some("github.com/me/app"));
-            assert_eq!(scope, Some("github.com/me/app".to_string()));
+            assert_eq!(
+                initial_repo_scope(Some("github.com/me/app")),
+                Some("github.com/me/app".to_string())
+            );
         }
 
         #[test]
-        fn returns_none_when_no_arg_and_no_context() {
-            // Not inside a worktree → current_repo_key() returns None.
-            let env = env_no_context();
-            let scope = initial_repo_scope(&env, None);
-            assert_eq!(scope, None);
+        fn returns_none_when_no_repo_arg_provided() {
+            // The UI defaults to an unscoped view; CWD is intentionally
+            // ignored so `task ui` reads as a dashboard instead of an
+            // auto-filtered subset.
+            assert_eq!(initial_repo_scope(None), None);
         }
     }
 

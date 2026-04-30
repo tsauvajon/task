@@ -1,5 +1,6 @@
 use std::path::Path;
 
+#[must_use]
 pub fn cmdline_matches_user_data_dir(args: &[String], user_data_dir: &Path) -> bool {
     let Some(arg0) = args.first() else {
         return false;
@@ -10,8 +11,9 @@ pub fn cmdline_matches_user_data_dir(args: &[String], user_data_dir: &Path) -> b
 
     let target = user_data_dir.to_string_lossy();
     // Check both `--user-data-dir <value>` (split form) and `--user-data-dir=<value>` (joined form).
-    args.windows(2)
-        .any(|pair| pair[0] == "--user-data-dir" && pair[1] == target.as_ref())
+    args.windows(2).any(
+        |pair| matches!(pair, [flag, value] if flag == "--user-data-dir" && value == target.as_ref()),
+    )
         || args.iter().any(|arg| {
             arg.strip_prefix("--user-data-dir=")
                 .is_some_and(|v| v == target.as_ref())

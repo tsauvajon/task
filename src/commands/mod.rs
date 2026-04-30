@@ -93,7 +93,7 @@ pub enum Command {
     Coverage { worktree_path: Option<String> },
     #[command(about = "Rebase task branch onto a base ref")]
     Rebase { args: Vec<String> },
-    #[command(about = "Manage detached default-branch worktrees")]
+    #[command(about = "Manage detached worktrees (default branch, or pinned via [[detached]])")]
     Detach {
         #[command(subcommand)]
         command: DetachCommand,

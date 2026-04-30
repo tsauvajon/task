@@ -25,26 +25,32 @@ impl WorkspacePaths {
         }
     }
 
+    #[must_use]
     pub fn repos_dir(&self) -> &Path {
         &self.repos_dir
     }
 
+    #[must_use]
     pub fn wt_dir(&self) -> &Path {
         &self.wt_dir
     }
 
+    #[must_use]
     pub fn detached_dir(&self) -> &Path {
         &self.detached_dir
     }
 
+    #[must_use]
     pub fn repo_gitdir_path(&self, repo_key: &RepoKey) -> PathBuf {
         self.repos_dir.join(format!("{repo_key}.git"))
     }
 
+    #[must_use]
     pub fn worktree_path(&self, repo_key: &RepoKey, branch: &BranchName) -> PathBuf {
         self.wt_dir.join(repo_key.as_str()).join(branch.as_str())
     }
 
+    #[must_use]
     pub fn detached_path(&self, repo_key: &RepoKey) -> PathBuf {
         self.detached_dir.join(repo_key.as_str())
     }
