@@ -1,7 +1,7 @@
 use crate::{
     error::{Error, Result},
     runtime::{
-        config::is_interactive_terminal,
+        config::{EditorKind, is_interactive_terminal},
         environment::RuntimeEnvironment,
         process::{self, ExternalTool},
         setup::{self, SetupApproval},
@@ -20,12 +20,57 @@ enum Importance {
     Recommended,
 }
 
-fn importance_for(tool: ExternalTool) -> Importance {
+fn importance_for(tool: ExternalTool, editor: EditorKind) -> Importance {
     match tool {
-        // `git` is the only hard requirement — almost every code path shells out to it.
+        // `git` is the only unconditional hard requirement — almost every
+        // code path shells out to it.
         ExternalTool::Git => Importance::Required,
-        _ => Importance::Recommended,
+        // `hx` is a hard requirement when the configured editor is Helix:
+        // `task start`/`task open` refuses to create a new tmux session if
+        // `hx` is not on PATH, so reporting it as only a warning would be
+        // misleading. `codium` remains recommended because the VSCodium
+        // workflow degrades gracefully when `codium` is missing.
+        ExternalTool::Helix if matches!(editor, EditorKind::Helix) => Importance::Required,
+        ExternalTool::Tmux
+        | ExternalTool::Codium
+        | ExternalTool::Helix
+        | ExternalTool::Opencode
+        | ExternalTool::Direnv
+        | ExternalTool::Asdf
+        | ExternalTool::Pnpm
+        | ExternalTool::Corepack
+        | ExternalTool::Node
+        | ExternalTool::Cargo
+        | ExternalTool::Nix => Importance::Recommended,
     }
+}
+
+/// Returns the subset of [`ExternalTool::all`] that doctor should report on
+/// for the currently configured editor.
+///
+/// The two editor-specific tools (`codium`, `hx`) are only relevant for
+/// their respective `EditorKind`; reporting both unconditionally produces
+/// false-positive `[warn]` lines (e.g. warning about missing `hx` on a
+/// default VSCodium setup).
+fn expected_tools(editor: EditorKind) -> Vec<ExternalTool> {
+    ExternalTool::all()
+        .iter()
+        .copied()
+        .filter(|tool| match tool {
+            ExternalTool::Codium => matches!(editor, EditorKind::Vscodium),
+            ExternalTool::Helix => matches!(editor, EditorKind::Helix),
+            ExternalTool::Git
+            | ExternalTool::Tmux
+            | ExternalTool::Opencode
+            | ExternalTool::Direnv
+            | ExternalTool::Asdf
+            | ExternalTool::Pnpm
+            | ExternalTool::Corepack
+            | ExternalTool::Node
+            | ExternalTool::Cargo
+            | ExternalTool::Nix => true,
+        })
+        .collect()
 }
 
 pub fn run(env: &RuntimeEnvironment, fix: bool) -> Result<()> {
@@ -86,9 +131,10 @@ fn check(env: &RuntimeEnvironment) -> DoctorReport {
     println!("wt_dir: {}", layout.wt_dir().display());
     println!("detached_dir: {}", layout.detached_dir().display());
 
-    for &tool in ExternalTool::all() {
+    let editor = env.tasks().editor();
+    for tool in expected_tools(editor) {
         let binary = tool.binary_name();
-        let importance = importance_for(tool);
+        let importance = importance_for(tool, editor);
         let present = process::command_exists(binary);
 
         match (present, importance) {
@@ -132,8 +178,8 @@ fn apply_fixes(env: &RuntimeEnvironment, approval: SetupApproval<'_>) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{DoctorAction, Importance, decide_action, importance_for};
-    use crate::runtime::process::ExternalTool;
+    use super::{DoctorAction, Importance, decide_action, expected_tools, importance_for};
+    use crate::runtime::{config::EditorKind, process::ExternalTool};
 
     mod decide_action {
         use super::*;
@@ -179,8 +225,46 @@ mod tests {
         use super::*;
 
         #[test]
-        fn git_is_required() {
-            assert_eq!(importance_for(ExternalTool::Git), Importance::Required);
+        fn git_is_required_regardless_of_editor() {
+            for editor in [EditorKind::Vscodium, EditorKind::Helix] {
+                assert_eq!(
+                    importance_for(ExternalTool::Git, editor),
+                    Importance::Required,
+                    "git should be required for {editor:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn helix_is_required_only_when_editor_is_helix() {
+            // `task start`/`task open` hard-fails without `hx` when the
+            // configured editor is Helix; doctor must reflect that.
+            assert_eq!(
+                importance_for(ExternalTool::Helix, EditorKind::Helix),
+                Importance::Required
+            );
+            // When the editor is Vscodium, `hx` is filtered out entirely by
+            // `expected_tools`, but the classifier must still treat it as
+            // merely recommended so it can never be upgraded to required
+            // by accident.
+            assert_eq!(
+                importance_for(ExternalTool::Helix, EditorKind::Vscodium),
+                Importance::Recommended
+            );
+        }
+
+        #[test]
+        fn codium_is_never_required() {
+            // The VSCodium workflow degrades gracefully when `codium` is
+            // missing (open_window early-returns), so doctor should never
+            // upgrade it to required.
+            for editor in [EditorKind::Vscodium, EditorKind::Helix] {
+                assert_eq!(
+                    importance_for(ExternalTool::Codium, editor),
+                    Importance::Recommended,
+                    "codium should stay recommended for {editor:?}"
+                );
+            }
         }
 
         #[test]
@@ -189,11 +273,83 @@ mod tests {
                 if tool == ExternalTool::Git {
                     continue;
                 }
-                assert_eq!(
-                    importance_for(tool),
-                    Importance::Recommended,
-                    "{tool} should be recommended, not required"
-                );
+                // `Helix` is only conditionally required (see dedicated
+                // test above); here we assert the editor-independent
+                // baseline for all other tools.
+                if tool == ExternalTool::Helix {
+                    continue;
+                }
+                for editor in [EditorKind::Vscodium, EditorKind::Helix] {
+                    assert_eq!(
+                        importance_for(tool, editor),
+                        Importance::Recommended,
+                        "{tool} should be recommended for {editor:?}, not required"
+                    );
+                }
+            }
+        }
+    }
+
+    mod expected_tools {
+        use super::*;
+
+        #[test]
+        fn vscodium_includes_codium_and_excludes_helix() {
+            let tools = expected_tools(EditorKind::Vscodium);
+            assert!(
+                tools.contains(&ExternalTool::Codium),
+                "vscodium setup should still report codium"
+            );
+            assert!(
+                !tools.contains(&ExternalTool::Helix),
+                "vscodium setup should not warn about hx"
+            );
+        }
+
+        #[test]
+        fn helix_includes_helix_and_excludes_codium() {
+            let tools = expected_tools(EditorKind::Helix);
+            assert!(
+                tools.contains(&ExternalTool::Helix),
+                "helix setup should report hx"
+            );
+            assert!(
+                !tools.contains(&ExternalTool::Codium),
+                "helix setup should not warn about codium"
+            );
+        }
+
+        #[test]
+        fn editor_independent_tools_are_always_reported() {
+            for editor in [EditorKind::Vscodium, EditorKind::Helix] {
+                let tools = expected_tools(editor);
+                for required in [
+                    ExternalTool::Git,
+                    ExternalTool::Tmux,
+                    ExternalTool::Opencode,
+                    ExternalTool::Nix,
+                ] {
+                    assert!(
+                        tools.contains(&required),
+                        "{required} should be reported for {editor:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn preserves_stable_ordering_from_external_tool_all() {
+            // Doctor output order must stay predictable; filtering should
+            // keep the original relative order defined by ExternalTool::all.
+            let all: Vec<ExternalTool> = ExternalTool::all().to_vec();
+            for editor in [EditorKind::Vscodium, EditorKind::Helix] {
+                let filtered = expected_tools(editor);
+                let reference: Vec<ExternalTool> = all
+                    .iter()
+                    .copied()
+                    .filter(|tool| filtered.contains(tool))
+                    .collect();
+                assert_eq!(filtered, reference, "ordering changed for {editor:?}");
             }
         }
     }

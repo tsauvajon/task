@@ -39,6 +39,7 @@ impl CapturedLine {
         }
     }
 
+    #[must_use]
     pub fn text(&self) -> &str {
         match self {
             Self::Stdout(s) | Self::Stderr(s) => s,
@@ -77,6 +78,7 @@ pub struct OutputScope {
 }
 
 impl OutputScope {
+    #[must_use]
     pub fn new() -> Self {
         let sink: Sink = Arc::new(Mutex::new(Vec::new()));
         let previous = OUTPUT_SINK.with(|slot| slot.replace(Some(sink.clone())));
@@ -84,12 +86,11 @@ impl OutputScope {
     }
 
     /// Consume the scope and return the captured lines in arrival order.
+    #[must_use]
     pub fn into_lines(self) -> Vec<CapturedLine> {
-        // The Drop impl restores the previous sink; we just need to
-        // extract our collected lines before it runs.
-        let lines = std::mem::take(&mut *self.sink.lock().unwrap_or_else(|e| e.into_inner()));
-        OUTPUT_SINK.with(|slot| *slot.borrow_mut() = self.previous.clone());
-        std::mem::forget(self);
+        let scope = std::mem::ManuallyDrop::new(self);
+        let lines = std::mem::take(&mut *scope.sink.lock().unwrap_or_else(|e| e.into_inner()));
+        OUTPUT_SINK.with(|slot| *slot.borrow_mut() = scope.previous.clone());
         lines
     }
 }
@@ -128,11 +129,22 @@ pub fn flush_captured_lines(lines: Vec<CapturedLine>) {
 
 /// External binaries the CLI shells out to. The enum captures just enough
 /// metadata to generate install hints when the binary is missing from PATH.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The `Display`, `IntoStaticStr`, and `EnumString` impls are derived
+/// from a single source of truth — each variant's `serialize` value is
+/// its on-disk binary name. [`Self::binary_name`] returns that string
+/// without allocating; [`Self::from_binary`] parses it back. Adding a
+/// new tool means adding one variant + its `serialize` attribute.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, strum::Display, strum::IntoStaticStr, strum::EnumString,
+)]
+#[strum(serialize_all = "lowercase")]
 pub enum ExternalTool {
     Git,
     Tmux,
     Codium,
+    #[strum(serialize = "hx")]
+    Helix,
     Opencode,
     Direnv,
     Asdf,
@@ -145,47 +157,34 @@ pub enum ExternalTool {
 
 /// Install guidance attached to an [`ExternalTool`]. Most tools ship in
 /// `nixpkgs`; a few (like `nix` itself) need a different channel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
 pub enum InstallHint {
     /// `nix profile install <package>` (e.g. `nixpkgs#git`).
+    #[strum(to_string = "nix profile install {0}")]
     NixPackage(&'static str),
     /// Free-form hint, used when the tool can't be installed via
     /// `nix profile install` (or has a strongly-preferred channel).
+    #[strum(to_string = "{0}")]
     Custom(&'static str),
 }
 
-impl std::fmt::Display for InstallHint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NixPackage(pkg) => write!(f, "nix profile install {pkg}"),
-            Self::Custom(msg) => f.write_str(msg),
-        }
-    }
-}
-
 impl ExternalTool {
+    /// Parse a binary name (e.g. `"git"`, `"hx"`) into the matching
+    /// tool, if any. Thin wrapper around the strum-derived
+    /// [`std::str::FromStr`] impl that returns `Option` instead of
+    /// `Result` to keep call sites concise.
+    #[must_use]
     pub fn from_binary(binary: &str) -> Option<Self> {
-        match binary {
-            "git" => Some(Self::Git),
-            "tmux" => Some(Self::Tmux),
-            "codium" => Some(Self::Codium),
-            "opencode" => Some(Self::Opencode),
-            "direnv" => Some(Self::Direnv),
-            "asdf" => Some(Self::Asdf),
-            "pnpm" => Some(Self::Pnpm),
-            "corepack" => Some(Self::Corepack),
-            "node" => Some(Self::Node),
-            "cargo" => Some(Self::Cargo),
-            "nix" => Some(Self::Nix),
-            _ => None,
-        }
+        binary.parse().ok()
     }
 
+    #[must_use]
     pub fn install_hint(self) -> InstallHint {
         match self {
             Self::Git => InstallHint::NixPackage("nixpkgs#git"),
             Self::Tmux => InstallHint::NixPackage("nixpkgs#tmux"),
             Self::Codium => InstallHint::NixPackage("nixpkgs#vscodium"),
+            Self::Helix => InstallHint::NixPackage("nixpkgs#helix"),
             Self::Opencode => InstallHint::NixPackage("nixpkgs#opencode"),
             Self::Direnv => InstallHint::NixPackage("nixpkgs#direnv"),
             Self::Asdf => InstallHint::NixPackage("nixpkgs#asdf-vm"),
@@ -198,24 +197,16 @@ impl ExternalTool {
         }
     }
 
-    /// The binary name used to look the tool up on PATH.
+    /// The binary name used to look the tool up on PATH. Returns the
+    /// strum-derived static string (same value `Display` writes), so
+    /// there's no allocation and no second source of truth.
+    #[must_use]
     pub fn binary_name(self) -> &'static str {
-        match self {
-            Self::Git => "git",
-            Self::Tmux => "tmux",
-            Self::Codium => "codium",
-            Self::Opencode => "opencode",
-            Self::Direnv => "direnv",
-            Self::Asdf => "asdf",
-            Self::Pnpm => "pnpm",
-            Self::Corepack => "corepack",
-            Self::Node => "node",
-            Self::Cargo => "cargo",
-            Self::Nix => "nix",
-        }
+        self.into()
     }
 
     /// All external tools, in a stable order suitable for doctor output.
+    #[must_use]
     pub fn all() -> &'static [ExternalTool] {
         &[
             Self::Nix,
@@ -223,6 +214,7 @@ impl ExternalTool {
             Self::Tmux,
             Self::Opencode,
             Self::Codium,
+            Self::Helix,
             Self::Direnv,
             Self::Asdf,
             Self::Node,
@@ -230,12 +222,6 @@ impl ExternalTool {
             Self::Pnpm,
             Self::Cargo,
         ]
-    }
-}
-
-impl std::fmt::Display for ExternalTool {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.binary_name())
     }
 }
 
@@ -249,6 +235,7 @@ pub struct CommandPlan {
 }
 
 impl CommandPlan {
+    #[must_use]
     pub fn from_program(program: &str, args: &[&str]) -> Self {
         Self {
             program: program.to_string(),
@@ -257,6 +244,7 @@ impl CommandPlan {
     }
 
     /// Build a plan invoking a known external tool directly from PATH.
+    #[must_use]
     pub fn for_tool(tool: ExternalTool, tool_args: Vec<String>) -> Self {
         Self {
             program: tool.binary_name().to_string(),
@@ -264,14 +252,17 @@ impl CommandPlan {
         }
     }
 
+    #[must_use]
     pub fn program(&self) -> &str {
         &self.program
     }
 
+    #[must_use]
     pub fn args(&self) -> &[String] {
         &self.args
     }
 
+    #[must_use]
     pub fn args_refs(&self) -> Vec<&str> {
         self.args.iter().map(String::as_str).collect()
     }
@@ -279,6 +270,7 @@ impl CommandPlan {
 
 /// Returns true if the named binary is reachable via PATH (or exists as an
 /// absolute path).
+#[must_use]
 pub fn command_exists(name: &str) -> bool {
     if name.contains('/') {
         return Path::new(name).exists();
@@ -499,6 +491,7 @@ pub fn disable_log_capture() {
     }
 }
 
+#[must_use]
 pub fn take_captured_logs() -> Vec<String> {
     if let Ok(mut capture) = log_capture().lock() {
         return std::mem::take(&mut capture.lines);
@@ -534,6 +527,7 @@ mod tests {
                 ExternalTool::from_binary("codium"),
                 Some(ExternalTool::Codium)
             );
+            assert_eq!(ExternalTool::from_binary("hx"), Some(ExternalTool::Helix));
             assert_eq!(
                 ExternalTool::from_binary("opencode"),
                 Some(ExternalTool::Opencode)
@@ -561,6 +555,20 @@ mod tests {
             assert_eq!(ExternalTool::from_binary("kill"), None);
             assert_eq!(ExternalTool::from_binary("rustfmt"), None);
             assert_eq!(ExternalTool::from_binary("unknown-tool"), None);
+        }
+
+        #[test]
+        fn helix_metadata_uses_hx_binary_and_nixpkgs_helix() {
+            // Guards the Helix variant: if any of binary_name,
+            // install_hint, from_binary, or membership in `all()` drift
+            // apart, `task start` with `editor = "helix"` silently breaks.
+            assert_eq!(ExternalTool::Helix.binary_name(), "hx");
+            assert_eq!(
+                ExternalTool::Helix.install_hint(),
+                InstallHint::NixPackage("nixpkgs#helix")
+            );
+            assert_eq!(ExternalTool::Helix.to_string(), "hx");
+            assert!(ExternalTool::all().contains(&ExternalTool::Helix));
         }
     }
 
@@ -694,6 +702,7 @@ mod tests {
             assert!(all.contains(&ExternalTool::Git));
             assert!(all.contains(&ExternalTool::Tmux));
             assert!(all.contains(&ExternalTool::Codium));
+            assert!(all.contains(&ExternalTool::Helix));
             assert!(all.contains(&ExternalTool::Opencode));
             assert!(all.contains(&ExternalTool::Direnv));
             assert!(all.contains(&ExternalTool::Asdf));

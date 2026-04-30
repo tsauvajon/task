@@ -15,10 +15,12 @@ fn status(args: &[&str], cwd: Option<&Path>) -> Result<()> {
 
 const NODEJS_PLUGIN_REPO: &str = "https://github.com/asdf-vm/asdf-nodejs.git";
 
+#[must_use]
 pub fn is_available() -> bool {
     crate::runtime::process::command_exists("asdf")
 }
 
+#[must_use]
 pub fn has_nodejs_plugin() -> bool {
     if !is_available() {
         return false;
@@ -70,12 +72,14 @@ fn install(cwd: Option<&Path>) -> Result<()> {
     status(&["install"], cwd)
 }
 
+#[must_use]
 pub(crate) fn nodejs_release_keyring_script_path() -> Option<PathBuf> {
     let home = env::var("HOME").ok()?;
     let asdf_data_dir = env::var("ASDF_DATA_DIR").unwrap_or_else(|_| format!("{home}/.asdf"));
     Some(PathBuf::from(asdf_data_dir).join("plugins/nodejs/bin/import-release-team-keyring"))
 }
 
+#[must_use]
 pub(crate) fn user_tool_versions_path() -> Option<PathBuf> {
     let home = env::var("HOME").ok()?;
     Some(PathBuf::from(home).join(".tool-versions"))

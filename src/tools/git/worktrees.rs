@@ -39,6 +39,7 @@ pub fn list_porcelain(gitdir: &Path) -> Result<String> {
 /// repos (fork+exec overhead dominates the git invocation).
 ///
 /// Returns an empty vec when the `worktrees` directory does not exist.
+#[must_use]
 pub fn list_registered_worktrees(gitdir: &Path) -> Vec<PathBuf> {
     let worktrees_dir = gitdir.join("worktrees");
     let Ok(entries) = fs::read_dir(&worktrees_dir) else {
@@ -150,6 +151,7 @@ pub fn checkout_or_create_branch(worktree: &Path, branch: &str, base_ref: &str) 
     create_branch_from_base(worktree, branch, base_ref)
 }
 
+#[must_use]
 pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
     #[derive(Default)]
     struct Builder {
@@ -196,6 +198,7 @@ pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
     entries
 }
 
+#[must_use]
 pub fn branch_from_worktree_path(
     wt_dir: &Path,
     repo_key: &str,
@@ -218,6 +221,7 @@ pub fn branch_from_worktree_path(
 /// Both `wt_dir` and `worktree_path` are canonicalized internally so that
 /// symlinked layouts (e.g. macOS `/var` → `/private/var`) resolve correctly.
 /// Falls back to the raw paths, then to the last path component.
+#[must_use]
 pub fn worktree_name(wt_dir: &Path, repo_key: &str, worktree_path: &Path) -> String {
     // Try canonical paths first (handles symlinks like /var → /private/var).
     let real_wt = std::fs::canonicalize(wt_dir).ok();
@@ -245,13 +249,15 @@ pub fn add_detached(gitdir: &Path, path: &Path, base_ref: &str) -> Result<()> {
     GitDir::new(gitdir).status(&["worktree", "add", "--detach", path_str.as_ref(), base_ref])
 }
 
-/// Update a detached worktree by fetching `origin` then hard-resetting to `origin/HEAD`.
+/// Update a detached worktree by fetching `origin` then hard-resetting to
+/// the pinned branch (when `pinned_branch` is `Some`) or `origin/HEAD`.
+///
 /// Equivalent to:
 ///   git -C <path> fetch origin
 ///   git -C <path> reset --hard <resolved-base>
-pub fn update_detached(path: &Path) -> Result<()> {
+pub fn update_detached(path: &Path, pinned_branch: Option<&str>) -> Result<()> {
     fetch_detached(path)?;
-    reset_detached(path)
+    reset_detached(path, pinned_branch)
 }
 
 /// First half of [`update_detached`]: `git -C <path> fetch origin`.
@@ -264,37 +270,57 @@ pub fn fetch_detached(path: &Path) -> Result<()> {
     status(&["-C", path_str.as_ref(), "fetch", "origin"], None)
 }
 
-/// Second half of [`update_detached`]: hard-reset to the resolved default
-/// base ref. See [`fetch_detached`] for the rationale.
-pub fn reset_detached(path: &Path) -> Result<()> {
+/// Second half of [`update_detached`]: hard-reset to the resolved base ref.
+///
+/// When `pinned_branch` is `Some`, the worktree resets to `origin/<branch>`.
+/// If that ref does not exist after fetching, returns an actionable error
+/// rather than silently falling back to the default branch — a silent
+/// fallback would mask a deleted upstream branch or a typo in the
+/// `[[detached]]` entry.
+///
+/// Otherwise it resolves the remote's default branch. See [`fetch_detached`]
+/// for the rationale behind splitting the two phases.
+pub fn reset_detached(path: &Path, pinned_branch: Option<&str>) -> Result<()> {
     let path_str = path.to_string_lossy();
-    let base_ref = resolve_detached_base_ref(path);
+    let base_ref = resolve_detached_base_ref(path, pinned_branch)?;
     status(
         &["-C", path_str.as_ref(), "reset", "--hard", &base_ref],
         None,
     )
 }
 
-fn resolve_detached_base_ref(path: &Path) -> String {
+fn resolve_detached_base_ref(path: &Path, pinned_branch: Option<&str>) -> Result<String> {
+    if let Some(branch) = pinned_branch {
+        let remote_ref = format!("origin/{branch}");
+        if !rev_exists_in_worktree(path, &remote_ref) {
+            return Err(crate::error::Error::failed(format!(
+                "Pinned branch '{branch}' has no '{remote_ref}' ref in {}. \
+                 Check the branch name in the [[detached]] entry or push the branch upstream.",
+                path.display()
+            )));
+        }
+        return Ok(remote_ref);
+    }
+
     if let Some(remote_head) = remote_default_branch(path)
         && rev_exists_in_worktree(path, &remote_head)
     {
-        return remote_head;
+        return Ok(remote_head);
     }
 
     if let Some(origin_head) = symbolic_origin_head(path)
         && rev_exists_in_worktree(path, &origin_head)
     {
-        return origin_head;
+        return Ok(origin_head);
     }
 
     for fallback in ["origin/main", "origin/master"] {
         if rev_exists_in_worktree(path, fallback) {
-            return fallback.to_string();
+            return Ok(fallback.to_string());
         }
     }
 
-    "HEAD".to_string()
+    Ok("HEAD".to_string())
 }
 
 fn remote_default_branch(path: &Path) -> Option<String> {
@@ -384,6 +410,7 @@ fn create_branch_from_base(path: &Path, branch: &str, base_ref: &str) -> Result<
     )
 }
 
+#[must_use]
 pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
     let branch_ref = branch_ref?;
     Some(
@@ -746,11 +773,64 @@ branch refs/heads/main\n\
             run_git(&["commit", "-am", "update"], source.as_path());
             run_git(&["push", "origin", "main"], source.as_path());
 
-            update_detached(detached.as_path()).expect("update_detached should succeed");
+            update_detached(detached.as_path(), None).expect("update_detached should succeed");
 
             let head = git_output(&["rev-parse", "HEAD"], detached.as_path());
             let origin_main = git_output(&["rev-parse", "origin/main"], detached.as_path());
             assert_eq!(head, origin_main, "detached HEAD should match origin/main");
+        }
+
+        #[test]
+        fn errors_with_actionable_message_when_pinned_branch_missing() {
+            // A [[detached]] entry pins a branch that doesn't exist on origin
+            // (typo or deleted upstream). update_detached must surface an
+            // actionable error instead of silently falling back to the
+            // default branch.
+            let dir = TempDir::new("update-detached-pinned-missing");
+            let remote = dir.path().join("remote.git");
+            let source = dir.path().join("source");
+            let detached = dir.path().join("detached");
+
+            fs::create_dir_all(&source).expect("create source dir");
+
+            run_git(
+                &["init", "--bare", remote.to_string_lossy().as_ref()],
+                dir.path(),
+            );
+            run_git(&["init", "-b", "main"], source.as_path());
+            run_git(
+                &["config", "user.email", "test@example.com"],
+                source.as_path(),
+            );
+            run_git(&["config", "user.name", "Test"], source.as_path());
+            fs::write(source.join("README.md"), "v1\n").expect("write README");
+            run_git(&["add", "README.md"], source.as_path());
+            run_git(&["commit", "-m", "initial"], source.as_path());
+            run_git(
+                &["remote", "add", "origin", remote.to_string_lossy().as_ref()],
+                source.as_path(),
+            );
+            run_git(&["push", "-u", "origin", "main"], source.as_path());
+
+            run_git(
+                &[
+                    "clone",
+                    remote.to_string_lossy().as_ref(),
+                    detached.to_string_lossy().as_ref(),
+                ],
+                dir.path(),
+            );
+
+            let err = update_detached(detached.as_path(), Some("no-such-branch")).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("no-such-branch"),
+                "error must mention the pinned branch: {msg}"
+            );
+            assert!(
+                msg.contains("[[detached]]") || msg.contains("origin/no-such-branch"),
+                "error must hint at config or missing remote ref: {msg}"
+            );
         }
     }
 

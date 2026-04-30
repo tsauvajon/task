@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::{error::Result, runtime::process};
 
+#[must_use]
 pub fn is_available() -> bool {
     process::command_exists("direnv")
 }

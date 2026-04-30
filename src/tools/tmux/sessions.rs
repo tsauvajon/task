@@ -2,10 +2,12 @@ use std::{collections::HashSet, path::Path};
 
 use super::run::{available, capture, status_quiet};
 
+#[must_use]
 pub fn is_available() -> bool {
     available()
 }
 
+#[must_use]
 pub fn list_sessions() -> HashSet<String> {
     if !is_available() {
         return HashSet::new();
@@ -17,10 +19,12 @@ pub fn list_sessions() -> HashSet<String> {
     }
 }
 
+#[must_use]
 pub fn has_session(session: &str) -> bool {
     has_session_in(session, None)
 }
 
+#[must_use]
 pub fn has_session_in(session: &str, cwd: Option<&Path>) -> bool {
     status_quiet(&["has-session", "-t", session], cwd).is_ok()
 }

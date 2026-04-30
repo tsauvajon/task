@@ -1,7 +1,6 @@
-use std::{
-    fmt,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
+
+use strum::Display;
 
 use crate::{
     runtime::{branch_name::BranchName, repo_key::RepoKey},
@@ -9,6 +8,7 @@ use crate::{
         git::worktrees::{
             WorktreeEntry, branch_from_ref, branch_from_worktree_path, worktree_name,
         },
+        opencode::status::OpenCodeState,
         tmux::naming::session_name,
     },
 };
@@ -23,23 +23,19 @@ pub struct TaskRow {
     /// and profile naming instead of `branch` (which can change).
     pub worktree_name: String,
     pub path: PathBuf,
+    /// Rolled-up OpenCode session state for the worktree. Populated by
+    /// the TUI loader; other callers leave it `None`.
+    pub opencode: OpenCodeState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Display)]
+#[strum(serialize_all = "lowercase")]
 pub enum TaskStatus {
     Open,
     Parked,
 }
 
-impl fmt::Display for TaskStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Open => f.write_str("open"),
-            Self::Parked => f.write_str("parked"),
-        }
-    }
-}
-
+#[must_use]
 pub fn build_task_rows(
     repo_key: &RepoKey,
     wt_dir: &Path,
@@ -84,6 +80,7 @@ pub fn build_task_rows(
                 branch: BranchName::new(branch),
                 worktree_name: wt_name,
                 path: entry.path.clone(),
+                opencode: OpenCodeState::default(),
             }
         })
         .collect()
@@ -96,7 +93,7 @@ mod tests {
     use super::{TaskRow, TaskStatus, build_task_rows};
     use crate::{
         runtime::{BranchName, RepoKey},
-        tools::git::worktrees::WorktreeEntry,
+        tools::{git::worktrees::WorktreeEntry, opencode::status::OpenCodeState},
     };
 
     mod task_status {
@@ -154,6 +151,7 @@ mod tests {
                         branch: BranchName::new("rewrite-in-rust"),
                         worktree_name: "rewrite-in-rust".to_string(),
                         path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
+                        opencode: OpenCodeState::None,
                     },
                     TaskRow {
                         status: TaskStatus::Parked,
@@ -161,6 +159,7 @@ mod tests {
                         branch: BranchName::new("bump-deps"),
                         worktree_name: "bump-deps".to_string(),
                         path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
+                        opencode: OpenCodeState::None,
                     },
                 ]
             );

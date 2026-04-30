@@ -45,6 +45,7 @@ pub(super) fn render_help(frame: &mut Frame, state: &mut UiState, theme: &Theme)
         section("All views", normal_c),
         hk("tab", "Switch tasks/repos view"),
         hk("/", "Enter filter mode"),
+        hk("b", "Toggle sidebar"),
         hk("ctrl+p", "Commands"),
         hk("q/ctrl-c", "Quit"),
         Line::from(""),

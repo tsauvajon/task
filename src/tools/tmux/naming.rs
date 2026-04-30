@@ -3,6 +3,7 @@
 ///
 /// Use the worktree name — not the current Git branch — so that branch
 /// renames don't break session lookup during park/finish.
+#[must_use]
 pub fn session_name(repo_key: &str, worktree_name: &str) -> String {
     let raw = format!("{repo_key}-{worktree_name}");
     let mut output = String::with_capacity(raw.len());

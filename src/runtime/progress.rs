@@ -47,6 +47,7 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    #[must_use]
     pub fn is_failure(&self) -> bool {
         matches!(self, Self::Failed { .. })
     }
@@ -130,6 +131,7 @@ impl ProgressReporter {
     ///
     /// * `title` — verb shown in the header, e.g. `"Updating"`.
     /// * `labels` — one string per work item, rendered in the row prefix.
+    #[must_use]
     pub fn new(title: impl Into<String>, labels: Vec<String>) -> Self {
         let title: String = title.into();
         let total = labels.len();
@@ -155,17 +157,18 @@ impl ProgressReporter {
     /// Claim the row for `index`. The returned handle mutates the row's
     /// state; the renderer thread (owned by indicatif) picks up changes
     /// via the steady-tick timer.
-    pub fn begin(&self, index: usize) -> RowHandle {
-        let row = &self.rows[index];
+    #[must_use]
+    pub fn begin(&self, index: usize) -> Option<RowHandle> {
+        let row = self.rows.get(index)?;
         {
-            let mut state = row.state.lock().expect("row state poisoned");
+            let mut state = row.state.lock().unwrap_or_else(|err| err.into_inner());
             state.started_at = Some(Instant::now());
             state.current_phase = Some(Phase::Fetching);
         }
         if let Some(bar) = &row.bar {
             bar.set_message(render_row_message(&row.state));
         }
-        RowHandle {
+        Some(RowHandle {
             state: Arc::clone(&row.state),
             bar: row.bar.clone(),
             completed: Arc::clone(&self.completed),
@@ -173,7 +176,7 @@ impl ProgressReporter {
             total: self.total,
             title: self.title.clone(),
             finalized: false,
-        }
+        })
     }
 
     /// Finish the batch. In TTY mode, leaves the final snapshot drawn
@@ -184,7 +187,7 @@ impl ProgressReporter {
                 if let Some(header) = &self.header {
                     header.set_message(format!(
                         "{}/{} complete",
-                        *self.completed.lock().unwrap(),
+                        *self.completed.lock().unwrap_or_else(|err| err.into_inner()),
                         self.total,
                     ));
                     header.finish();
@@ -201,7 +204,7 @@ impl ProgressReporter {
                 // In headless mode rows carry no bar; print one summary
                 // line per row so CI logs record the final state.
                 for row in &self.rows {
-                    let state = row.state.lock().unwrap();
+                    let state = row.state.lock().unwrap_or_else(|err| err.into_inner());
                     println!("{}", render_headless_line(&state));
                 }
             }
@@ -213,7 +216,7 @@ impl ProgressReporter {
         self.rows
             .iter()
             .map(|row| {
-                let s = row.state.lock().unwrap();
+                let s = row.state.lock().unwrap_or_else(|err| err.into_inner());
                 RowSnapshot {
                     label: s.label.clone(),
                     phase: s.current_phase,
@@ -232,7 +235,7 @@ impl RowHandle {
             return;
         }
         {
-            let mut state = self.state.lock().expect("row state poisoned");
+            let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
             state.current_phase = Some(phase);
         }
         if let Some(bar) = &self.bar {
@@ -264,7 +267,7 @@ impl RowHandle {
         }
         self.finalized = true;
         {
-            let mut state = self.state.lock().expect("row state poisoned");
+            let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
             state.finished_at = Some(Instant::now());
             state.current_phase = None;
             state.outcome = Some(outcome);
@@ -275,7 +278,7 @@ impl RowHandle {
             bar.set_style(finished_style());
             bar.set_message(render_row_message(&self.state));
         }
-        let mut count = self.completed.lock().unwrap();
+        let mut count = self.completed.lock().unwrap_or_else(|err| err.into_inner());
         *count += 1;
         if let Some(header) = &self.header {
             header.set_message(format!("{} {}/{}", self.title, *count, self.total));
@@ -381,7 +384,7 @@ fn build_headless(labels: &[String]) -> (Option<MultiProgress>, Option<ProgressB
 /// The spinner glyph comes from the `{spinner}` template slot and
 /// animates automatically while the bar is running.
 fn render_row_message(state: &Mutex<RowState>) -> String {
-    let state = state.lock().expect("row state poisoned");
+    let state = state.lock().unwrap_or_else(|err| err.into_inner());
     let label_width = state.label_width;
     let right = match (&state.outcome, state.current_phase) {
         (Some(Outcome::Succeeded { note }), _) => {
@@ -430,7 +433,7 @@ fn short(s: &str, max: usize) -> String {
 #[cfg(test)]
 #[derive(Debug, Clone)]
 struct RowSnapshot {
-    #[allow(dead_code)] // read via Debug output during test failures.
+    #[expect(dead_code)] // read via Debug output during test failures.
     label: String,
     phase: Option<Phase>,
     outcome: Option<Outcome>,
@@ -456,7 +459,7 @@ mod tests {
         #[test]
         fn begin_marks_row_running_with_fetching_phase() {
             let progress = make(&["repo-a"]);
-            let _handle = progress.begin(0);
+            let _handle = progress.begin(0).expect("row handle");
             let snap = progress.snapshot();
             assert_eq!(snap[0].phase, Some(Phase::Fetching));
             assert!(snap[0].outcome.is_none());
@@ -465,7 +468,7 @@ mod tests {
         #[test]
         fn phase_transitions_update_state() {
             let progress = make(&["repo-a"]);
-            let handle = progress.begin(0);
+            let handle = progress.begin(0).expect("row handle");
             handle.phase(Phase::Installing);
             let snap = progress.snapshot();
             assert_eq!(snap[0].phase, Some(Phase::Installing));
@@ -474,7 +477,7 @@ mod tests {
         #[test]
         fn succeeded_records_outcome_and_finishes_phase() {
             let progress = make(&["repo-a"]);
-            let handle = progress.begin(0);
+            let handle = progress.begin(0).expect("row handle");
             handle.succeeded("Updated");
             let snap = progress.snapshot();
             assert!(matches!(
@@ -487,7 +490,7 @@ mod tests {
         #[test]
         fn failed_records_error_message() {
             let progress = make(&["repo-a"]);
-            let handle = progress.begin(0);
+            let handle = progress.begin(0).expect("row handle");
             handle.failed("fetch 404");
             let snap = progress.snapshot();
             match &snap[0].outcome {
@@ -499,7 +502,7 @@ mod tests {
         #[test]
         fn skipped_records_reason() {
             let progress = make(&["repo-a"]);
-            let handle = progress.begin(0);
+            let handle = progress.begin(0).expect("row handle");
             handle.skipped("no install entry");
             let snap = progress.snapshot();
             assert!(matches!(
@@ -514,7 +517,7 @@ mod tests {
         fn drop_without_finalize_marks_failure() {
             let progress = make(&["repo-a"]);
             {
-                let _handle = progress.begin(0);
+                let _handle = progress.begin(0).expect("row handle");
                 // handle dropped without .succeeded/.failed/.skipped
             }
             let snap = progress.snapshot();
@@ -534,7 +537,7 @@ mod tests {
         #[test]
         fn elapsed_grows_while_running() {
             let progress = make(&["repo-a"]);
-            let _handle = progress.begin(0);
+            let _handle = progress.begin(0).expect("row handle");
             thread::sleep(Duration::from_millis(20));
             let elapsed = progress.snapshot()[0].elapsed;
             assert!(
@@ -546,7 +549,7 @@ mod tests {
         #[test]
         fn elapsed_freezes_after_finalize() {
             let progress = make(&["repo-a"]);
-            let handle = progress.begin(0);
+            let handle = progress.begin(0).expect("row handle");
             thread::sleep(Duration::from_millis(10));
             handle.succeeded("Updated");
             let first = progress.snapshot()[0].elapsed;
@@ -614,7 +617,7 @@ mod tests {
                 let progress = Arc::clone(&progress);
                 let counter = Arc::clone(&counter);
                 handles.push(thread::spawn(move || {
-                    let h = progress.begin(i);
+                    let h = progress.begin(i).expect("row handle");
                     thread::sleep(Duration::from_millis(5 * (i as u64 + 1)));
                     h.succeeded("Updated");
                     counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

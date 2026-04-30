@@ -58,11 +58,17 @@ fn merge_trust_model(existing: Option<&str>, trusted_roots: &[String]) -> Result
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
 
-    if !model.get("uriTrustInfo").is_some_and(Value::is_array) {
-        model["uriTrustInfo"] = Value::Array(Vec::new());
+    let object = model
+        .as_object_mut()
+        .ok_or_else(|| Error::failed("Could not initialize VSCodium trust model"))?;
+    let entries_value = object
+        .entry("uriTrustInfo")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !entries_value.is_array() {
+        *entries_value = Value::Array(Vec::new());
     }
 
-    let entries = model["uriTrustInfo"]
+    let entries = entries_value
         .as_array_mut()
         .ok_or_else(|| Error::failed("Could not initialize VSCodium trust model"))?;
 

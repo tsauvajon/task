@@ -27,7 +27,10 @@ use super::{
     state::{LoadMsg, RepoRow},
     tasks::{count_repo_worktrees_with_canonical_wt, is_detached_worktree_path},
 };
-use crate::runtime::{RepoKey, environment::RuntimeEnvironment};
+use crate::{
+    runtime::{RepoKey, environment::RuntimeEnvironment},
+    tools::opencode::status::OpenCodeSnapshot,
+};
 
 /// Handle to a spawned loader thread. Consumers poll [`Self::try_recv`]
 /// from the event loop. Dropping the handle cancels the worker.
@@ -195,6 +198,12 @@ fn run_task_scan(
     tx: &mpsc::Sender<LoadMsg>,
     stop: &AtomicBool,
 ) {
+    // One OpenCode snapshot per full scan is plenty: its cost is one
+    // sysinfo refresh + one directory read, dwarfed by the per-repo git
+    // work we're about to fan out. The background tick picks up
+    // subsequent state drift.
+    let opencode_snapshot = OpenCodeSnapshot::collect();
+
     let tx = tx.clone();
     repos.par_iter().for_each(|(repo_key, gitdir)| {
         if stop.load(Ordering::Relaxed) {
@@ -204,7 +213,10 @@ fn run_task_scan(
             .tasks()
             .repo_task_rows(repo_key, gitdir, open_sessions)
         {
-            Ok(rows) => {
+            Ok(mut rows) => {
+                for row in &mut rows {
+                    row.opencode = opencode_snapshot.state_for(&row.path);
+                }
                 let _ = tx.send(LoadMsg::TaskRowsForRepo {
                     generation,
                     repo: repo_key.clone(),
@@ -224,7 +236,42 @@ fn run_task_scan(
     let _ = tx.send(LoadMsg::TasksComplete { generation });
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Background OpenCode state refresher.
+///
+/// Spawns a short-lived thread that takes one snapshot, classifies every
+/// `paths` entry, and sends a single [`LoadMsg::OpenCodeTick`] back to
+/// the UI. Drop the handle to cancel before the message is sent.
+///
+/// Unlike the main loader, there is no `generation` parameter: the
+/// tick carries only path-keyed state, so the UI can apply it safely
+/// regardless of which scope was active when the tick was spawned.
+pub(super) fn spawn_opencode_refresh(paths: Vec<PathBuf>) -> LoaderHandle {
+    let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = Arc::clone(&stop);
+
+    thread::spawn(move || {
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let snapshot = OpenCodeSnapshot::collect();
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let states: Vec<(PathBuf, _)> = paths
+            .into_iter()
+            .map(|path| {
+                let state = snapshot.state_for(&path);
+                (path, state)
+            })
+            .collect();
+        let _ = tx.send(LoadMsg::OpenCodeTick { states });
+    });
+
+    LoaderHandle { rx, stop }
+}
+
+#[expect(clippy::too_many_arguments)]
 fn run_repo_scan(
     context: &RuntimeEnvironment,
     repos: &[(RepoKey, PathBuf)],
@@ -385,5 +432,91 @@ mod tests {
             msgs.iter()
                 .any(|m| matches!(m, LoadMsg::RepoRowsDone { .. }))
         );
+    }
+
+    mod opencode_refresh_worker {
+        use std::{path::PathBuf, time::Duration};
+
+        use super::super::{LoadMsg, LoaderHandle, spawn_opencode_refresh};
+
+        /// Poll the handle until a message arrives, up to `timeout`.
+        fn wait_for_tick(handle: &LoaderHandle, timeout: Duration) -> Option<LoadMsg> {
+            let start = std::time::Instant::now();
+            while start.elapsed() < timeout {
+                if let Some(msg) = handle.try_recv() {
+                    return Some(msg);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            None
+        }
+
+        #[test]
+        fn emits_exactly_one_opencode_tick() {
+            let paths = vec![PathBuf::from("/tmp/task-rs-worker-a")];
+            let handle = spawn_opencode_refresh(paths);
+
+            let first =
+                wait_for_tick(&handle, Duration::from_secs(2)).expect("worker must emit one tick");
+            assert!(
+                matches!(first, LoadMsg::OpenCodeTick { .. }),
+                "expected OpenCodeTick, got {first:?}"
+            );
+
+            // Give the worker plenty of time to (mistakenly) send more;
+            // nothing else should arrive.
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(
+                handle.try_recv().is_none(),
+                "worker must emit at most one message"
+            );
+        }
+
+        #[test]
+        fn tick_states_cover_every_input_path() {
+            let paths = vec![
+                PathBuf::from("/tmp/task-rs-worker-a"),
+                PathBuf::from("/tmp/task-rs-worker-b"),
+                PathBuf::from("/tmp/task-rs-worker-c"),
+            ];
+            let handle = spawn_opencode_refresh(paths.clone());
+
+            let msg = wait_for_tick(&handle, Duration::from_secs(2)).expect("one tick");
+            let LoadMsg::OpenCodeTick { states } = msg else {
+                panic!("unexpected variant: {msg:?}");
+            };
+            assert_eq!(states.len(), paths.len());
+            for path in &paths {
+                assert!(
+                    states.iter().any(|(p, _)| p == path),
+                    "tick should include {}",
+                    path.display()
+                );
+            }
+        }
+
+        #[test]
+        fn empty_paths_still_produces_one_tick() {
+            let handle = spawn_opencode_refresh(Vec::new());
+            let msg = wait_for_tick(&handle, Duration::from_secs(2))
+                .expect("worker must still emit one tick");
+            let LoadMsg::OpenCodeTick { states } = msg else {
+                panic!("unexpected variant: {msg:?}");
+            };
+            assert!(states.is_empty());
+        }
+
+        #[test]
+        fn dropping_handle_does_not_panic() {
+            // Spawn then immediately drop: the stop flag is set, the
+            // thread exits cleanly or sends its message into a now-closed
+            // channel. Either way the main thread must not panic.
+            let handle = spawn_opencode_refresh(vec![PathBuf::from("/tmp/task-rs-worker-drop")]);
+            drop(handle);
+            // Sleep briefly so any panic in the worker thread's
+            // unwinding has time to surface; Rust test harness would
+            // then fail the test.
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }

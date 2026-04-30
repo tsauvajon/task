@@ -21,6 +21,7 @@ pub(super) enum UiIntent {
     RefreshCurrentView,
     ParkSelected,
     ToggleDetach,
+    ToggleSidebar,
     ClearScope,
     FilterCancel,
     FilterApply,
@@ -68,6 +69,7 @@ fn from_key_normal(key: KeyEvent) -> UiIntent {
         KeyCode::End => UiIntent::MoveLast,
         KeyCode::Char('/') => UiIntent::EnterFilterMode,
         KeyCode::Char('t') => UiIntent::EnterCreateTaskMode,
+        KeyCode::Char('b') => UiIntent::ToggleSidebar,
         KeyCode::Char('c') => UiIntent::EnterCloneMode,
         KeyCode::Char('d') => UiIntent::ToggleDetach,
         KeyCode::Char('f') => UiIntent::FinishSelected,
@@ -75,7 +77,24 @@ fn from_key_normal(key: KeyEvent) -> UiIntent {
         KeyCode::Char('p') => UiIntent::ParkSelected,
         KeyCode::Enter => UiIntent::OpenSelected,
         KeyCode::Esc => UiIntent::ClearScope,
-        _ => UiIntent::Noop,
+        KeyCode::Backspace
+        | KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::BackTab
+        | KeyCode::Delete
+        | KeyCode::Insert
+        | KeyCode::F(_)
+        | KeyCode::Char(_)
+        | KeyCode::Null
+        | KeyCode::CapsLock
+        | KeyCode::ScrollLock
+        | KeyCode::NumLock
+        | KeyCode::PrintScreen
+        | KeyCode::Pause
+        | KeyCode::Menu
+        | KeyCode::KeypadBegin
+        | KeyCode::Media(_)
+        | KeyCode::Modifier(_) => UiIntent::Noop,
     }
 }
 
@@ -91,7 +110,29 @@ fn from_key_filter(key: KeyEvent) -> UiIntent {
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::FilterAppend(ch)
         }
-        _ => UiIntent::Noop,
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Home
+        | KeyCode::End
+        | KeyCode::PageUp
+        | KeyCode::PageDown
+        | KeyCode::BackTab
+        | KeyCode::Delete
+        | KeyCode::Insert
+        | KeyCode::F(_)
+        | KeyCode::Char(_)
+        | KeyCode::Null
+        | KeyCode::CapsLock
+        | KeyCode::ScrollLock
+        | KeyCode::NumLock
+        | KeyCode::PrintScreen
+        | KeyCode::Pause
+        | KeyCode::Menu
+        | KeyCode::KeypadBegin
+        | KeyCode::Media(_)
+        | KeyCode::Modifier(_) => UiIntent::Noop,
     }
 }
 
@@ -106,7 +147,30 @@ fn from_key_create(key: KeyEvent) -> UiIntent {
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CreateAppend(ch)
         }
-        _ => UiIntent::Noop,
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Home
+        | KeyCode::End
+        | KeyCode::PageUp
+        | KeyCode::PageDown
+        | KeyCode::Tab
+        | KeyCode::BackTab
+        | KeyCode::Delete
+        | KeyCode::Insert
+        | KeyCode::F(_)
+        | KeyCode::Char(_)
+        | KeyCode::Null
+        | KeyCode::CapsLock
+        | KeyCode::ScrollLock
+        | KeyCode::NumLock
+        | KeyCode::PrintScreen
+        | KeyCode::Pause
+        | KeyCode::Menu
+        | KeyCode::KeypadBegin
+        | KeyCode::Media(_)
+        | KeyCode::Modifier(_) => UiIntent::Noop,
     }
 }
 
@@ -119,7 +183,30 @@ fn from_key_clone(key: KeyEvent) -> UiIntent {
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CloneAppend(ch)
         }
-        _ => UiIntent::Noop,
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Home
+        | KeyCode::End
+        | KeyCode::PageUp
+        | KeyCode::PageDown
+        | KeyCode::Tab
+        | KeyCode::BackTab
+        | KeyCode::Delete
+        | KeyCode::Insert
+        | KeyCode::F(_)
+        | KeyCode::Char(_)
+        | KeyCode::Null
+        | KeyCode::CapsLock
+        | KeyCode::ScrollLock
+        | KeyCode::NumLock
+        | KeyCode::PrintScreen
+        | KeyCode::Pause
+        | KeyCode::Menu
+        | KeyCode::KeypadBegin
+        | KeyCode::Media(_)
+        | KeyCode::Modifier(_) => UiIntent::Noop,
     }
 }
 
@@ -202,6 +289,28 @@ mod tests {
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Char('p'))),
                 UiIntent::ParkSelected
+            );
+            assert_eq!(
+                from_key(InputMode::Normal, key(KeyCode::Char('b'))),
+                UiIntent::ToggleSidebar
+            );
+        }
+
+        #[test]
+        fn b_is_append_not_toggle_in_editing_modes() {
+            // Regression guard: the sidebar toggle must not hijack `b`
+            // in filter / create / clone modes where `b` is just text.
+            assert_eq!(
+                from_key(InputMode::Filter, key(KeyCode::Char('b'))),
+                UiIntent::FilterAppend('b')
+            );
+            assert_eq!(
+                from_key(InputMode::CreateTask, key(KeyCode::Char('b'))),
+                UiIntent::CreateAppend('b')
+            );
+            assert_eq!(
+                from_key(InputMode::CloneRepo, key(KeyCode::Char('b'))),
+                UiIntent::CloneAppend('b')
             );
         }
 
