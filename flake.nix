@@ -51,6 +51,11 @@
           cargoLock = {
             lockFile = ./Cargo.lock;
           };
+          # The integration suite touches real git repositories /
+          # worktree state under $HOME, which the Nix sandbox does
+          # not expose. Skip the test phase here; CI runs it
+          # separately with a real workspace.
+          doCheck = false;
         };
 
         apps.default = {
@@ -71,5 +76,9 @@
           };
         };
       }
-    );
+    )
+    // {
+      # Home Manager module exposing `programs.task`.
+      homeManagerModules.default = import ./hm-module.nix self;
+    };
 }
