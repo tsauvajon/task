@@ -4,9 +4,9 @@
 //! rayon workers. Gracefully degrades to plain logging when stdout is
 //! not a TTY or the terminal is too small to fit the full block.
 //!
-//! Used by `task detach update` and `task detach install`. Single-item
-//! commands (`update_one`, `install_one`) intentionally do not use this —
-//! their plain log output is already the right UX for one target.
+//! Used by `task detach update`. Single-item commands (`update_one`)
+//! intentionally do not use this — their plain log output is already
+//! the right UX for one target.
 
 use std::{
     io::IsTerminal,
@@ -24,7 +24,6 @@ use crate::runtime::spinner::FRAMES_STR;
 pub enum Phase {
     Fetching,
     Syncing,
-    Installing,
 }
 
 impl Phase {
@@ -32,7 +31,6 @@ impl Phase {
         match self {
             Self::Fetching => "Fetching",
             Self::Syncing => "Syncing",
-            Self::Installing => "Installing",
         }
     }
 }
@@ -43,7 +41,6 @@ impl Phase {
 pub enum Outcome {
     Succeeded { note: &'static str },
     Failed { message: String },
-    Skipped { reason: &'static str },
 }
 
 impl Outcome {
@@ -256,11 +253,6 @@ impl RowHandle {
         });
     }
 
-    /// Mark the row as skipped with a short reason.
-    pub fn skipped(mut self, reason: &'static str) {
-        self.finalize(Outcome::Skipped { reason });
-    }
-
     fn finalize(&mut self, outcome: Outcome) {
         if self.finalized {
             return;
@@ -395,7 +387,6 @@ fn render_row_message(state: &Mutex<RowState>) -> String {
             state.elapsed().as_secs_f64(),
             short(message, 48),
         ),
-        (Some(Outcome::Skipped { reason }), _) => format!("∘ Skipped      ({reason})"),
         (None, Some(phase)) => format!(
             "  {:<13}  {:.1}s",
             phase.label(),
@@ -410,7 +401,6 @@ fn render_headless_line(state: &RowState) -> String {
     let tag = match &state.outcome {
         Some(Outcome::Succeeded { note }) => format!("✓ {note}"),
         Some(Outcome::Failed { message }) => format!("✗ Failed: {message}"),
-        Some(Outcome::Skipped { reason }) => format!("∘ Skipped ({reason})"),
         None => "… Pending".to_string(),
     };
     format!(
@@ -469,9 +459,9 @@ mod tests {
         fn phase_transitions_update_state() {
             let progress = make(&["repo-a"]);
             let handle = progress.begin(0).expect("row handle");
-            handle.phase(Phase::Installing);
+            handle.phase(Phase::Syncing);
             let snap = progress.snapshot();
-            assert_eq!(snap[0].phase, Some(Phase::Installing));
+            assert_eq!(snap[0].phase, Some(Phase::Syncing));
         }
 
         #[test]
@@ -497,20 +487,6 @@ mod tests {
                 Some(Outcome::Failed { message }) => assert_eq!(message, "fetch 404"),
                 other => panic!("expected Failed, got {other:?}"),
             }
-        }
-
-        #[test]
-        fn skipped_records_reason() {
-            let progress = make(&["repo-a"]);
-            let handle = progress.begin(0).expect("row handle");
-            handle.skipped("no install entry");
-            let snap = progress.snapshot();
-            assert!(matches!(
-                snap[0].outcome,
-                Some(Outcome::Skipped {
-                    reason: "no install entry"
-                })
-            ));
         }
 
         #[test]
@@ -574,7 +550,6 @@ mod tests {
                 .is_failure()
             );
             assert!(!Outcome::Succeeded { note: "Updated" }.is_failure());
-            assert!(!Outcome::Skipped { reason: "no entry" }.is_failure());
         }
     }
 

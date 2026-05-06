@@ -146,11 +146,6 @@ pub enum ExternalTool {
     #[strum(serialize = "hx")]
     Helix,
     Opencode,
-    Direnv,
-    Asdf,
-    Pnpm,
-    Corepack,
-    Node,
     Cargo,
     Nix,
 }
@@ -186,10 +181,6 @@ impl ExternalTool {
             Self::Codium => InstallHint::NixPackage("nixpkgs#vscodium"),
             Self::Helix => InstallHint::NixPackage("nixpkgs#helix"),
             Self::Opencode => InstallHint::NixPackage("nixpkgs#opencode"),
-            Self::Direnv => InstallHint::NixPackage("nixpkgs#direnv"),
-            Self::Asdf => InstallHint::NixPackage("nixpkgs#asdf-vm"),
-            Self::Pnpm => InstallHint::NixPackage("nixpkgs#pnpm"),
-            Self::Corepack | Self::Node => InstallHint::NixPackage("nixpkgs#nodejs"),
             Self::Cargo => InstallHint::Custom(
                 "install via rustup (https://rustup.rs) or nix profile install nixpkgs#cargo",
             ),
@@ -215,11 +206,6 @@ impl ExternalTool {
             Self::Opencode,
             Self::Codium,
             Self::Helix,
-            Self::Direnv,
-            Self::Asdf,
-            Self::Node,
-            Self::Corepack,
-            Self::Pnpm,
             Self::Cargo,
         ]
     }
@@ -533,17 +519,6 @@ mod tests {
                 Some(ExternalTool::Opencode)
             );
             assert_eq!(
-                ExternalTool::from_binary("direnv"),
-                Some(ExternalTool::Direnv)
-            );
-            assert_eq!(ExternalTool::from_binary("asdf"), Some(ExternalTool::Asdf));
-            assert_eq!(ExternalTool::from_binary("pnpm"), Some(ExternalTool::Pnpm));
-            assert_eq!(
-                ExternalTool::from_binary("corepack"),
-                Some(ExternalTool::Corepack)
-            );
-            assert_eq!(ExternalTool::from_binary("node"), Some(ExternalTool::Node));
-            assert_eq!(
                 ExternalTool::from_binary("cargo"),
                 Some(ExternalTool::Cargo)
             );
@@ -555,6 +530,8 @@ mod tests {
             assert_eq!(ExternalTool::from_binary("kill"), None);
             assert_eq!(ExternalTool::from_binary("rustfmt"), None);
             assert_eq!(ExternalTool::from_binary("unknown-tool"), None);
+            assert_eq!(ExternalTool::from_binary("custom-editor"), None);
+            assert_eq!(ExternalTool::from_binary("made-up-binary"), None);
         }
 
         #[test]
@@ -620,7 +597,7 @@ mod tests {
         fn display_returns_binary_name() {
             assert_eq!(ExternalTool::Git.to_string(), "git");
             assert_eq!(ExternalTool::Tmux.to_string(), "tmux");
-            assert_eq!(ExternalTool::Corepack.to_string(), "corepack");
+            assert_eq!(ExternalTool::Opencode.to_string(), "opencode");
             assert_eq!(ExternalTool::Cargo.to_string(), "cargo");
             assert_eq!(ExternalTool::Nix.to_string(), "nix");
         }
@@ -632,12 +609,12 @@ mod tests {
                 InstallHint::NixPackage("nixpkgs#git")
             );
             assert_eq!(
-                ExternalTool::Node.install_hint(),
-                InstallHint::NixPackage("nixpkgs#nodejs")
+                ExternalTool::Tmux.install_hint(),
+                InstallHint::NixPackage("nixpkgs#tmux")
             );
             assert_eq!(
-                ExternalTool::Corepack.install_hint(),
-                InstallHint::NixPackage("nixpkgs#nodejs")
+                ExternalTool::Opencode.install_hint(),
+                InstallHint::NixPackage("nixpkgs#opencode")
             );
         }
 
@@ -670,7 +647,7 @@ mod tests {
         fn binary_name_matches_tool_name() {
             assert_eq!(ExternalTool::Git.binary_name(), "git");
             assert_eq!(ExternalTool::Opencode.binary_name(), "opencode");
-            assert_eq!(ExternalTool::Pnpm.binary_name(), "pnpm");
+            assert_eq!(ExternalTool::Tmux.binary_name(), "tmux");
             assert_eq!(ExternalTool::Cargo.binary_name(), "cargo");
             assert_eq!(ExternalTool::Nix.binary_name(), "nix");
         }
@@ -704,11 +681,6 @@ mod tests {
             assert!(all.contains(&ExternalTool::Codium));
             assert!(all.contains(&ExternalTool::Helix));
             assert!(all.contains(&ExternalTool::Opencode));
-            assert!(all.contains(&ExternalTool::Direnv));
-            assert!(all.contains(&ExternalTool::Asdf));
-            assert!(all.contains(&ExternalTool::Pnpm));
-            assert!(all.contains(&ExternalTool::Corepack));
-            assert!(all.contains(&ExternalTool::Node));
             assert!(all.contains(&ExternalTool::Cargo));
             assert!(all.contains(&ExternalTool::Nix));
         }

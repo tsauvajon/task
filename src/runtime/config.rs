@@ -9,16 +9,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstallEntry {
-    pub repo: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    /// Extra flags appended to `cargo install`, e.g. `["--all-features"]`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub extra_flags: Vec<String>,
-}
-
 /// Pins a detached worktree to a specific branch.
 ///
 /// Without an entry, `task detach add` / `task detach update` track the
@@ -77,7 +67,6 @@ pub struct TaskConfig {
     pub wt_dir: PathBuf,
     pub detached_dir: PathBuf,
     pub codium_trusted_roots: Vec<PathBuf>,
-    pub install_entries: Vec<InstallEntry>,
     pub detached_entries: Vec<DetachedEntry>,
     pub editor: EditorKind,
 }
@@ -91,8 +80,6 @@ struct TaskConfigFile {
     editor: Option<String>,
     #[serde(default)]
     vscodium: Option<VscodiumConfigFile>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    install: Vec<InstallEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     detached: Vec<DetachedEntry>,
 }
@@ -120,12 +107,12 @@ impl TaskConfig {
 
         if !is_interactive_terminal() {
             return Err(Error::failed(format!(
-                "Missing config file at {}. Run task in an interactive terminal to initialize it (for example: 'task doctor --fix' or 'task bootstrap').",
+                "Missing config file at {}. Run task in an interactive terminal to initialize it.",
                 config_path.display()
             )));
         }
 
-        bootstrap_config(&config_path)
+        initialize_config(&config_path)
     }
 }
 
@@ -145,7 +132,7 @@ fn load_config(config_path: &Path) -> Result<TaskConfig> {
     to_runtime_config(parsed)
 }
 
-fn bootstrap_config(config_path: &Path) -> Result<TaskConfig> {
+fn initialize_config(config_path: &Path) -> Result<TaskConfig> {
     let home = home_dir()?;
     let default_repos = home.join("dev/repos");
     let default_wt = home.join("dev/wt");
@@ -172,7 +159,6 @@ fn bootstrap_config(config_path: &Path) -> Result<TaskConfig> {
         detached_dir,
         editor: None,
         vscodium: None,
-        install: Vec::new(),
         detached: Vec::new(),
     })?;
     write_config(config_path, &config)?;
@@ -209,7 +195,6 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<()> {
                     .collect(),
             })
         },
-        install: config.install_entries.clone(),
         detached: config.detached_entries.clone(),
     };
     let text = toml::to_string_pretty(&file)?;
@@ -245,7 +230,6 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig> {
         wt_dir,
         detached_dir,
         codium_trusted_roots,
-        install_entries: file.install,
         detached_entries: file.detached,
         editor,
     })
@@ -288,7 +272,7 @@ pub fn config_file_path() -> Result<PathBuf> {
     Ok(config_dir_path()?.join("config.toml"))
 }
 
-pub fn config_dir_path() -> Result<PathBuf> {
+fn config_dir_path() -> Result<PathBuf> {
     resolve_config_dir(
         std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
         std::env::var("HOME").ok().as_deref(),
@@ -320,7 +304,7 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        DetachedEntry, EditorKind, InstallEntry, TaskConfigFile, VscodiumConfigFile, expand_path,
+        DetachedEntry, EditorKind, TaskConfigFile, VscodiumConfigFile, expand_path,
         to_runtime_config,
     };
 
@@ -378,7 +362,6 @@ mod tests {
                 detached_dir: "~/dev/detached".to_string(),
                 editor: None,
                 vscodium: None,
-                install: Vec::new(),
                 detached: Vec::new(),
             })
             .expect("runtime config");
@@ -396,7 +379,6 @@ mod tests {
                 vscodium: Some(VscodiumConfigFile {
                     trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_string()],
                 }),
-                install: Vec::new(),
                 detached: Vec::new(),
             })
             .expect("runtime config");
@@ -413,7 +395,6 @@ mod tests {
                 detached_dir: "~/detached".to_string(),
                 editor: None,
                 vscodium: None,
-                install: Vec::new(),
                 detached: Vec::new(),
             })
             .expect("runtime config");
@@ -421,50 +402,6 @@ mod tests {
             assert!(config.repos_dir.ends_with("repos"));
             assert!(config.wt_dir.ends_with("wt"));
             assert!(config.detached_dir.ends_with("detached"));
-        }
-
-        #[test]
-        fn passes_through_install_entries() {
-            let entries = vec![
-                InstallEntry {
-                    repo: "github.com/org/tool".to_string(),
-                    path: None,
-                    extra_flags: vec![],
-                },
-                InstallEntry {
-                    repo: "gitlab.com/team/app".to_string(),
-                    path: Some("crates/cli".to_string()),
-                    extra_flags: vec![],
-                },
-            ];
-            let config = to_runtime_config(TaskConfigFile {
-                repos_dir: "/tmp/repos".to_string(),
-                wt_dir: "/tmp/wt".to_string(),
-                detached_dir: "/tmp/detached".to_string(),
-                editor: None,
-                vscodium: None,
-                install: entries.clone(),
-                detached: Vec::new(),
-            })
-            .expect("runtime config");
-
-            assert_eq!(config.install_entries, entries);
-        }
-
-        #[test]
-        fn empty_install_entries_by_default() {
-            let config = to_runtime_config(TaskConfigFile {
-                repos_dir: "/tmp/repos".to_string(),
-                wt_dir: "/tmp/wt".to_string(),
-                detached_dir: "/tmp/detached".to_string(),
-                editor: None,
-                vscodium: None,
-                install: Vec::new(),
-                detached: Vec::new(),
-            })
-            .expect("runtime config");
-
-            assert!(config.install_entries.is_empty());
         }
 
         #[test]
@@ -484,7 +421,6 @@ mod tests {
                 wt_dir: "/tmp/wt".to_string(),
                 detached_dir: "/tmp/detached".to_string(),
                 vscodium: None,
-                install: Vec::new(),
                 editor: None,
                 detached: entries.clone(),
             })
@@ -500,7 +436,6 @@ mod tests {
                 wt_dir: "/tmp/wt".to_string(),
                 detached_dir: "/tmp/detached".to_string(),
                 vscodium: None,
-                install: Vec::new(),
                 editor: None,
                 detached: Vec::new(),
             })
@@ -516,7 +451,6 @@ mod tests {
                 wt_dir: "/tmp/wt".to_string(),
                 detached_dir: "/tmp/detached".to_string(),
                 vscodium: None,
-                install: Vec::new(),
                 editor: None,
                 detached: vec![DetachedEntry {
                     repo: "github.com/org/repo".to_string(),
@@ -540,7 +474,6 @@ mod tests {
                 wt_dir: "/tmp/wt".to_string(),
                 detached_dir: "/tmp/detached".to_string(),
                 vscodium: None,
-                install: Vec::new(),
                 editor: None,
                 detached: vec![DetachedEntry {
                     repo: "github.com/org/repo".to_string(),
@@ -559,7 +492,6 @@ mod tests {
                 wt_dir: "/tmp/wt".to_string(),
                 detached_dir: "/tmp/detached".to_string(),
                 vscodium: None,
-                install: Vec::new(),
                 editor: None,
                 detached: vec![DetachedEntry {
                     repo: "".to_string(),
@@ -582,7 +514,6 @@ mod tests {
                 detached_dir: "/tmp/detached".to_string(),
                 editor: editor.map(str::to_string),
                 vscodium: None,
-                install: Vec::new(),
                 detached: Vec::new(),
             }
         }
@@ -766,76 +697,6 @@ mod tests {
         }
 
         #[test]
-        fn loads_config_with_install_entries() {
-            let dir = TempDir::new("load-install");
-            let config_path = dir.path().join("config.toml");
-            fs::write(
-                &config_path,
-                r#"repos_dir = "/tmp/repos"
-wt_dir = "/tmp/wt"
-detached_dir = "/tmp/detached"
-
-[[install]]
-repo = "github.com/org/tool"
-
-[[install]]
-repo = "gitlab.com/team/app"
-path = "crates/cli"
-"#,
-            )
-            .unwrap();
-
-            let config = load_config(&config_path).expect("load install config");
-            assert_eq!(config.install_entries.len(), 2);
-            assert_eq!(config.install_entries[0].repo, "github.com/org/tool");
-            assert!(config.install_entries[0].path.is_none());
-            assert_eq!(config.install_entries[1].repo, "gitlab.com/team/app");
-            assert_eq!(
-                config.install_entries[1].path.as_deref(),
-                Some("crates/cli")
-            );
-        }
-
-        #[test]
-        fn loads_extra_flags_for_install_entry() {
-            let dir = TempDir::new("load-extra-flags");
-            let config_path = dir.path().join("config.toml");
-            fs::write(
-                &config_path,
-                r#"repos_dir = "/tmp/repos"
-wt_dir = "/tmp/wt"
-detached_dir = "/tmp/detached"
-
-[[install]]
-repo = "github.com/org/tool"
-extra_flags = ["--all-features"]
-
-[[install]]
-repo = "github.com/org/other"
-"#,
-            )
-            .unwrap();
-
-            let config = load_config(&config_path).expect("load extra_flags config");
-            assert_eq!(config.install_entries[0].extra_flags, ["--all-features"]);
-            assert!(config.install_entries[1].extra_flags.is_empty());
-        }
-
-        #[test]
-        fn loads_config_without_install_section() {
-            let dir = TempDir::new("load-no-install");
-            let config_path = dir.path().join("config.toml");
-            fs::write(
-                &config_path,
-                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n",
-            )
-            .unwrap();
-
-            let config = load_config(&config_path).expect("load config without install");
-            assert!(config.install_entries.is_empty());
-        }
-
-        #[test]
         fn loads_config_with_detached_entries() {
             let dir = TempDir::new("load-detached");
             let config_path = dir.path().join("config.toml");
@@ -993,7 +854,6 @@ branch = "custom"
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: vec![PathBuf::from("/tmp/trusted")],
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
             };
@@ -1005,7 +865,6 @@ branch = "custom"
             assert_eq!(loaded.wt_dir, config.wt_dir);
             assert_eq!(loaded.detached_dir, config.detached_dir);
             assert_eq!(loaded.codium_trusted_roots, config.codium_trusted_roots);
-            assert_eq!(loaded.install_entries, config.install_entries);
         }
 
         #[test]
@@ -1017,7 +876,6 @@ branch = "custom"
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
             };
@@ -1035,7 +893,6 @@ branch = "custom"
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
             };
@@ -1043,134 +900,6 @@ branch = "custom"
             write_config(&config_path, &config).expect("write config");
             let content = fs::read_to_string(&config_path).unwrap();
             assert!(!content.contains("[vscodium]"));
-        }
-
-        #[test]
-        fn round_trips_install_entries() {
-            let dir = TempDir::new("write-install-round-trip");
-            let config_path = dir.path().join("config.toml");
-            let config = TaskConfig {
-                repos_dir: PathBuf::from("/tmp/repos"),
-                wt_dir: PathBuf::from("/tmp/wt"),
-                detached_dir: PathBuf::from("/tmp/detached"),
-                codium_trusted_roots: Vec::new(),
-                install_entries: vec![
-                    super::super::InstallEntry {
-                        repo: "github.com/org/tool".to_string(),
-                        path: None,
-                        extra_flags: vec![],
-                    },
-                    super::super::InstallEntry {
-                        repo: "gitlab.com/team/app".to_string(),
-                        path: Some("crates/cli".to_string()),
-                        extra_flags: vec![],
-                    },
-                ],
-                detached_entries: Vec::new(),
-                editor: EditorKind::default(),
-            };
-
-            write_config(&config_path, &config).expect("write config");
-            let loaded = load_config(&config_path).expect("load written config");
-
-            assert_eq!(loaded.install_entries.len(), 2);
-            assert_eq!(loaded.install_entries[0].repo, "github.com/org/tool");
-            assert!(loaded.install_entries[0].path.is_none());
-            assert_eq!(loaded.install_entries[1].repo, "gitlab.com/team/app");
-            assert_eq!(
-                loaded.install_entries[1].path.as_deref(),
-                Some("crates/cli")
-            );
-        }
-
-        #[test]
-        fn round_trips_extra_flags() {
-            let dir = TempDir::new("write-extra-flags");
-            let config_path = dir.path().join("config.toml");
-            let config = TaskConfig {
-                repos_dir: PathBuf::from("/tmp/repos"),
-                wt_dir: PathBuf::from("/tmp/wt"),
-                detached_dir: PathBuf::from("/tmp/detached"),
-                codium_trusted_roots: Vec::new(),
-                install_entries: vec![
-                    super::super::InstallEntry {
-                        repo: "github.com/org/tool".to_string(),
-                        path: None,
-                        extra_flags: vec!["--all-features".to_string(), "--locked".to_string()],
-                    },
-                    super::super::InstallEntry {
-                        repo: "github.com/org/other".to_string(),
-                        path: None,
-                        extra_flags: vec![],
-                    },
-                ],
-                detached_entries: Vec::new(),
-                editor: EditorKind::default(),
-            };
-
-            write_config(&config_path, &config).expect("write config");
-            let loaded = load_config(&config_path).expect("load written config");
-
-            assert_eq!(
-                loaded.install_entries[0].extra_flags,
-                ["--all-features", "--locked"]
-            );
-            assert!(loaded.install_entries[1].extra_flags.is_empty());
-
-            // Verify entries with no extra_flags don't emit extra_flags key in TOML.
-            let content = fs::read_to_string(&config_path).unwrap();
-            assert!(
-                content.contains("extra_flags"),
-                "extra_flags should appear for entry with flags"
-            );
-        }
-
-        #[test]
-        fn omits_extra_flags_when_empty() {
-            let dir = TempDir::new("write-no-extra-flags");
-            let config_path = dir.path().join("config.toml");
-            let config = TaskConfig {
-                repos_dir: PathBuf::from("/tmp/repos"),
-                wt_dir: PathBuf::from("/tmp/wt"),
-                detached_dir: PathBuf::from("/tmp/detached"),
-                codium_trusted_roots: Vec::new(),
-                install_entries: vec![super::super::InstallEntry {
-                    repo: "github.com/org/tool".to_string(),
-                    path: None,
-                    extra_flags: vec![],
-                }],
-                detached_entries: Vec::new(),
-                editor: EditorKind::default(),
-            };
-
-            write_config(&config_path, &config).expect("write config");
-            let content = fs::read_to_string(&config_path).unwrap();
-            assert!(
-                !content.contains("extra_flags"),
-                "extra_flags should be omitted when empty"
-            );
-        }
-
-        #[test]
-        fn omits_install_section_when_empty() {
-            let dir = TempDir::new("write-no-install");
-            let config_path = dir.path().join("config.toml");
-            let config = TaskConfig {
-                repos_dir: PathBuf::from("/tmp/repos"),
-                wt_dir: PathBuf::from("/tmp/wt"),
-                detached_dir: PathBuf::from("/tmp/detached"),
-                codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
-                detached_entries: Vec::new(),
-                editor: EditorKind::default(),
-            };
-
-            write_config(&config_path, &config).expect("write config");
-            let content = fs::read_to_string(&config_path).unwrap();
-            assert!(
-                !content.contains("[[install]]"),
-                "empty install should be omitted from config"
-            );
         }
 
         #[test]
@@ -1182,7 +911,6 @@ branch = "custom"
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: vec![
                     super::super::DetachedEntry {
                         repo: "github.com/mattwparas/helix".to_string(),
@@ -1211,7 +939,6 @@ branch = "custom"
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
             };
@@ -1233,7 +960,6 @@ branch = "custom"
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::Helix,
             };
@@ -1258,7 +984,6 @@ branch = "custom"
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::Vscodium,
             };
@@ -1284,7 +1009,6 @@ branch = "custom"
                 wt_dir: PathBuf::from("/tmp/wt"),
                 detached_dir: PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: vec![
                     super::super::DetachedEntry {
                         repo: "github.com/mattwparas/helix".to_string(),
@@ -1330,7 +1054,6 @@ branch = "custom"
                 detached_dir: "  /tmp/detached  ".to_string(),
                 editor: None,
                 vscodium: None,
-                install: Vec::new(),
                 detached: Vec::new(),
             })
             .expect("runtime config");

@@ -19,7 +19,6 @@ use crate::{
         task_rows::{TaskRow, TaskStatus, build_task_rows},
     },
     tools::{
-        asdf, direnv,
         git::{
             context::{current_root, git_common_dir, repo_key_from_common_dir},
             refs::current_branch,
@@ -31,7 +30,6 @@ use crate::{
                 self, branch_from_worktree_path, list_porcelain, parse_worktree_porcelain,
             },
         },
-        nodejs,
         tmux::{
             sessions::list_sessions,
             workflow::{OpenResult, open_session},
@@ -229,17 +227,6 @@ impl TaskResolver {
         if !interactive || no_open {
             println!("{}", path.display());
             return Ok(());
-        }
-
-        if path.join(".envrc").exists() && direnv::is_available() {
-            let _ = direnv::allow(path);
-        }
-
-        if asdf::is_available() {
-            let installed = asdf::install_from_workspace_tool_versions(path)?;
-            if installed && nodejs::runtime::corepack_available() {
-                let _ = nodejs::runtime::enable_corepack();
-            }
         }
 
         let wt_name = worktrees::worktree_name(self.layout.wt_dir(), repo_key, path);
@@ -1318,7 +1305,7 @@ mod tests {
 
         #[test]
         fn non_interactive_does_not_require_worktree_tools() {
-            // Even when the path does not exist (no .envrc, no tmux available),
+            // Even when the path does not exist (no tmux available),
             // the non-interactive path must succeed — it only prints the path.
             let dir = TempDir::new("launch-non-interactive-missing-path");
             let repos_dir = dir.path().join("repos");

@@ -32,7 +32,7 @@ Quick orientation for coding agents working on `task`.
   - `open`: `src/commands/open.rs`
   - `park`: `src/commands/park.rs`
   - `finish`: `src/commands/finish.rs`
-  - `list/path/worktrees/prune`: corresponding files in `src/commands/`
+  - `list/path`: corresponding files in `src/commands/`
 - Quality commands:
   - `check`: `src/commands/check.rs`
   - `coverage`: `src/commands/coverage.rs`
@@ -50,9 +50,7 @@ Quick orientation for coding agents working on `task`.
 
 ## Detached worktree policy (important)
 
-- Detached repos are for:
-  - `cargo install`
-  - symlink targets
+- Detached repos are for read-only access to a repo's default branch (or a pinned branch).
 - Detached repos are **not** intended for active development.
 - Agents should treat detached worktrees as read-only operational copies.
 - Do not implement flows that encourage editing in detached worktrees.

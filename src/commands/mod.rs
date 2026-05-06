@@ -1,8 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
-pub mod bootstrap;
 pub mod check;
-pub mod clone;
 pub mod complete;
 pub mod completions;
 pub mod coverage;
@@ -18,14 +16,10 @@ pub mod rebase;
 pub mod repo;
 pub mod start;
 pub mod ui;
-pub mod worktrees;
 
 use detach::DetachCommand;
 
-use crate::{
-    error::Result,
-    runtime::{environment::RuntimeEnvironment, setup},
-};
+use crate::{error::Result, runtime::environment::RuntimeEnvironment};
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper", version)]
@@ -36,16 +30,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum Command {
-    #[command(about = "Prepare workspace and asdf Node plugin")]
-    Bootstrap {
-        #[arg(long, help = "Skip confirmation prompt and assume yes")]
-        yes: bool,
-    },
-    #[command(about = "Check toolchain/workspace health and optionally apply fixes")]
-    Doctor {
-        #[arg(long)]
-        fix: bool,
-    },
+    #[command(about = "Check toolchain/workspace health")]
+    Doctor,
     #[command(about = "Manage repositories")]
     Repo {
         #[command(subcommand)]
@@ -78,8 +64,6 @@ pub enum Command {
     List { repo: Option<String> },
     #[command(about = "Open interactive TUI")]
     Ui { repo: Option<String> },
-    #[command(about = "Show raw git worktree list output")]
-    Worktrees { repo: Option<String> },
     #[command(about = "Remove a task worktree")]
     Finish {
         repo: Option<String>,
@@ -141,14 +125,9 @@ pub fn run(cli: Cli) -> Result<()> {
 fn run_with_context(command: Option<Command>) -> Result<()> {
     let context = RuntimeEnvironment::new()?;
 
-    if should_auto_onboard(command.as_ref()) {
-        setup::ensure_first_run_setup(&context)?;
-    }
-
     match command {
         None => ui::run(&context, None),
-        Some(Command::Bootstrap { yes }) => bootstrap::run(&context, yes),
-        Some(Command::Doctor { fix }) => doctor::run(&context, fix),
+        Some(Command::Doctor) => doctor::run(&context),
         Some(Command::Repo { command }) => repo::run(&context, command),
         Some(Command::Start {
             repo,
@@ -165,7 +144,6 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
         }
         Some(Command::List { repo }) => list::run(&context, repo.as_deref()),
         Some(Command::Ui { repo }) => ui::run(&context, repo.as_deref()),
-        Some(Command::Worktrees { repo }) => worktrees::run(&context, repo.as_deref()),
         Some(Command::Finish {
             repo,
             branch,
@@ -183,20 +161,11 @@ fn run_with_context(command: Option<Command>) -> Result<()> {
     }
 }
 
-fn should_auto_onboard(command: Option<&Command>) -> bool {
-    !matches!(
-        command,
-        Some(Command::Bootstrap { .. })
-            | Some(Command::Doctor { .. })
-            | Some(Command::Detach { .. })
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command, CompletionShell, DetachCommand, RepoCommand, should_auto_onboard};
+    use super::{Cli, Command, CompletionShell, DetachCommand, RepoCommand};
 
     mod cli_parsing {
         use super::*;
@@ -320,27 +289,9 @@ mod tests {
         }
 
         #[test]
-        fn parses_bootstrap_without_yes() {
-            let cli = Cli::parse_from(["task", "bootstrap"]);
-            assert_eq!(cli.command, Some(Command::Bootstrap { yes: false }));
-        }
-
-        #[test]
-        fn parses_bootstrap_with_yes() {
-            let cli = Cli::parse_from(["task", "bootstrap", "--yes"]);
-            assert_eq!(cli.command, Some(Command::Bootstrap { yes: true }));
-        }
-
-        #[test]
-        fn parses_doctor_fix_flag() {
-            let cli = Cli::parse_from(["task", "doctor", "--fix"]);
-            assert_eq!(cli.command, Some(Command::Doctor { fix: true }));
-        }
-
-        #[test]
-        fn parses_doctor_without_fix_flag() {
+        fn parses_doctor_command() {
             let cli = Cli::parse_from(["task", "doctor"]);
-            assert_eq!(cli.command, Some(Command::Doctor { fix: false }));
+            assert_eq!(cli.command, Some(Command::Doctor));
         }
 
         #[test]
@@ -435,30 +386,6 @@ mod tests {
         }
 
         #[test]
-        fn parses_detach_install_without_repo() {
-            let cli = Cli::parse_from(["task", "detach", "install"]);
-            assert_eq!(
-                cli.command,
-                Some(Command::Detach {
-                    command: DetachCommand::Install { repo: None },
-                })
-            );
-        }
-
-        #[test]
-        fn parses_detach_install_with_repo() {
-            let cli = Cli::parse_from(["task", "detach", "install", "myrepo"]);
-            assert_eq!(
-                cli.command,
-                Some(Command::Detach {
-                    command: DetachCommand::Install {
-                        repo: Some("myrepo".to_string()),
-                    },
-                })
-            );
-        }
-
-        #[test]
         fn parses_detach_remove() {
             let cli = Cli::parse_from(["task", "detach", "remove", "myrepo"]);
             assert_eq!(
@@ -495,87 +422,6 @@ mod tests {
                     command: DetachCommand::List,
                 })
             );
-        }
-    }
-
-    mod auto_onboarding {
-        use super::*;
-
-        #[test]
-        fn skips_bootstrap_and_doctor() {
-            assert!(!should_auto_onboard(Some(&Command::Bootstrap {
-                yes: false
-            })));
-            assert!(!should_auto_onboard(Some(&Command::Doctor { fix: false })));
-            assert!(should_auto_onboard(Some(&Command::Start {
-                repo: "goto".to_string(),
-                branch: "feature".to_string(),
-                base_ref: None,
-                no_open: false,
-            })));
-        }
-
-        #[test]
-        fn skips_detach() {
-            assert!(!should_auto_onboard(Some(&Command::Detach {
-                command: DetachCommand::List,
-            })));
-        }
-
-        #[test]
-        fn requires_onboard_for_none_command() {
-            assert!(should_auto_onboard(None));
-        }
-
-        #[test]
-        fn requires_onboard_for_list() {
-            assert!(should_auto_onboard(Some(&Command::List { repo: None })));
-        }
-
-        #[test]
-        fn requires_onboard_for_park() {
-            assert!(should_auto_onboard(Some(&Command::Park)));
-        }
-
-        #[test]
-        fn requires_onboard_for_finish() {
-            assert!(should_auto_onboard(Some(&Command::Finish {
-                repo: None,
-                branch: None,
-                force: false,
-            })));
-        }
-
-        #[test]
-        fn requires_onboard_for_check() {
-            assert!(should_auto_onboard(Some(&Command::Check {
-                worktree_path: None,
-            })));
-        }
-
-        #[test]
-        fn requires_onboard_for_open() {
-            assert!(should_auto_onboard(Some(&Command::Open {
-                repo: None,
-                branch: None,
-            })));
-        }
-
-        #[test]
-        fn requires_onboard_for_repo_prune() {
-            assert!(should_auto_onboard(Some(&Command::Repo {
-                command: RepoCommand::Prune { repo: None },
-            })));
-        }
-
-        #[test]
-        fn requires_onboard_for_rebase() {
-            assert!(should_auto_onboard(Some(&Command::Rebase { args: vec![] })));
-        }
-
-        #[test]
-        fn skips_doctor_with_fix_true() {
-            assert!(!should_auto_onboard(Some(&Command::Doctor { fix: true })));
         }
     }
 
@@ -646,17 +492,6 @@ mod tests {
         fn parses_list_without_repo() {
             let cli = Cli::parse_from(["task", "list"]);
             assert_eq!(cli.command, Some(Command::List { repo: None }));
-        }
-
-        #[test]
-        fn parses_worktrees_with_repo() {
-            let cli = Cli::parse_from(["task", "worktrees", "goto"]);
-            assert_eq!(
-                cli.command,
-                Some(Command::Worktrees {
-                    repo: Some("goto".to_string()),
-                })
-            );
         }
 
         #[test]
