@@ -287,7 +287,7 @@ fn task_candidates(
         None => context.tasks().available_repo_keys()?,
     };
 
-    // Empty set — completions don't need real tmux session state.
+    // Empty set — completions don't need real Zellij session state.
     let open_sessions = HashSet::new();
     let mut branches: Vec<String> = keys
         .into_iter()

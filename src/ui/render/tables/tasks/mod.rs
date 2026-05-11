@@ -8,8 +8,8 @@ use ratatui::{
 use self::compact::CellLabel;
 use super::{
     super::scrollbar::render_scrollbar,
-    cells::{opencode_cell_style, short_last_segment, tmux_cell_style},
-    column_layout::{AGENT_COLUMN, TMUX_COLUMN, pick_task_column_layout, table_chrome_overhead},
+    cells::{opencode_cell_style, session_cell_style, short_last_segment},
+    column_layout::{AGENT_COLUMN, SESSION_COLUMN, pick_task_column_layout, table_chrome_overhead},
 };
 use crate::ui::{state::UiState, theme::Theme};
 
@@ -56,7 +56,7 @@ pub(in crate::ui::render) fn render_tasks(
     // Pick the layout using the widest possible column count so we
     // pick the densest layout that fits. `table_chrome_overhead`
     // already accounts for *every* inter-column gap, so subtracting
-    // only the fixed-width column contents (Tmux + Agent) leaves the
+    // only the fixed-width column contents (Session + Agent) leaves the
     // raw content budget for Repo + Branch. The result is signed so
     // sub-baseline widths preserve their deficit; saturating to zero
     // here would let `pick_task_column_layout` overestimate cells
@@ -64,7 +64,7 @@ pub(in crate::ui::render) fn render_tasks(
     let max_column_count: u16 = if scoped { 3 } else { 4 };
     let content_width = i32::from(area.width)
         - i32::from(table_chrome_overhead(max_column_count))
-        - i32::from(TMUX_COLUMN.full_width + AGENT_COLUMN.full_width);
+        - i32::from(SESSION_COLUMN.full_width + AGENT_COLUMN.full_width);
 
     let layout = pick_task_column_layout(
         scoped,
@@ -77,13 +77,13 @@ pub(in crate::ui::render) fn render_tasks(
 
     // The actual rendered column count depends on which columns the
     // picked layout shows. Branch and Agent are always rendered;
-    // Repo and Tmux are conditional. Used below to size the header /
+    // Repo and Session are conditional. Used below to size the header /
     // cell vectors.
     let mut column_count: u16 = 2; // Branch + Agent
     if layout.shows_repo() {
         column_count += 1;
     }
-    if layout.shows_tmux() {
+    if layout.shows_session() {
         column_count += 1;
     }
 
@@ -92,8 +92,8 @@ pub(in crate::ui::render) fn render_tasks(
         header_labels.push("Repo");
     }
     header_labels.push("Branch");
-    if layout.shows_tmux() {
-        header_labels.push(TMUX_COLUMN.header(layout.compact_tmux()));
+    if layout.shows_session() {
+        header_labels.push(SESSION_COLUMN.header(layout.compact_session()));
     }
     header_labels.push(AGENT_COLUMN.header(layout.compact_agent()));
     let header = Row::new(header_labels)
@@ -105,7 +105,7 @@ pub(in crate::ui::render) fn render_tasks(
         .iter()
         .filter_map(|index| {
             let row = state.task_rows.get(*index)?;
-            // Tmux and Agent cells deliberately don't carry BOLD by
+            // Session and Agent cells deliberately don't carry BOLD by
             // default. Bold is reserved for the highlighted row (added
             // via `row_highlight_style`) so the eye is drawn to the
             // current selection rather than every active session.
@@ -134,11 +134,11 @@ pub(in crate::ui::render) fn render_tasks(
                 cells.push(Cell::from(repo_text).style(repo_style));
             }
             cells.push(branch_cell);
-            if layout.shows_tmux() {
-                let tmux_style = tmux_cell_style(row.status, theme);
-                let tmux_cell =
-                    Cell::from(row.status.label(layout.compact_tmux())).style(tmux_style);
-                cells.push(tmux_cell);
+            if layout.shows_session() {
+                let session_style = session_cell_style(row.status, theme);
+                let session_cell =
+                    Cell::from(row.status.label(layout.compact_session())).style(session_style);
+                cells.push(session_cell);
             }
             cells.push(opencode_cell);
             Some(Row::new(cells))
@@ -164,8 +164,10 @@ pub(in crate::ui::render) fn render_tasks(
         // Branch absorbs the freed Repo column.
         widths.push(Constraint::Fill(1));
     }
-    if layout.shows_tmux() {
-        widths.push(Constraint::Length(TMUX_COLUMN.width(layout.compact_tmux())));
+    if layout.shows_session() {
+        widths.push(Constraint::Length(
+            SESSION_COLUMN.width(layout.compact_session()),
+        ));
     }
     widths.push(Constraint::Length(
         AGENT_COLUMN.width(layout.compact_agent()),
@@ -311,14 +313,14 @@ mod tests {
         }
 
         #[test]
-        fn unscoped_header_has_tmux_just_left_of_agent() {
+        fn unscoped_header_has_session_just_left_of_agent() {
             let row = task_row("github.com/acme/app", "main", OpenCodeState::Idle);
             let mut state = UiState::new(vec![row], vec![], None);
 
             let lines = render_to_lines(&mut state, 120, 8);
             let header = lines
                 .iter()
-                .find(|l| l.contains("Tmux"))
+                .find(|l| l.contains("Session"))
                 .expect("header line must be rendered");
 
             assert!(
@@ -330,8 +332,8 @@ mod tests {
                 "unscoped header has Branch: {header}"
             );
             assert!(
-                header.contains("Tmux"),
-                "unscoped header has Tmux: {header}"
+                header.contains("Session"),
+                "unscoped header has Session: {header}"
             );
             // "Agent" is 5 chars and the column is also 5 cells wide,
             // so the header fits exactly — no truncation.
@@ -348,9 +350,9 @@ mod tests {
                 "unscoped header must not have Path column: {header}"
             );
 
-            // Column order: Repo, Branch, Tmux, Agent. Tmux must sit
+            // Column order: Repo, Branch, Session, Agent. Session must sit
             // immediately to the left of Agent (the feature request).
-            let tmux_pos = header.find("Tmux").expect("Tmux in header");
+            let session_pos = header.find("Session").expect("Session in header");
             let agent_pos = header.find("Agent").expect("Agent in header");
             let repo_pos = header.find("Repo").expect("Repo in header");
             let branch_pos = header.find("Branch").expect("Branch in header");
@@ -359,17 +361,17 @@ mod tests {
                 "Repo must come before Branch: {header}"
             );
             assert!(
-                branch_pos < tmux_pos,
-                "Branch must come before Tmux: {header}"
+                branch_pos < session_pos,
+                "Branch must come before Session: {header}"
             );
             assert!(
-                tmux_pos < agent_pos,
-                "Tmux must come before Agent: {header}"
+                session_pos < agent_pos,
+                "Session must come before Agent: {header}"
             );
         }
 
         #[test]
-        fn scoped_header_has_tmux_just_left_of_agent() {
+        fn scoped_header_has_session_just_left_of_agent() {
             let row = task_row("github.com/acme/app", "main", OpenCodeState::Idle);
             let mut state =
                 UiState::new(vec![row], vec![], Some("github.com/acme/app".to_string()));
@@ -377,14 +379,17 @@ mod tests {
             let lines = render_to_lines(&mut state, 80, 8);
             let header = lines
                 .iter()
-                .find(|l| l.contains("Tmux"))
+                .find(|l| l.contains("Session"))
                 .expect("header line must be rendered");
 
             assert!(
                 header.contains("Branch"),
                 "scoped header has Branch: {header}"
             );
-            assert!(header.contains("Tmux"), "scoped header has Tmux: {header}");
+            assert!(
+                header.contains("Session"),
+                "scoped header has Session: {header}"
+            );
             assert!(
                 header.contains("Agent"),
                 "scoped header has Agent: {header}"
@@ -404,18 +409,18 @@ mod tests {
                 "scoped header must not have Repo column: {header}"
             );
 
-            // Column order: Branch, Tmux, Agent. Tmux must sit
+            // Column order: Branch, Session, Agent. Session must sit
             // immediately to the left of Agent.
             let branch_pos = header.find("Branch").expect("Branch in header");
-            let tmux_pos = header.find("Tmux").expect("Tmux in header");
+            let session_pos = header.find("Session").expect("Session in header");
             let agent_pos = header.find("Agent").expect("Agent in header");
             assert!(
-                branch_pos < tmux_pos,
-                "Branch must come before Tmux: {header}"
+                branch_pos < session_pos,
+                "Branch must come before Session: {header}"
             );
             assert!(
-                tmux_pos < agent_pos,
-                "Tmux must come before Agent: {header}"
+                session_pos < agent_pos,
+                "Session must come before Agent: {header}"
             );
         }
 
@@ -431,7 +436,7 @@ mod tests {
             assert!(
                 lines
                     .iter()
-                    .any(|l| l.contains("hung") && !l.contains("Tmux")),
+                    .any(|l| l.contains("hung") && !l.contains("Session")),
                 "expected a row to render 'hung': {lines:?}"
             );
         }
@@ -467,7 +472,7 @@ mod tests {
             let mut state = UiState::new(vec![row], vec![], None);
 
             // 35 cells — too narrow for the 30-char repo path next to
-            // Branch + Tmux + Agent, but wide enough for "goto" alone.
+            // Branch + Session + Agent, but wide enough for "goto" alone.
             let lines = render_to_lines(&mut state, 35, 8);
             let data = lines
                 .iter()
@@ -493,9 +498,9 @@ mod tests {
             let mut state = UiState::new(vec![row], vec![], None);
 
             // 30 cells — too narrow to keep the Repo column at all,
-            // and too narrow for the full 24-char branch next to Tmux
+            // and too narrow for the full 24-char branch next to Session
             // + Agent + chrome. Expect the branch to collapse to its
-            // last `/`-segment, but Tmux must still be visible at
+            // last `/`-segment, but Session must still be visible at
             // this width.
             let lines = render_to_lines(&mut state, 30, 8);
             let header = lines
@@ -503,8 +508,8 @@ mod tests {
                 .find(|l| l.contains("Branch"))
                 .expect("header line must be rendered");
             assert!(
-                header.contains("Tmux"),
-                "Tmux column must still be visible at width 30: {header}"
+                header.contains("Session"),
+                "Session column must still be visible at width 30: {header}"
             );
             let data = lines
                 .iter()
@@ -521,9 +526,9 @@ mod tests {
         }
 
         #[test]
-        fn extremely_narrow_terminal_folds_tmux_to_compact() {
+        fn extremely_narrow_terminal_folds_session_to_compact() {
             // Once the terminal is too narrow to fit the branch leaf
-            // alongside the full Tmux column, the column folds to a
+            // alongside the full Session column, the column folds to a
             // single cell — `T` header and `o` (open) / `p` (parked)
             // labels — instead of disappearing immediately. This
             // keeps a glanceable session indicator next to the
@@ -536,7 +541,7 @@ mod tests {
             let mut state = UiState::new(vec![row], vec![], None);
 
             // 25 cells — too narrow for the 10-char branch leaf
-            // alongside the full 8-cell Tmux column, but wide enough
+            // alongside the full 8-cell Session column, but wide enough
             // for the compact 1-cell variant.
             let lines = render_to_lines(&mut state, 25, 8);
             let header = lines
@@ -544,8 +549,8 @@ mod tests {
                 .find(|l| l.contains("Branch"))
                 .expect("header line must be rendered");
             assert!(
-                !header.contains("Tmux"),
-                "full Tmux header must fold to compact at width 25: {header}"
+                !header.contains("Session"),
+                "full Session header must fold to compact at width 25: {header}"
             );
             assert!(
                 header.contains("Branch"),
@@ -572,10 +577,10 @@ mod tests {
 
         #[test]
         fn even_narrower_terminal_folds_agent_to_compact() {
-            // Once compact Tmux alone can't keep the branch leaf in
+            // Once compact Session alone can't keep the branch leaf in
             // frame, the Agent column folds to a single cell as
-            // well. Tmux stays compact rather than disappearing —
-            // the next degradation step is Tmux dropping while
+            // well. Session stays compact rather than disappearing —
+            // the next degradation step is Session dropping while
             // Agent stays compact.
             let row = task_row(
                 "github.com/thomas.sauvajon/goto",
@@ -584,7 +589,7 @@ mod tests {
             );
             let mut state = UiState::new(vec![row], vec![], None);
 
-            // 21 cells — content budget is 1, compact-Tmux budget is
+            // 21 cells — content budget is 1, compact-Session budget is
             // 8, all-compact budget is 12 — the 10-char leaf needs
             // both columns compact to fit.
             let lines = render_to_lines(&mut state, 21, 8);
@@ -593,8 +598,8 @@ mod tests {
                 .find(|l| l.contains("Branch"))
                 .expect("header line must be rendered");
             assert!(
-                !header.contains("Tmux"),
-                "full Tmux header must fold to compact at width 21: {header}"
+                !header.contains("Session"),
+                "full Session header must fold to compact at width 21: {header}"
             );
             assert!(
                 !header.contains("Agent"),
@@ -620,16 +625,16 @@ mod tests {
         }
 
         #[test]
-        fn sub_baseline_width_drops_tmux_instead_of_picking_all_compact() {
+        fn sub_baseline_width_drops_session_instead_of_picking_all_compact() {
             // Regression: at width 17 the table chrome (7 cells) +
-            // full Tmux (8) + full Agent (5) already overshoot the
+            // full Session (8) + full Agent (5) already overshoot the
             // available cells by 3, leaving a -3 content budget.
             // Earlier code saturated that to 0 and then mistakenly
             // added compact-column savings on top, picking
             // `NoRepoBranchShortAllCompact` even though the rendered
             // table still couldn't fit the 10-char branch leaf.
             // With the deficit preserved through signed arithmetic,
-            // Tmux must drop entirely and the branch leaf must
+            // Session must drop entirely and the branch leaf must
             // render in full.
             let row = task_row(
                 "github.com/thomas.sauvajon/goto",
@@ -644,8 +649,8 @@ mod tests {
                 .find(|l| l.contains("Branch"))
                 .expect("header line must be rendered");
             assert!(
-                !header.contains("Tmux"),
-                "Tmux column must drop at sub-baseline width 17: {header}"
+                !header.contains("Session"),
+                "Session column must drop at sub-baseline width 17: {header}"
             );
             assert!(
                 !header.contains("Agent"),
@@ -667,9 +672,9 @@ mod tests {
         }
 
         #[test]
-        fn extremely_narrow_terminal_drops_tmux_with_agent_already_compact() {
-            // Once even all-compact (Tmux + Agent both folded) can't
-            // keep the branch leaf in frame, Tmux disappears
+        fn extremely_narrow_terminal_drops_session_with_agent_already_compact() {
+            // Once even all-compact (Session + Agent both folded) can't
+            // keep the branch leaf in frame, Session disappears
             // entirely. Agent stays compact — once a column is
             // folded it never un-folds.
             let row = task_row(
@@ -681,15 +686,15 @@ mod tests {
 
             // 25 cells with a 19-char branch leaf — content budget
             // is 5, all-compact budget is 17, still 2 short of the
-            // 19-char leaf. Tmux must drop.
+            // 19-char leaf. Session must drop.
             let lines = render_to_lines(&mut state, 25, 8);
             let header = lines
                 .iter()
                 .find(|l| l.contains("Branch"))
                 .expect("header line must be rendered");
             assert!(
-                !header.contains("Tmux"),
-                "Tmux column must be gone at this width: {header}"
+                !header.contains("Session"),
+                "Session column must be gone at this width: {header}"
             );
             assert!(
                 !header.contains("Agent"),
@@ -706,11 +711,11 @@ mod tests {
                 .expect("branch leaf must still render");
             assert!(
                 !data.contains("open"),
-                "full 'open' label must not render once Tmux is dropped: {data}"
+                "full 'open' label must not render once Session is dropped: {data}"
             );
             assert!(
                 !data.contains("parked"),
-                "full 'parked' label must not render once Tmux is dropped: {data}"
+                "full 'parked' label must not render once Session is dropped: {data}"
             );
             assert!(
                 !data.contains("idle"),
@@ -719,7 +724,7 @@ mod tests {
         }
 
         #[test]
-        fn scoped_narrow_folds_tmux_to_compact() {
+        fn scoped_narrow_folds_session_to_compact() {
             // Scoped mode follows the same fold-before-drop policy.
             let row = task_row(
                 "github.com/acme/app",
@@ -730,7 +735,7 @@ mod tests {
                 UiState::new(vec![row], vec![], Some("github.com/acme/app".to_string()));
 
             // 24 cells in scoped mode — content budget is 5 (full
-            // Tmux can't fit the 10-char leaf) but compact budget is
+            // Session can't fit the 10-char leaf) but compact budget is
             // 12 (leaf fits).
             let lines = render_to_lines(&mut state, 24, 8);
             let header = lines
@@ -738,8 +743,8 @@ mod tests {
                 .find(|l| l.contains("Branch"))
                 .expect("header line must be rendered");
             assert!(
-                !header.contains("Tmux"),
-                "full Tmux header must fold to compact in scoped mode: {header}"
+                !header.contains("Session"),
+                "full Session header must fold to compact in scoped mode: {header}"
             );
             assert!(
                 header.contains("Agent"),
@@ -750,7 +755,7 @@ mod tests {
         #[test]
         fn scoped_extremely_narrow_folds_agent_to_compact() {
             // Scoped mode follows the same fold-Agent-before-drop
-            // policy as unscoped mode. Once compact Tmux alone can't
+            // policy as unscoped mode. Once compact Session alone can't
             // fit the branch leaf, the Agent column folds too.
             let row = task_row(
                 "github.com/acme/app",
@@ -761,7 +766,7 @@ mod tests {
                 UiState::new(vec![row], vec![], Some("github.com/acme/app".to_string()));
 
             // 18 cells in scoped mode — content budget is 0, compact
-            // Tmux budget is 7, all-compact budget is 11. The 10-char
+            // Session budget is 7, all-compact budget is 11. The 10-char
             // leaf needs both columns compact.
             let lines = render_to_lines(&mut state, 18, 8);
             let header = lines
@@ -769,8 +774,8 @@ mod tests {
                 .find(|l| l.contains("Branch"))
                 .expect("header line must be rendered");
             assert!(
-                !header.contains("Tmux"),
-                "full Tmux header must fold to compact in scoped mode: {header}"
+                !header.contains("Session"),
+                "full Session header must fold to compact in scoped mode: {header}"
             );
             assert!(
                 !header.contains("Agent"),
@@ -783,9 +788,9 @@ mod tests {
         }
 
         #[test]
-        fn scoped_drops_tmux_when_even_all_compact_does_not_fit() {
-            // Scoped mode drops Tmux entirely once even all-compact
-            // (Tmux + Agent both folded) can't fit the branch leaf.
+        fn scoped_drops_session_when_even_all_compact_does_not_fit() {
+            // Scoped mode drops Session entirely once even all-compact
+            // (Session + Agent both folded) can't fit the branch leaf.
             let row = task_row(
                 "github.com/acme/app",
                 "feat/example/much-longer-branch",
@@ -796,15 +801,15 @@ mod tests {
 
             // 18 cells in scoped mode with an 18-char leaf
             // ("much-longer-branch") — content budget is 0,
-            // all-compact budget is 11, both short of 18. Tmux drops.
+            // all-compact budget is 11, both short of 18. Session drops.
             let lines = render_to_lines(&mut state, 18, 8);
             let header = lines
                 .iter()
                 .find(|l| l.contains("Branch"))
                 .expect("header line must be rendered");
             assert!(
-                !header.contains("Tmux"),
-                "Tmux column must be gone in scoped mode: {header}"
+                !header.contains("Session"),
+                "Session column must be gone in scoped mode: {header}"
             );
             assert!(
                 !header.contains("Agent"),

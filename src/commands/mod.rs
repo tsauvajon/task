@@ -44,7 +44,7 @@ pub enum Command {
         base_ref: Option<String>,
         #[arg(
             long,
-            help = "Create the worktree without opening tmux/opencode/codium"
+            help = "Create the worktree without opening zellij/opencode/codium"
         )]
         no_open: bool,
     },
@@ -53,7 +53,7 @@ pub enum Command {
         repo: Option<String>,
         branch: Option<String>,
     },
-    #[command(about = "Park current task (stop tmux session)")]
+    #[command(about = "Park current task (stop zellij session)")]
     Park,
     #[command(about = "Print worktree path for a task")]
     Path {

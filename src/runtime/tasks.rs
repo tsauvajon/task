@@ -30,7 +30,7 @@ use crate::{
                 self, branch_from_worktree_path, list_porcelain, parse_worktree_porcelain,
             },
         },
-        tmux::{
+        zellij::{
             sessions::list_sessions,
             workflow::{OpenResult, open_session},
         },
@@ -360,8 +360,10 @@ impl TaskResolver {
         println!("{table}");
     }
 
+    /// Snapshot of currently-running multiplexer sessions, by name.
+    /// Used by callers to classify worktrees as `Open` vs `Parked`.
     #[must_use]
-    pub fn tmux_sessions(&self) -> HashSet<String> {
+    pub fn open_sessions(&self) -> HashSet<String> {
         list_sessions()
     }
 
@@ -427,7 +429,7 @@ impl TaskResolver {
     }
 
     fn all_tasks(&self) -> Result<Vec<TaskRow>> {
-        let open_sessions = self.tmux_sessions();
+        let open_sessions = self.open_sessions();
         self.available_repos()?
             .into_par_iter()
             .map(|(repo_key, gitdir)| self.repo_task_rows(&repo_key, &gitdir, &open_sessions))
@@ -1305,7 +1307,7 @@ mod tests {
 
         #[test]
         fn non_interactive_does_not_require_worktree_tools() {
-            // Even when the path does not exist (no tmux available),
+            // Even when the path does not exist (no zellij available),
             // the non-interactive path must succeed — it only prints the path.
             let dir = TempDir::new("launch-non-interactive-missing-path");
             let repos_dir = dir.path().join("repos");

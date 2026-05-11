@@ -39,7 +39,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     let task_repo_scope = initial_repo_scope(repo_arg);
     // Progressive loading: build an empty state, enter the terminal,
     // draw the first frame immediately, and only then spawn the loader.
-    // The loader does *all* of the expensive work (tmux snapshot, FS
+    // The loader does *all* of the expensive work (Zellij snapshot, FS
     // walk, per-repo git) in the background so `task ui` shows up in
     // under a few milliseconds even on a workspace with ~150 bare repos.
     let mut state = UiState::new_empty_loading(task_repo_scope.clone());

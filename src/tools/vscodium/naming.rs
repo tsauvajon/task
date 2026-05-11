@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use crate::tools::tmux::naming::session_name;
+use crate::tools::zellij::naming::session_name;
 
 /// VSCodium profile key derived from repo key and stable worktree identity.
 ///
-/// Uses the same sanitization as tmux session names so that both tools
+/// Uses the same sanitization as Zellij session names so that both tools
 /// agree on the identity even after a Git branch rename.
 #[must_use]
 pub fn key(repo_key: &str, worktree_name: &str) -> String {
@@ -46,7 +46,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn matches_tmux_session_name() {
+        fn matches_zellij_session_name() {
             assert_eq!(
                 key("github.com/acme/tool", "feat/test.1"),
                 "github_com_acme_tool-feat_test_1"

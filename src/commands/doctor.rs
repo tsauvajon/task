@@ -21,12 +21,12 @@ fn importance_for(tool: ExternalTool, editor: EditorKind) -> Importance {
         // code path shells out to it.
         ExternalTool::Git => Importance::Required,
         // `hx` is a hard requirement when the configured editor is Helix:
-        // `task start`/`task open` refuses to create a new tmux session if
+        // `task start`/`task open` refuses to create a new Zellij session if
         // `hx` is not on PATH, so reporting it as only a warning would be
         // misleading. `codium` remains recommended because the VSCodium
         // workflow degrades gracefully when `codium` is missing.
         ExternalTool::Helix if matches!(editor, EditorKind::Helix) => Importance::Required,
-        ExternalTool::Tmux
+        ExternalTool::Zellij
         | ExternalTool::Codium
         | ExternalTool::Helix
         | ExternalTool::Opencode
@@ -50,7 +50,7 @@ fn expected_tools(editor: EditorKind) -> Vec<ExternalTool> {
             ExternalTool::Codium => matches!(editor, EditorKind::Vscodium),
             ExternalTool::Helix => matches!(editor, EditorKind::Helix),
             ExternalTool::Git
-            | ExternalTool::Tmux
+            | ExternalTool::Zellij
             | ExternalTool::Opencode
             | ExternalTool::Cargo
             | ExternalTool::Nix => true,
@@ -216,7 +216,7 @@ mod tests {
                 let tools = expected_tools(editor);
                 for required in [
                     ExternalTool::Git,
-                    ExternalTool::Tmux,
+                    ExternalTool::Zellij,
                     ExternalTool::Opencode,
                     ExternalTool::Nix,
                 ] {

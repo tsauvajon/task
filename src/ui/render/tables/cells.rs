@@ -21,11 +21,11 @@ pub(super) fn first_char_str(s: &str) -> &str {
     }
 }
 
-/// Style for a `Tmux` column cell. BOLD is intentionally absent: it
+/// Style for a `Session` column cell. BOLD is intentionally absent: it
 /// is reserved for the highlighted row (added via
 /// `row_highlight_style`) so the eye is drawn to the current
 /// selection rather than every active session.
-pub(super) fn tmux_cell_style(status: TaskStatus, theme: &Theme) -> Style {
+pub(super) fn session_cell_style(status: TaskStatus, theme: &Theme) -> Style {
     match status {
         TaskStatus::Open => Style::default().fg(theme.success),
         TaskStatus::Parked => Style::default().fg(theme.warning),
@@ -33,7 +33,7 @@ pub(super) fn tmux_cell_style(status: TaskStatus, theme: &Theme) -> Style {
 }
 
 pub(super) fn opencode_cell_style(state: OpenCodeState, theme: &Theme) -> Style {
-    // Colour language mirrors the Tmux column so the Tasks view reads
+    // Colour language mirrors the Session column so the Tasks view reads
     // consistently:
     //   - `idle` (amber) — ready for attention.
     //   - `busy` (green) — background work.
@@ -110,7 +110,7 @@ mod tests {
             assert_eq!(first_char_str("open"), "o");
             assert_eq!(first_char_str("parked"), "p");
             assert_eq!(first_char_str("idle"), "i");
-            assert_eq!(first_char_str("Tmux"), "T");
+            assert_eq!(first_char_str("Session"), "S");
             assert_eq!(first_char_str("Agent"), "A");
         }
 
@@ -131,13 +131,13 @@ mod tests {
         fn preserves_static_lifetime() {
             // The slice must inherit the input's lifetime so it can
             // be used as a `&'static str` header label.
-            const FULL: &str = "Tmux";
+            const FULL: &str = "Session";
             let short: &'static str = first_char_str(FULL);
-            assert_eq!(short, "T");
+            assert_eq!(short, "S");
         }
     }
 
-    mod tmux_cell_style_tests {
+    mod session_cell_style_tests {
         use ratatui::style::Modifier;
 
         use super::*;
@@ -147,7 +147,7 @@ mod tests {
             // BOLD is reserved for the highlighted row, so `open`
             // must carry colour but no bold by default.
             let theme = Theme::dark();
-            let style = tmux_cell_style(TaskStatus::Open, &theme);
+            let style = session_cell_style(TaskStatus::Open, &theme);
             assert_eq!(style.fg, Some(theme.success));
             assert!(!style.add_modifier.contains(Modifier::BOLD));
         }
@@ -155,19 +155,19 @@ mod tests {
         #[test]
         fn parked_uses_warning_foreground_and_is_not_bold() {
             let theme = Theme::dark();
-            let style = tmux_cell_style(TaskStatus::Parked, &theme);
+            let style = session_cell_style(TaskStatus::Parked, &theme);
             assert_eq!(style.fg, Some(theme.warning));
             assert!(!style.add_modifier.contains(Modifier::BOLD));
         }
 
         #[test]
-        fn no_tmux_status_is_bold_by_default() {
+        fn no_session_status_is_bold_by_default() {
             // Bold is applied only by the row highlight; verify the
             // contract holds for every `TaskStatus` so a future edit
             // can't silently reintroduce default-bold styling.
             let theme = Theme::dark();
             for status in [TaskStatus::Open, TaskStatus::Parked] {
-                let style = tmux_cell_style(status, &theme);
+                let style = session_cell_style(status, &theme);
                 assert!(
                     !style.add_modifier.contains(Modifier::BOLD),
                     "{status:?} must not carry BOLD by default"
@@ -193,9 +193,9 @@ mod tests {
         }
 
         #[test]
-        fn idle_matches_tmux_parked_colour_and_is_not_bold() {
+        fn idle_matches_session_parked_colour_and_is_not_bold() {
             // Idle on the OpenCode column reads like `parked` in the
-            // Tmux column: amber, not bold — the agent is waiting for
+            // Session column: amber, not bold — the agent is waiting for
             // attention. Bold is reserved for the highlighted row.
             let theme = Theme::dark();
             let style = opencode_cell_style(OpenCodeState::Idle, &theme);
@@ -204,8 +204,8 @@ mod tests {
         }
 
         #[test]
-        fn busy_matches_tmux_open_colour_and_is_not_bold() {
-            // Busy mirrors `open` in the Tmux column: green, not
+        fn busy_matches_session_open_colour_and_is_not_bold() {
+            // Busy mirrors `open` in the Session column: green, not
             // bold — the agent is actively working in the background.
             let theme = Theme::dark();
             let style = opencode_cell_style(OpenCodeState::Busy, &theme);

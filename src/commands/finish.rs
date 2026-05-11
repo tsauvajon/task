@@ -5,8 +5,8 @@ use crate::{
     runtime::{environment::RuntimeEnvironment, process},
     tools::{
         git::worktrees::{self, prune, remove, status_porcelain},
-        tmux::workflow::finish_session,
         vscodium::workflow::cleanup,
+        zellij::workflow::finish_session,
     },
 };
 

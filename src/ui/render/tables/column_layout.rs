@@ -3,7 +3,7 @@ use super::cells::first_char_str;
 /// A table column whose header and cell values can fold to a single
 /// cell when the terminal is too narrow for the full form. The
 /// compact form is always the first character of the full form —
-/// both for the column header (`Tmux` → `T`, `Agent` → `A`) and for
+/// both for the column header (`Session` → `S`, `Agent` → `A`) and for
 /// every cell value (`open` → `o`, `busy` → `b`, etc.). `·` is
 /// already a single character so it folds to itself.
 pub(super) struct CompactableColumn {
@@ -41,12 +41,12 @@ impl CompactableColumn {
     }
 }
 
-/// Tmux column. Full header `Tmux` (4 cells) sits over labels
+/// Session column. Full header `Session` (7 cells) sits over labels
 /// `open` / `parked`; the column itself is 8 cells wide so the
 /// widest label (`parked`, 6 cells) gets a 1-cell gutter on each
-/// side. Compact form: `T` header, `o`/`p` labels, 1 cell wide.
-pub(super) const TMUX_COLUMN: CompactableColumn = CompactableColumn {
-    full_header: "Tmux",
+/// side. Compact form: `S` header, `o`/`p` labels, 1 cell wide.
+pub(super) const SESSION_COLUMN: CompactableColumn = CompactableColumn {
+    full_header: "Session",
     full_width: 8,
 };
 
@@ -77,15 +77,15 @@ pub(super) fn table_chrome_overhead(column_count: u16) -> u16 {
 /// 3. Repo column hidden + full branch (narrow).
 /// 4. Repo column hidden + short branch (last `/`-segment) (very
 ///    narrow).
-/// 5. Repo column hidden + short branch + Tmux folded to one cell
-///    (`T` header, `o`/`p` labels) (extremely narrow). Tmux folds
+/// 5. Repo column hidden + short branch + Session folded to one cell
+///    (`S` header, `o`/`p` labels) (extremely narrow). Session folds
 ///    before disappearing so the user keeps a glanceable session
 ///    indicator for as long as possible.
-/// 6. Repo column hidden + short branch + Tmux folded + Agent folded
+/// 6. Repo column hidden + short branch + Session folded + Agent folded
 ///    to one cell (`A` header, `·`/`g`/`b`/`i`/`h` labels). Agent
-///    folds after Tmux for the same reason: a glanceable indicator
+///    folds after Session for the same reason: a glanceable indicator
 ///    is more useful than a missing column.
-/// 7. Repo + Tmux columns hidden, short branch + Agent stays compact
+/// 7. Repo + Session columns hidden, short branch + Agent stays compact
 ///    (extremely narrow). Branch is the highest-priority piece of
 ///    information; Agent stays compact since once a column has been
 ///    compacted it never un-folds.
@@ -95,9 +95,9 @@ pub(super) enum TaskColumnLayout {
     RepoShortBranchFull,
     NoRepoBranchFull,
     NoRepoBranchShort,
-    NoRepoBranchShortTmuxCompact,
+    NoRepoBranchShortSessionCompact,
     NoRepoBranchShortAllCompact,
-    NoRepoBranchShortNoTmux,
+    NoRepoBranchShortNoSession,
 }
 
 impl TaskColumnLayout {
@@ -113,34 +113,34 @@ impl TaskColumnLayout {
         matches!(
             self,
             Self::NoRepoBranchShort
-                | Self::NoRepoBranchShortTmuxCompact
+                | Self::NoRepoBranchShortSessionCompact
                 | Self::NoRepoBranchShortAllCompact
-                | Self::NoRepoBranchShortNoTmux
+                | Self::NoRepoBranchShortNoSession
         )
     }
 
-    pub(super) fn shows_tmux(self) -> bool {
-        !matches!(self, Self::NoRepoBranchShortNoTmux)
+    pub(super) fn shows_session(self) -> bool {
+        !matches!(self, Self::NoRepoBranchShortNoSession)
     }
 
-    pub(super) fn compact_tmux(self) -> bool {
+    pub(super) fn compact_session(self) -> bool {
         matches!(
             self,
-            Self::NoRepoBranchShortTmuxCompact | Self::NoRepoBranchShortAllCompact
+            Self::NoRepoBranchShortSessionCompact | Self::NoRepoBranchShortAllCompact
         )
     }
 
     pub(super) fn compact_agent(self) -> bool {
         matches!(
             self,
-            Self::NoRepoBranchShortAllCompact | Self::NoRepoBranchShortNoTmux
+            Self::NoRepoBranchShortAllCompact | Self::NoRepoBranchShortNoSession
         )
     }
 }
 
 /// Pick the densest layout that still fits the available content
 /// width. `content_width` is what's left after fixed-width columns
-/// (Tmux, Agent) and table chrome are subtracted; it can be negative
+/// (Session, Agent) and table chrome are subtracted; it can be negative
 /// when the terminal is narrower than the full-baseline layout, and
 /// the deficit must be preserved so that compact-column savings are
 /// not added to a clamped zero. With unsigned saturation a deficit
@@ -157,7 +157,7 @@ pub(super) fn pick_task_column_layout(
 ) -> TaskColumnLayout {
     // Cells freed when each column folds from full to compact width.
     // Only the column content shrinks; the inter-column gap stays.
-    let tmux_compact_savings = i32::from(TMUX_COLUMN.compact_savings());
+    let session_compact_savings = i32::from(SESSION_COLUMN.compact_savings());
     let agent_compact_savings = i32::from(AGENT_COLUMN.compact_savings());
 
     let max_repo_full = i32::from(max_repo_full);
@@ -167,23 +167,23 @@ pub(super) fn pick_task_column_layout(
 
     if scoped {
         // Scoped view never has a Repo column. The only question is
-        // whether branches need shortening, and how much the Tmux
+        // whether branches need shortening, and how much the Session
         // and Agent columns need to give up to keep the branch leaf
         // visible. Order of degradation: branch full → branch leaf
-        // → Tmux compact → Agent compact → Tmux gone.
+        // → Session compact → Agent compact → Session gone.
         if max_branch_full <= content_width {
             return TaskColumnLayout::NoRepoBranchFull;
         }
         if max_branch_short <= content_width {
             return TaskColumnLayout::NoRepoBranchShort;
         }
-        if max_branch_short <= content_width + tmux_compact_savings {
-            return TaskColumnLayout::NoRepoBranchShortTmuxCompact;
+        if max_branch_short <= content_width + session_compact_savings {
+            return TaskColumnLayout::NoRepoBranchShortSessionCompact;
         }
-        if max_branch_short <= content_width + tmux_compact_savings + agent_compact_savings {
+        if max_branch_short <= content_width + session_compact_savings + agent_compact_savings {
             return TaskColumnLayout::NoRepoBranchShortAllCompact;
         }
-        return TaskColumnLayout::NoRepoBranchShortNoTmux;
+        return TaskColumnLayout::NoRepoBranchShortNoSession;
     }
 
     // Budget for Repo alongside a full-width Branch. `+ 1` accounts for
@@ -207,24 +207,24 @@ pub(super) fn pick_task_column_layout(
     if max_branch_short <= no_repo_branch_budget {
         return TaskColumnLayout::NoRepoBranchShort;
     }
-    // The branch leaf doesn't fit alongside the full Tmux column. Try
-    // folding Tmux to a single cell before sacrificing it entirely —
-    // a compact `T`/`o`/`p` indicator is still useful at a glance.
-    if max_branch_short <= no_repo_branch_budget + tmux_compact_savings {
-        return TaskColumnLayout::NoRepoBranchShortTmuxCompact;
+    // The branch leaf doesn't fit alongside the full Session column. Try
+    // folding Session to a single cell before sacrificing it entirely —
+    // a compact `S`/`o`/`p` indicator is still useful at a glance.
+    if max_branch_short <= no_repo_branch_budget + session_compact_savings {
+        return TaskColumnLayout::NoRepoBranchShortSessionCompact;
     }
-    // Compact Tmux still isn't enough. Fold the Agent column to a
-    // single cell as well before dropping Tmux entirely — compact
+    // Compact Session still isn't enough. Fold the Agent column to a
+    // single cell as well before dropping Session entirely — compact
     // `A`/`·`/`g`/`b`/`i`/`h` is still a useful glance indicator.
-    if max_branch_short <= no_repo_branch_budget + tmux_compact_savings + agent_compact_savings {
+    if max_branch_short <= no_repo_branch_budget + session_compact_savings + agent_compact_savings {
         return TaskColumnLayout::NoRepoBranchShortAllCompact;
     }
-    // Even compact Tmux + compact Agent can't keep the branch leaf in
-    // frame. Drop Tmux entirely; Agent stays compact (once a column
+    // Even compact Session + compact Agent can't keep the branch leaf in
+    // frame. Drop Session entirely; Agent stays compact (once a column
     // has been compacted it never un-folds). Priority order is:
-    // branch prefix > Tmux full > Agent full > Tmux compact > branch
+    // branch prefix > Session full > Agent full > Session compact > branch
     // leaf.
-    TaskColumnLayout::NoRepoBranchShortNoTmux
+    TaskColumnLayout::NoRepoBranchShortNoSession
 }
 
 #[cfg(test)]
@@ -236,31 +236,31 @@ mod tests {
 
         #[test]
         fn header_returns_full_when_not_compact() {
-            assert_eq!(TMUX_COLUMN.header(false), "Tmux");
+            assert_eq!(SESSION_COLUMN.header(false), "Session");
             assert_eq!(AGENT_COLUMN.header(false), "Agent");
         }
 
         #[test]
         fn header_returns_first_character_when_compact() {
-            assert_eq!(TMUX_COLUMN.header(true), "T");
+            assert_eq!(SESSION_COLUMN.header(true), "S");
             assert_eq!(AGENT_COLUMN.header(true), "A");
         }
 
         #[test]
         fn width_returns_full_when_not_compact() {
-            assert_eq!(TMUX_COLUMN.width(false), 8);
+            assert_eq!(SESSION_COLUMN.width(false), 8);
             assert_eq!(AGENT_COLUMN.width(false), 5);
         }
 
         #[test]
         fn width_returns_one_when_compact() {
-            assert_eq!(TMUX_COLUMN.width(true), 1);
+            assert_eq!(SESSION_COLUMN.width(true), 1);
             assert_eq!(AGENT_COLUMN.width(true), 1);
         }
 
         #[test]
         fn compact_savings_is_full_minus_one() {
-            assert_eq!(TMUX_COLUMN.compact_savings(), 7);
+            assert_eq!(SESSION_COLUMN.compact_savings(), 7);
             assert_eq!(AGENT_COLUMN.compact_savings(), 4);
         }
 
@@ -311,46 +311,46 @@ mod tests {
         #[test]
         fn shortens_branch_when_no_repo_and_branch_overflows() {
             // content 8 — too narrow even for a full 10-char branch,
-            // but the 4-char branch leaf still fits alongside Tmux.
+            // but the 4-char branch leaf still fits alongside Session.
             let layout = pick_task_column_layout(false, 8, 30, 4, 10, 4);
             assert_eq!(layout, TaskColumnLayout::NoRepoBranchShort);
         }
 
         #[test]
-        fn folds_tmux_to_compact_when_branch_leaf_does_not_fit_with_full_tmux() {
+        fn folds_session_to_compact_when_branch_leaf_does_not_fit_with_full_session() {
             // content 3 (no-repo budget = 4) — too narrow for the
-            // 10-char branch leaf alongside the full Tmux column.
-            // Folding Tmux to its compact 1-cell form (savings = 7)
+            // 10-char branch leaf alongside the full Session column.
+            // Folding Session to its compact 1-cell form (savings = 7)
             // brings the budget up to 11, which fits the leaf.
             let layout = pick_task_column_layout(false, 3, 30, 4, 20, 10);
-            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortTmuxCompact);
+            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortSessionCompact);
         }
 
         #[test]
-        fn folds_agent_to_compact_when_compact_tmux_alone_is_not_enough() {
-            // content 0 (no-repo budget = 1, compact-Tmux budget = 8)
-            // — the 10-char leaf overflows even with compact Tmux.
+        fn folds_agent_to_compact_when_compact_session_alone_is_not_enough() {
+            // content 0 (no-repo budget = 1, compact-Session budget = 8)
+            // — the 10-char leaf overflows even with compact Session.
             // Folding Agent to its compact 1-cell form (savings = 4)
-            // brings the budget up to 12, which fits the leaf. Tmux
+            // brings the budget up to 12, which fits the leaf. Session
             // stays compact rather than disappearing.
             let layout = pick_task_column_layout(false, 0, 30, 4, 20, 10);
             assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortAllCompact);
         }
 
         #[test]
-        fn drops_tmux_when_branch_leaf_does_not_fit_even_with_both_compact() {
+        fn drops_session_when_branch_leaf_does_not_fit_even_with_both_compact() {
             // content 0 (no-repo budget = 1, all-compact budget = 12)
-            // — a 14-char branch leaf overflows even with both Tmux
-            // and Agent compact. Tmux disappears entirely; Agent
+            // — a 14-char branch leaf overflows even with both Session
+            // and Agent compact. Session disappears entirely; Agent
             // stays compact (a column never un-folds).
             let layout = pick_task_column_layout(false, 0, 30, 4, 20, 14);
-            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoTmux);
+            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoSession);
         }
 
         #[test]
-        fn keeps_full_tmux_when_branch_leaf_fits_with_full_tmux() {
+        fn keeps_full_session_when_branch_leaf_fits_with_full_session() {
             // content 9 (no-repo budget = 10) — exactly enough for
-            // the 10-char branch leaf alongside the full Tmux column.
+            // the 10-char branch leaf alongside the full Session column.
             let layout = pick_task_column_layout(false, 9, 30, 4, 20, 10);
             assert_eq!(layout, TaskColumnLayout::NoRepoBranchShort);
         }
@@ -372,71 +372,71 @@ mod tests {
         }
 
         #[test]
-        fn scoped_view_folds_tmux_to_compact_when_branch_leaf_does_not_fit() {
+        fn scoped_view_folds_session_to_compact_when_branch_leaf_does_not_fit() {
             // Scoped view, branch leaf is 10, content_width is 5.
-            // Full Tmux: leaf overflows (5). Compact Tmux: budget =
+            // Full Session: leaf overflows (5). Compact Session: budget =
             // 12, leaf fits.
             let layout = pick_task_column_layout(true, 5, 0, 0, 20, 10);
-            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortTmuxCompact);
+            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortSessionCompact);
         }
 
         #[test]
-        fn scoped_view_folds_agent_to_compact_when_compact_tmux_is_not_enough() {
+        fn scoped_view_folds_agent_to_compact_when_compact_session_is_not_enough() {
             // Scoped view, branch leaf is 10, content_width is 1.
-            // Compact-Tmux budget = 8, still doesn't fit the leaf.
-            // Compact-Tmux + compact-Agent budget = 12, fits.
+            // Compact-Session budget = 8, still doesn't fit the leaf.
+            // Compact-Session + compact-Agent budget = 12, fits.
             let layout = pick_task_column_layout(true, 1, 0, 0, 20, 10);
             assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortAllCompact);
         }
 
         #[test]
-        fn scoped_view_drops_tmux_when_branch_leaf_does_not_fit_with_both_compact() {
+        fn scoped_view_drops_session_when_branch_leaf_does_not_fit_with_both_compact() {
             // Scoped view, branch leaf is 14, content_width is 1.
             // All-compact budget = 12, still doesn't fit the leaf.
-            // Drop Tmux; Agent stays compact.
+            // Drop Session; Agent stays compact.
             let layout = pick_task_column_layout(true, 1, 0, 0, 20, 14);
-            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoTmux);
+            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoSession);
         }
 
         #[test]
-        fn zero_content_width_with_short_branch_leaf_folds_only_tmux_to_compact() {
-            // Degenerate terminal: no-repo budget = 1, compact-Tmux
+        fn zero_content_width_with_short_branch_leaf_folds_only_session_to_compact() {
+            // Degenerate terminal: no-repo budget = 1, compact-Session
             // budget = 8. A 4-char branch leaf still fits alongside
-            // the compact Tmux column without compacting Agent.
+            // the compact Session column without compacting Agent.
             let layout = pick_task_column_layout(false, 0, 30, 4, 10, 4);
-            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortTmuxCompact);
+            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortSessionCompact);
         }
 
         #[test]
-        fn negative_content_width_drops_tmux_when_branch_leaf_does_not_fit() {
+        fn negative_content_width_drops_session_when_branch_leaf_does_not_fit() {
             // Sub-baseline width: terminal is 3 cells short of the
             // full-baseline layout (e.g. unscoped width 17 with
-            // chrome 7 + Tmux 8 + Agent 5 = 20). With the deficit
+            // chrome 7 + Session 8 + Agent 5 = 20). With the deficit
             // preserved, the no-repo all-compact budget is
             // -3 + 1 + 7 + 4 = 9, which is still short of the
-            // 10-char branch leaf, so Tmux must drop. Saturating to
+            // 10-char branch leaf, so Session must drop. Saturating to
             // zero here would mistakenly pick all-compact and
             // truncate the leaf.
             let layout = pick_task_column_layout(false, -3, 30, 4, 20, 10);
-            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoTmux);
+            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoSession);
         }
 
         #[test]
-        fn scoped_negative_content_width_drops_tmux_when_branch_leaf_does_not_fit() {
+        fn scoped_negative_content_width_drops_session_when_branch_leaf_does_not_fit() {
             // Scoped variant of the same regression: deficit
             // -3, all-compact budget = -3 + 7 + 4 = 8, leaf 10.
             let layout = pick_task_column_layout(true, -3, 0, 0, 20, 10);
-            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoTmux);
+            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoSession);
         }
 
         #[test]
-        fn deeply_negative_content_width_still_drops_tmux_only_once() {
+        fn deeply_negative_content_width_still_drops_session_only_once() {
             // Even at extreme deficits, the worst-case layout is
-            // NoRepoBranchShortNoTmux — we never panic or wrap on
+            // NoRepoBranchShortNoSession — we never panic or wrap on
             // signed arithmetic. Pin that with a wide enough
             // negative budget to demonstrate.
             let layout = pick_task_column_layout(false, -1000, 30, 4, 20, 10);
-            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoTmux);
+            assert_eq!(layout, TaskColumnLayout::NoRepoBranchShortNoSession);
         }
     }
 }

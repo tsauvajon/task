@@ -141,7 +141,7 @@ pub fn flush_captured_lines(lines: Vec<CapturedLine>) {
 #[strum(serialize_all = "lowercase")]
 pub enum ExternalTool {
     Git,
-    Tmux,
+    Zellij,
     Codium,
     #[strum(serialize = "hx")]
     Helix,
@@ -177,7 +177,7 @@ impl ExternalTool {
     pub fn install_hint(self) -> InstallHint {
         match self {
             Self::Git => InstallHint::NixPackage("nixpkgs#git"),
-            Self::Tmux => InstallHint::NixPackage("nixpkgs#tmux"),
+            Self::Zellij => InstallHint::NixPackage("nixpkgs#zellij"),
             Self::Codium => InstallHint::NixPackage("nixpkgs#vscodium"),
             Self::Helix => InstallHint::NixPackage("nixpkgs#helix"),
             Self::Opencode => InstallHint::NixPackage("nixpkgs#opencode"),
@@ -202,7 +202,7 @@ impl ExternalTool {
         &[
             Self::Nix,
             Self::Git,
-            Self::Tmux,
+            Self::Zellij,
             Self::Opencode,
             Self::Codium,
             Self::Helix,
@@ -212,8 +212,8 @@ impl ExternalTool {
 }
 
 /// A prepared program + arguments pair. Used when the invocation needs to be
-/// serialized (e.g. passed through `tmux new-session` as a shell command),
-/// as well as inside the generic `run_*` helpers.
+/// serialized (e.g. embedded as a `command`/`args` pair in a Zellij KDL
+/// layout), as well as inside the generic `run_*` helpers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPlan {
     program: String,
@@ -508,7 +508,10 @@ mod tests {
         #[test]
         fn from_binary_maps_known_tools() {
             assert_eq!(ExternalTool::from_binary("git"), Some(ExternalTool::Git));
-            assert_eq!(ExternalTool::from_binary("tmux"), Some(ExternalTool::Tmux));
+            assert_eq!(
+                ExternalTool::from_binary("zellij"),
+                Some(ExternalTool::Zellij)
+            );
             assert_eq!(
                 ExternalTool::from_binary("codium"),
                 Some(ExternalTool::Codium)
@@ -584,8 +587,8 @@ mod tests {
 
         #[test]
         fn for_tool_with_no_extra_args_has_empty_args() {
-            let plan = CommandPlan::for_tool(ExternalTool::Tmux, Vec::new());
-            assert_eq!(plan.program(), "tmux");
+            let plan = CommandPlan::for_tool(ExternalTool::Zellij, Vec::new());
+            assert_eq!(plan.program(), "zellij");
             assert!(plan.args().is_empty());
         }
     }
@@ -596,7 +599,7 @@ mod tests {
         #[test]
         fn display_returns_binary_name() {
             assert_eq!(ExternalTool::Git.to_string(), "git");
-            assert_eq!(ExternalTool::Tmux.to_string(), "tmux");
+            assert_eq!(ExternalTool::Zellij.to_string(), "zellij");
             assert_eq!(ExternalTool::Opencode.to_string(), "opencode");
             assert_eq!(ExternalTool::Cargo.to_string(), "cargo");
             assert_eq!(ExternalTool::Nix.to_string(), "nix");
@@ -609,8 +612,8 @@ mod tests {
                 InstallHint::NixPackage("nixpkgs#git")
             );
             assert_eq!(
-                ExternalTool::Tmux.install_hint(),
-                InstallHint::NixPackage("nixpkgs#tmux")
+                ExternalTool::Zellij.install_hint(),
+                InstallHint::NixPackage("nixpkgs#zellij")
             );
             assert_eq!(
                 ExternalTool::Opencode.install_hint(),
@@ -647,7 +650,7 @@ mod tests {
         fn binary_name_matches_tool_name() {
             assert_eq!(ExternalTool::Git.binary_name(), "git");
             assert_eq!(ExternalTool::Opencode.binary_name(), "opencode");
-            assert_eq!(ExternalTool::Tmux.binary_name(), "tmux");
+            assert_eq!(ExternalTool::Zellij.binary_name(), "zellij");
             assert_eq!(ExternalTool::Cargo.binary_name(), "cargo");
             assert_eq!(ExternalTool::Nix.binary_name(), "nix");
         }
@@ -677,7 +680,7 @@ mod tests {
         fn all_contains_every_variant() {
             let all = ExternalTool::all();
             assert!(all.contains(&ExternalTool::Git));
-            assert!(all.contains(&ExternalTool::Tmux));
+            assert!(all.contains(&ExternalTool::Zellij));
             assert!(all.contains(&ExternalTool::Codium));
             assert!(all.contains(&ExternalTool::Helix));
             assert!(all.contains(&ExternalTool::Opencode));

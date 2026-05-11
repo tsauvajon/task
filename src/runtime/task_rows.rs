@@ -9,7 +9,7 @@ use crate::{
             WorktreeEntry, branch_from_ref, branch_from_worktree_path, worktree_name,
         },
         opencode::status::OpenCodeState,
-        tmux::naming::session_name,
+        zellij::naming::session_name,
     },
 };
 

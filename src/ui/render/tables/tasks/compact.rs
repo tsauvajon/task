@@ -33,7 +33,7 @@ mod tests {
     use super::*;
     use crate::{runtime::task_rows::TaskStatus, tools::opencode::status::OpenCodeState};
 
-    mod tmux_label_tests {
+    mod session_label_tests {
         use super::*;
 
         #[test]
@@ -99,7 +99,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn every_tmux_variant_folds_to_one_char() {
+        fn every_session_variant_folds_to_one_char() {
             for status in [TaskStatus::Open, TaskStatus::Parked] {
                 let compact = status.label(true);
                 assert_eq!(
