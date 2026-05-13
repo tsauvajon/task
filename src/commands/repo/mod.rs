@@ -1,5 +1,7 @@
+mod clone;
+
 use crate::{
-    commands::{RepoCommand, clone, prune},
+    commands::{RepoCommand, prune},
     error::Result,
     runtime::{environment::RuntimeEnvironment, process},
 };

@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::{
     error::Result,
     runtime::{
-        config::{DetachedEntry, EditorKind, InstallEntry, TaskConfig, is_interactive_terminal},
+        config::{DetachedEntry, EditorKind, TaskConfig, is_interactive_terminal},
         paths::WorkspacePaths,
         tasks::TaskResolver,
     },
@@ -13,7 +13,6 @@ use crate::{
 pub struct RuntimeEnvironment {
     layout: WorkspacePaths,
     tasks: TaskResolver,
-    install_entries: Vec<InstallEntry>,
     detached_entries: Vec<DetachedEntry>,
 }
 
@@ -34,7 +33,6 @@ impl RuntimeEnvironment {
         Self {
             layout,
             tasks,
-            install_entries: config.install_entries,
             detached_entries: config.detached_entries,
         }
     }
@@ -62,7 +60,6 @@ impl RuntimeEnvironment {
         Self {
             layout,
             tasks,
-            install_entries: Vec::new(),
             detached_entries: Vec::new(),
         }
     }
@@ -83,11 +80,6 @@ impl RuntimeEnvironment {
     #[must_use]
     pub fn tasks(&self) -> &TaskResolver {
         &self.tasks
-    }
-
-    #[must_use]
-    pub fn install_entries(&self) -> &[InstallEntry] {
-        &self.install_entries
     }
 
     #[must_use]
@@ -169,7 +161,6 @@ mod tests {
                     std::path::PathBuf::from("/tmp/wt/github.com/me"),
                     std::path::PathBuf::from("/tmp/wt/github.com/team"),
                 ],
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
             };
@@ -192,7 +183,6 @@ mod tests {
                 wt_dir: std::path::PathBuf::from("/tmp/wt"),
                 detached_dir: std::path::PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
             };
@@ -212,7 +202,6 @@ mod tests {
                 wt_dir: std::path::PathBuf::from("/tmp/wt"),
                 detached_dir: std::path::PathBuf::from("/tmp/detached"),
                 codium_trusted_roots: Vec::new(),
-                install_entries: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::Helix,
             };

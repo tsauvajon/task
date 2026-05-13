@@ -16,7 +16,7 @@ use crate::{
             repo::{default_clone_url, parse_repo_input},
             worktrees::{list_registered_worktrees, worktree_name},
         },
-        tmux::{
+        zellij::{
             naming::session_name,
             sessions::is_available,
             workflow::{ParkResult, park},
@@ -41,7 +41,7 @@ pub(super) fn load_task_rows(
     context: &RuntimeEnvironment,
     repo_scope: Option<&str>,
 ) -> Result<Vec<TaskRow>> {
-    let open_sessions = context.tasks().tmux_sessions();
+    let open_sessions = context.tasks().open_sessions();
 
     let mut rows: Vec<TaskRow> = if let Some(repo_arg) = repo_scope {
         let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
@@ -84,7 +84,7 @@ pub(super) fn load_task_rows(
 
 #[cfg(test)]
 pub(super) fn load_repo_rows(context: &RuntimeEnvironment) -> Result<Vec<RepoRow>> {
-    let open_sessions = context.tasks().tmux_sessions();
+    let open_sessions = context.tasks().open_sessions();
     let wt_dir = context.layout().wt_dir();
     // Canonicalize once to avoid one `fs::canonicalize` syscall per repo
     // just to resolve paths like `/var` → `/private/var` on macOS.
@@ -143,7 +143,7 @@ pub(super) fn is_detached_worktree_path(path: &std::path::Path) -> bool {
 /// Reads `<gitdir>/worktrees/*/gitdir` from disk, keeps only worktrees that
 /// live under `<wt_dir>/<repo_key>/` (excluding the repo root itself and
 /// detached snapshots outside `wt_dir`), and classifies each as `Open` when a
-/// tmux session matches `session_name(repo_key, worktree_name)`. Otherwise
+/// Zellij session matches `session_name(repo_key, worktree_name)`. Otherwise
 /// the worktree is counted as `Parked`.
 ///
 /// Mirrors the filter logic of `build_task_rows` but skips branch-name
@@ -202,7 +202,7 @@ pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) 
 
     if !is_available() {
         return Err(Error::failed(
-            "tmux is not available. Run 'task list' to inspect tasks.",
+            "zellij is not available. Run 'task list' to inspect tasks.",
         ));
     }
 
@@ -525,7 +525,7 @@ mod tests {
 
         #[test]
         fn park_selected_sets_message_when_nothing_selected() {
-            // park_selected requires tmux availability to proceed past the
+            // park_selected requires zellij availability to proceed past the
             // early return; with an empty task list the guard fires first.
             let mut state = empty_state();
             // The function is pub(super) — call it directly via the module path.
@@ -819,7 +819,7 @@ mod tests {
         use std::{collections::HashSet, fs};
 
         use super::super::count_repo_worktrees;
-        use crate::{runtime::RepoKey, tools::tmux::naming::session_name};
+        use crate::{runtime::RepoKey, tools::zellij::naming::session_name};
 
         struct TempDir(std::path::PathBuf);
         impl TempDir {

@@ -96,7 +96,7 @@ fn run_loader(
     }
 
     let tasks = context.tasks();
-    let open_sessions = tasks.tmux_sessions();
+    let open_sessions = tasks.open_sessions();
 
     let wt_dir = context.layout().wt_dir().to_path_buf();
     let real_wt_dir = std::fs::canonicalize(&wt_dir).unwrap_or_else(|_| wt_dir.clone());

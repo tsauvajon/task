@@ -19,7 +19,6 @@ use crate::{
         task_rows::{TaskRow, TaskStatus, build_task_rows},
     },
     tools::{
-        asdf, direnv,
         git::{
             context::{current_root, git_common_dir, repo_key_from_common_dir},
             refs::current_branch,
@@ -31,8 +30,7 @@ use crate::{
                 self, branch_from_worktree_path, list_porcelain, parse_worktree_porcelain,
             },
         },
-        nodejs,
-        tmux::{
+        zellij::{
             sessions::list_sessions,
             workflow::{OpenResult, open_session},
         },
@@ -231,17 +229,6 @@ impl TaskResolver {
             return Ok(());
         }
 
-        if path.join(".envrc").exists() && direnv::is_available() {
-            let _ = direnv::allow(path);
-        }
-
-        if asdf::is_available() {
-            let installed = asdf::install_from_workspace_tool_versions(path)?;
-            if installed && nodejs::runtime::corepack_available() {
-                let _ = nodejs::runtime::enable_corepack();
-            }
-        }
-
         let wt_name = worktrees::worktree_name(self.layout.wt_dir(), repo_key, path);
         if open_session(
             repo_key,
@@ -373,8 +360,10 @@ impl TaskResolver {
         println!("{table}");
     }
 
+    /// Snapshot of currently-running multiplexer sessions, by name.
+    /// Used by callers to classify worktrees as `Open` vs `Parked`.
     #[must_use]
-    pub fn tmux_sessions(&self) -> HashSet<String> {
+    pub fn open_sessions(&self) -> HashSet<String> {
         list_sessions()
     }
 
@@ -440,7 +429,7 @@ impl TaskResolver {
     }
 
     fn all_tasks(&self) -> Result<Vec<TaskRow>> {
-        let open_sessions = self.tmux_sessions();
+        let open_sessions = self.open_sessions();
         self.available_repos()?
             .into_par_iter()
             .map(|(repo_key, gitdir)| self.repo_task_rows(&repo_key, &gitdir, &open_sessions))
@@ -1318,7 +1307,7 @@ mod tests {
 
         #[test]
         fn non_interactive_does_not_require_worktree_tools() {
-            // Even when the path does not exist (no .envrc, no tmux available),
+            // Even when the path does not exist (no zellij available),
             // the non-interactive path must succeed — it only prints the path.
             let dir = TempDir::new("launch-non-interactive-missing-path");
             let repos_dir = dir.path().join("repos");

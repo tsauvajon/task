@@ -7,7 +7,7 @@ use crate::{
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     context.tasks().ensure_layout()?;
-    let open_sessions = context.tasks().tmux_sessions();
+    let open_sessions = context.tasks().open_sessions();
 
     let mut rows: Vec<TaskRow> = Vec::new();
     let repo_arg = repo_arg

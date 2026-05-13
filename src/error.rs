@@ -138,12 +138,11 @@ mod tests {
 
         #[test]
         fn uses_tool_specific_nix_package() {
-            let err = Error::tool_missing(ExternalTool::Tmux);
-            assert!(err.to_string().contains("nixpkgs#tmux"));
+            let err = Error::tool_missing(ExternalTool::Zellij);
+            assert!(err.to_string().contains("nixpkgs#zellij"));
 
-            let err = Error::tool_missing(ExternalTool::Node);
-            // Node and Corepack both ship in nixpkgs#nodejs
-            assert!(err.to_string().contains("nixpkgs#nodejs"));
+            let err = Error::tool_missing(ExternalTool::Opencode);
+            assert!(err.to_string().contains("nixpkgs#opencode"));
         }
 
         #[test]

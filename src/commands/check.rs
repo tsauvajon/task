@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 use crate::{
     error::{Error, Result},
     runtime::{environment::RuntimeEnvironment, process},
-    tools::{nodejs, rust},
+    tools::rust,
 };
 
 pub fn run(_env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()> {
@@ -15,24 +15,11 @@ pub fn run(_env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()>
         )));
     }
 
-    let mut checked = false;
-
     if path.join("Cargo.toml").exists() {
-        checked = true;
         process::log("Running Rust checks");
         rust::run_checks(&path)?;
-    }
-
-    if path.join("package.json").exists() {
-        checked = true;
-        process::log("Running JS checks");
-        if !nodejs::checks::run_project_checks(&path)? {
-            process::warn("pnpm/corepack not found. Skipping JS checks.");
-        }
-    }
-
-    if !checked {
-        process::warn("No Cargo.toml or package.json found. Nothing to run.");
+    } else {
+        process::warn("No Cargo.toml found. Nothing to run.");
     }
 
     Ok(())

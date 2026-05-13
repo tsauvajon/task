@@ -3,7 +3,7 @@ use crate::{
     runtime::{environment::RuntimeEnvironment, process},
     tools::{
         git::worktrees,
-        tmux::{
+        zellij::{
             sessions::is_available,
             workflow::{ParkResult, park},
         },
@@ -16,7 +16,7 @@ pub fn run(context: &RuntimeEnvironment) -> Result<()> {
 
     if !is_available() {
         return Err(Error::failed(
-            "tmux is not available. Run 'task list' to inspect tasks.",
+            "zellij is not available. Run 'task list' to inspect tasks.",
         ));
     }
 
@@ -38,7 +38,7 @@ fn park_log_message(result: &ParkResult, repo_key: &str, branch: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::park_log_message;
-    use crate::tools::tmux::workflow::ParkResult;
+    use crate::tools::zellij::workflow::ParkResult;
 
     #[test]
     fn parked_message_includes_repo_and_branch() {

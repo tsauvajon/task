@@ -11,10 +11,6 @@
 #     wtDir = "~/dev/wt";
 #     detachedDir = "~/dev/detached";
 #     editor = "helix";
-#     installs = [
-#       { repo = "github.com/tsauvajon/goto"; }
-#       { repo = "github.com/example/foo"; path = "crates/foo-cli"; }
-#     ];
 #     extraConfig = { vscodium.trusted_roots = [ "/path/one" ]; };
 #   };
 #
@@ -39,39 +35,11 @@ let
     types
     ;
 
-  installEntry = types.submodule {
-    options = {
-      repo = mkOption {
-        type = types.str;
-        example = "github.com/tsauvajon/goto";
-        description = "Repo identifier (matches a detach target).";
-      };
-      path = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = "Optional crate path within a workspace.";
-      };
-      extraFlags = mkOption {
-        type = types.listOf types.str;
-        default = [ ];
-        description = "Extra flags forwarded to `cargo install`.";
-      };
-    };
-  };
-
-  # Render a single [[install]] entry, omitting null/empty optional fields.
-  installAttrs =
-    entry:
-    { inherit (entry) repo; }
-    // lib.optionalAttrs (entry.path != null) { inherit (entry) path; }
-    // lib.optionalAttrs (entry.extraFlags != [ ]) { extra_flags = entry.extraFlags; };
-
   baseConfig = {
     repos_dir = cfg.reposDir;
     wt_dir = cfg.wtDir;
     detached_dir = cfg.detachedDir;
     editor = cfg.editor;
-    install = map installAttrs cfg.installs;
   };
 
   mergedConfig = lib.recursiveUpdate baseConfig cfg.extraConfig;
@@ -111,12 +79,6 @@ in
       type = types.str;
       default = "helix";
       description = "Default editor task should open files in.";
-    };
-
-    installs = mkOption {
-      type = types.listOf installEntry;
-      default = [ ];
-      description = "List of binaries to manage via `task detach install`.";
     };
 
     extraConfig = mkOption {

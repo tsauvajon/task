@@ -87,7 +87,7 @@ fn completion_values(
                 Vec::new()
             }
         }
-        "list" | "ui" | "worktrees" => {
+        "list" | "ui" => {
             if arg_count <= 1 {
                 repo_candidates(context)?
             } else {
@@ -96,13 +96,6 @@ fn completion_values(
         }
         "repo" => repo_subcommand_completions(context, args)?,
         "detach" => detach_subcommand_completions(context, args)?,
-        "doctor" => {
-            if arg_count <= 1 {
-                vec!["--fix".to_string()]
-            } else {
-                Vec::new()
-            }
-        }
         "completions" => vec!["bash".to_string(), "fish".to_string(), "zsh".to_string()],
         _ => Vec::new(),
     };
@@ -118,17 +111,14 @@ fn completion_values(
 
 fn top_level_commands() -> Vec<String> {
     [
-        "bootstrap",
         "doctor",
         "repo",
-        "clone",
         "start",
         "open",
         "park",
         "path",
         "list",
         "ui",
-        "worktrees",
         "finish",
         "check",
         "rebase",
@@ -187,7 +177,6 @@ fn detach_subcommand_completions(
         "add".to_string(),
         "update".to_string(),
         "remove".to_string(),
-        "install".to_string(),
         "list".to_string(),
     ];
 
@@ -232,13 +221,6 @@ fn detach_subcommand_completions(
                 Ok(Vec::new())
             }
         }
-        "install" => {
-            if sub_arg_count <= 1 {
-                install_repo_candidates(context)
-            } else {
-                Ok(Vec::new())
-            }
-        }
         "list" => Ok(Vec::new()),
         _ => Ok(Vec::new()),
     }
@@ -257,22 +239,6 @@ fn detached_repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<
         .into_iter()
         .map(|path| repo_key_from_detached_path(detached_dir, &path))
         .filter_map(|key| key.rsplit('/').next().map(str::to_string))
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    short_names.sort();
-    Ok(short_names)
-}
-
-fn install_repo_candidates(context: Option<&RuntimeEnvironment>) -> Result<Vec<String>> {
-    let Some(context) = context else {
-        return Ok(Vec::new());
-    };
-
-    let mut short_names: Vec<String> = context
-        .install_entries()
-        .iter()
-        .filter_map(|entry| entry.repo.rsplit('/').next().map(str::to_string))
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -321,7 +287,7 @@ fn task_candidates(
         None => context.tasks().available_repo_keys()?,
     };
 
-    // Empty set — completions don't need real tmux session state.
+    // Empty set — completions don't need real Zellij session state.
     let open_sessions = HashSet::new();
     let mut branches: Vec<String> = keys
         .into_iter()
@@ -382,17 +348,14 @@ mod tests {
         fn includes_all_expected() {
             let cmds = top_level_commands();
             for expected in [
-                "bootstrap",
                 "doctor",
                 "repo",
-                "clone",
                 "start",
                 "open",
                 "park",
                 "path",
                 "list",
                 "ui",
-                "worktrees",
                 "finish",
                 "check",
                 "rebase",
@@ -423,7 +386,7 @@ mod tests {
         fn top_level_available_without_configured_context() {
             let values = completion_values(None, &[]).expect("top-level completion values");
             assert!(values.contains(&"doctor".to_string()));
-            assert!(values.contains(&"bootstrap".to_string()));
+            assert!(values.contains(&"start".to_string()));
         }
 
         #[test]
@@ -431,7 +394,7 @@ mod tests {
             let values = completion_values(None, &["".to_string()])
                 .expect("top-level completion from empty word");
             assert!(values.contains(&"doctor".to_string()));
-            assert!(values.contains(&"bootstrap".to_string()));
+            assert!(values.contains(&"start".to_string()));
         }
 
         #[test]
@@ -498,12 +461,11 @@ mod tests {
         }
 
         #[test]
-        fn doctor_dash_includes_help_and_fix() {
+        fn doctor_dash_includes_help_flags() {
             let values = completion_values(None, &["doctor".to_string(), "-".to_string()])
                 .expect("doctor dash flags");
             assert!(values.contains(&"-h".to_string()));
             assert!(values.contains(&"--help".to_string()));
-            assert!(values.contains(&"--fix".to_string()));
         }
 
         #[test]
@@ -514,33 +476,9 @@ mod tests {
         }
 
         #[test]
-        fn doctor_includes_fix_flag() {
+        fn doctor_takes_no_positional_args() {
             let values = completion_values(None, &["doctor".to_string(), "".to_string()])
                 .expect("doctor completion values");
-            assert_eq!(values, vec!["--fix".to_string()]);
-        }
-
-        #[test]
-        fn doctor_returns_empty_after_fix_flag() {
-            let values = completion_values(
-                None,
-                &["doctor".to_string(), "--fix".to_string(), "".to_string()],
-            )
-            .expect("doctor extra arg");
-            assert!(values.is_empty());
-        }
-
-        #[test]
-        fn doctor_with_fix_prefix_returns_fix_flag() {
-            let values = completion_values(None, &["doctor".to_string(), "--f".to_string()])
-                .expect("doctor --fix prefix");
-            assert_eq!(values, vec!["--fix"]);
-        }
-
-        #[test]
-        fn doctor_with_non_matching_prefix_returns_empty() {
-            let values = completion_values(None, &["doctor".to_string(), "--xyz".to_string()])
-                .expect("doctor non-matching prefix");
             assert!(values.is_empty());
         }
 
@@ -738,13 +676,6 @@ mod tests {
         }
 
         #[test]
-        fn worktrees_returns_empty_without_context() {
-            let values = completion_values(None, &["worktrees".to_string(), "".to_string()])
-                .expect("worktrees completions");
-            assert!(values.is_empty());
-        }
-
-        #[test]
         fn completions_suggests_all_shells() {
             let values =
                 completion_values(None, &["completions".to_string()]).expect("shell completions");
@@ -825,7 +756,7 @@ mod tests {
         fn detach_alone_suggests_subcommands() {
             let values = completion_values(None, &["detach".to_string(), "".to_string()])
                 .expect("detach subcommand completions");
-            for expected in ["add", "update", "remove", "install", "list"] {
+            for expected in ["add", "update", "remove", "list"] {
                 assert!(
                     values.contains(&expected.to_string()),
                     "missing {expected} in {values:?}"
@@ -932,16 +863,6 @@ mod tests {
                 &["detach".to_string(), "add".to_string(), "".to_string()],
             )
             .expect("detach add without context");
-            assert!(values.is_empty());
-        }
-
-        #[test]
-        fn detach_install_without_context_returns_empty() {
-            let values = completion_values(
-                None,
-                &["detach".to_string(), "install".to_string(), "".to_string()],
-            )
-            .expect("detach install without context");
             assert!(values.is_empty());
         }
 
