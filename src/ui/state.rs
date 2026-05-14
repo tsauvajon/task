@@ -408,10 +408,15 @@ impl UiState {
         if details.is_empty() || self.task_rows.is_empty() {
             return;
         }
+        let mut changed = false;
         for (path, detail) in details {
             if self.task_rows.iter().any(|row| &row.path == path) {
                 self.task_card_details.insert(path.clone(), detail.clone());
+                changed = true;
             }
+        }
+        if changed {
+            self.apply_task_filter();
         }
     }
 
@@ -575,11 +580,17 @@ impl UiState {
                     return true;
                 }
 
+                let session_title = self
+                    .task_card_details
+                    .get(&row.path)
+                    .and_then(|details| details.session_title.as_deref())
+                    .unwrap_or_default();
                 let haystack = format!(
-                    "{} {} {}",
+                    "{} {} {} {}",
                     row.repo.to_lowercase(),
                     row.branch.to_lowercase(),
                     row.path.to_string_lossy().to_lowercase(),
+                    session_title.to_lowercase(),
                 );
                 tokens.iter().all(|token| haystack.contains(token.as_str()))
             })
@@ -776,7 +787,7 @@ impl UiState {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{RepoRow, UiState};
+    use super::{RepoRow, TaskCardDetails, UiState};
     use crate::runtime::task_rows::{TaskRow, TaskStatus};
 
     fn repo_row(repo: &str, open_tasks: usize, parked_tasks: usize) -> RepoRow {
@@ -1310,6 +1321,31 @@ mod tests {
             );
             state.filter_text = "special".to_string();
             state.apply_task_filter();
+            assert_eq!(state.task_filtered_indices, vec![0]);
+        }
+
+        #[test]
+        fn matches_by_session_title_when_card_details_arrive() {
+            let row = task_row_for_repo("github.com/acme/app");
+            let path = row.path.clone();
+            let mut state = UiState::new(
+                vec![row, task_row_for_repo("github.com/acme/other")],
+                vec![],
+                None,
+            );
+            state.filter_text = "compact cards".to_string();
+
+            state.apply_task_filter();
+            assert!(state.task_filtered_indices.is_empty());
+
+            state.apply_task_card_details(&[(
+                path,
+                TaskCardDetails {
+                    session_title: Some("Ship compact task cards".to_string()),
+                    ..TaskCardDetails::default()
+                },
+            )]);
+
             assert_eq!(state.task_filtered_indices, vec![0]);
         }
 
