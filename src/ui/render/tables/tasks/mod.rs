@@ -31,10 +31,18 @@ pub(in crate::ui::render) fn render_tasks(
     let rows: Vec<ListItem> = state
         .task_filtered_indices
         .iter()
-        .filter_map(|index| {
-            let row = state.task_rows.get(*index)?;
+        .enumerate()
+        .filter_map(|(visible_index, row_index)| {
+            let row = state.task_rows.get(*row_index)?;
             let details = state.task_card_details_for(row);
-            Some(task_card(row, &details, scoped, area.width, theme))
+            Some(task_card(
+                row,
+                &details,
+                scoped,
+                area.width,
+                visible_index == state.task_selected,
+                theme,
+            ))
         })
         .collect();
     let row_count = rows.len();
@@ -45,8 +53,7 @@ pub(in crate::ui::render) fn render_tasks(
                 .padding(Padding::new(1, 1, 0, 0))
                 .style(Style::default().bg(theme.panel_main)),
         )
-        .highlight_style(theme.row_highlight_style())
-        .highlight_symbol("▶ ");
+        .highlight_style(theme.row_highlight_style());
 
     let mut list_state = ListState::default();
     if !state.task_filtered_indices.is_empty() {
@@ -74,6 +81,7 @@ fn task_card<'a>(
     details: &TaskCardDetails,
     scoped: bool,
     width: u16,
+    selected: bool,
     theme: &Theme,
 ) -> ListItem<'a> {
     let inactive = is_inactive(row);
@@ -109,6 +117,7 @@ fn task_card<'a>(
 
     ListItem::new(vec![
         Line::from(vec![
+            selection_marker(false, theme),
             side_span(side_style),
             Span::raw(" "),
             Span::styled(agent_icon(row.opencode), agent_style),
@@ -116,13 +125,27 @@ fn task_card<'a>(
             Span::styled(branch, branch_style),
         ]),
         Line::from(vec![
+            selection_marker(selected, theme),
             side_span(side_style),
             Span::raw(" "),
             Span::styled(repo, text_style),
         ]),
-        Line::from(diff_line),
+        Line::from(diff_line_with_marker(diff_line, theme)),
         Line::from(""),
     ])
+}
+
+fn selection_marker(selected: bool, theme: &Theme) -> Span<'static> {
+    if selected {
+        Span::styled("▶ ", theme.text_style())
+    } else {
+        Span::raw("  ")
+    }
+}
+
+fn diff_line_with_marker<'a>(mut diff_line: Vec<Span<'a>>, theme: &Theme) -> Vec<Span<'a>> {
+    diff_line.insert(0, selection_marker(false, theme));
+    diff_line
 }
 
 fn diff_line<'a>(
@@ -308,6 +331,35 @@ mod tests {
         );
         assert!(lines.iter().any(|line| line.contains("●")));
         assert!(!lines.iter().any(|line| line.contains("open · busy")));
+    }
+
+    #[test]
+    fn selected_card_indicator_is_centered_on_middle_content_line() {
+        let row = task_row(
+            "github.com/acme/app",
+            "feat/card-view",
+            TaskStatus::Open,
+            OpenCodeState::Busy,
+        );
+        let mut state = UiState::new(vec![row], vec![], None);
+
+        let lines = render_to_lines(&mut state, 100, 8);
+        let branch_line = lines
+            .iter()
+            .find(|line| line.contains("feat/card-view"))
+            .expect("branch line");
+        let repo_line = lines
+            .iter()
+            .find(|line| line.contains("github.com/acme/app"))
+            .expect("repo line");
+        let diff_line = lines
+            .iter()
+            .find(|line| line.contains("clean"))
+            .expect("diff line");
+
+        assert!(!branch_line.contains("▶"));
+        assert!(repo_line.contains("▶"));
+        assert!(!diff_line.contains("▶"));
     }
 
     #[test]
