@@ -138,6 +138,89 @@ pub fn status_porcelain(worktree: &Path) -> Result<String> {
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorktreeDiff {
+    pub added: usize,
+    pub modified: usize,
+    pub deleted: usize,
+    pub renamed: usize,
+    pub untracked: usize,
+}
+
+impl WorktreeDiff {
+    #[must_use]
+    pub fn is_clean(self) -> bool {
+        self.total_files() == 0
+    }
+
+    #[must_use]
+    pub fn total_files(self) -> usize {
+        self.added + self.modified + self.deleted + self.renamed + self.untracked
+    }
+
+    #[must_use]
+    pub fn label(self) -> String {
+        if self.is_clean() {
+            return "clean".to_string();
+        }
+
+        let mut parts = Vec::new();
+        if self.added > 0 {
+            parts.push(format!("+{}", self.added));
+        }
+        if self.modified > 0 {
+            parts.push(format!("~{}", self.modified));
+        }
+        if self.deleted > 0 {
+            parts.push(format!("-{}", self.deleted));
+        }
+        if self.renamed > 0 {
+            parts.push(format!("→{}", self.renamed));
+        }
+        if self.untracked > 0 {
+            parts.push(format!("?{}", self.untracked));
+        }
+        parts.join(" ")
+    }
+}
+
+pub fn diff_summary(worktree: &Path) -> Result<WorktreeDiff> {
+    status_porcelain(worktree).map(|status| parse_status_porcelain(&status))
+}
+
+#[must_use]
+pub fn parse_status_porcelain(status: &str) -> WorktreeDiff {
+    let mut diff = WorktreeDiff::default();
+    for line in status.lines().filter(|line| !line.trim().is_empty()) {
+        classify_status_line(line, &mut diff);
+    }
+    diff
+}
+
+fn classify_status_line(line: &str, diff: &mut WorktreeDiff) {
+    let code = line.get(..2).unwrap_or(line);
+    if code == "??" {
+        diff.untracked += 1;
+        return;
+    }
+    if code == "!!" {
+        return;
+    }
+
+    let mut chars = code.chars();
+    let index = chars.next().unwrap_or(' ');
+    let worktree = chars.next().unwrap_or(' ');
+    if matches!(index, 'R' | 'C') || matches!(worktree, 'R' | 'C') {
+        diff.renamed += 1;
+    } else if matches!(index, 'A') || matches!(worktree, 'A') {
+        diff.added += 1;
+    } else if matches!(index, 'D') || matches!(worktree, 'D') {
+        diff.deleted += 1;
+    } else if matches!(index, 'M' | 'T' | 'U') || matches!(worktree, 'M' | 'T' | 'U') {
+        diff.modified += 1;
+    }
+}
+
 pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
     status(&["-C", worktree_str.as_ref(), "rebase", base_ref], None)
@@ -432,7 +515,7 @@ mod tests {
     use super::{
         WorktreeEntry, add_from_base, add_tracking_remote_branch, branch_from_ref,
         branch_from_worktree_path, checkout_or_create_branch, list_registered_worktrees,
-        parse_worktree_porcelain, update_detached,
+        parse_status_porcelain, parse_worktree_porcelain, update_detached,
     };
 
     struct TempDir(PathBuf);
@@ -1186,6 +1269,38 @@ branch refs/heads/main\n\
                 out
             };
             assert_eq!(canon(fs_paths), canon(git_paths));
+        }
+    }
+
+    mod parse_status_porcelain_tests {
+        use super::*;
+
+        #[test]
+        fn empty_status_is_clean() {
+            let diff = parse_status_porcelain("");
+            assert!(diff.is_clean());
+            assert_eq!(diff.label(), "clean");
+        }
+
+        #[test]
+        fn counts_common_file_states() {
+            let diff = parse_status_porcelain(
+                "A  new.rs\n M edited.rs\nD  removed.rs\nR  old.rs -> moved.rs\n?? scratch.txt\n",
+            );
+
+            assert_eq!(diff.added, 1);
+            assert_eq!(diff.modified, 1);
+            assert_eq!(diff.deleted, 1);
+            assert_eq!(diff.renamed, 1);
+            assert_eq!(diff.untracked, 1);
+            assert_eq!(diff.total_files(), 5);
+            assert_eq!(diff.label(), "+1 ~1 -1 →1 ?1");
+        }
+
+        #[test]
+        fn ignores_ignored_entries() {
+            let diff = parse_status_porcelain("!! target/\n");
+            assert!(diff.is_clean());
         }
     }
 }

@@ -24,12 +24,12 @@ use std::{
 use rayon::prelude::*;
 
 use super::{
-    state::{LoadMsg, RepoRow},
+    state::{LoadMsg, RepoRow, TaskCardDetails},
     tasks::{count_repo_worktrees_with_canonical_wt, is_detached_worktree_path},
 };
 use crate::{
     runtime::{RepoKey, environment::RuntimeEnvironment},
-    tools::opencode::status::OpenCodeSnapshot,
+    tools::{git::worktrees::diff_summary, opencode::status::OpenCodeSnapshot},
 };
 
 /// Handle to a spawned loader thread. Consumers poll [`Self::try_recv`]
@@ -266,6 +266,35 @@ pub(super) fn spawn_opencode_refresh(paths: Vec<PathBuf>) -> LoaderHandle {
             })
             .collect();
         let _ = tx.send(LoadMsg::OpenCodeTick { states });
+    });
+
+    LoaderHandle { rx, stop }
+}
+
+pub(super) fn spawn_task_card_details_refresh(paths: Vec<PathBuf>) -> LoaderHandle {
+    let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = Arc::clone(&stop);
+
+    thread::spawn(move || {
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let snapshot = OpenCodeSnapshot::collect();
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let details: Vec<(PathBuf, TaskCardDetails)> = paths
+            .into_iter()
+            .map(|path| {
+                let detail = TaskCardDetails {
+                    diff: diff_summary(&path).unwrap_or_default(),
+                    session_title: snapshot.title_for(&path),
+                };
+                (path, detail)
+            })
+            .collect();
+        let _ = tx.send(LoadMsg::TaskCardDetailsTick { details });
     });
 
     LoaderHandle { rx, stop }
@@ -517,6 +546,45 @@ mod tests {
             // unwinding has time to surface; Rust test harness would
             // then fail the test.
             std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    mod task_card_details_worker {
+        use std::{path::PathBuf, time::Duration};
+
+        use super::super::{LoadMsg, LoaderHandle, spawn_task_card_details_refresh};
+
+        fn wait_for_tick(handle: &LoaderHandle, timeout: Duration) -> Option<LoadMsg> {
+            let start = std::time::Instant::now();
+            while start.elapsed() < timeout {
+                if let Some(msg) = handle.try_recv() {
+                    return Some(msg);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            None
+        }
+
+        #[test]
+        fn emits_details_for_every_input_path() {
+            let paths = vec![
+                PathBuf::from("/tmp/task-rs-card-a"),
+                PathBuf::from("/tmp/task-rs-card-b"),
+            ];
+            let handle = spawn_task_card_details_refresh(paths.clone());
+
+            let msg = wait_for_tick(&handle, Duration::from_secs(2)).expect("one tick");
+            let LoadMsg::TaskCardDetailsTick { details } = msg else {
+                panic!("unexpected variant: {msg:?}");
+            };
+            assert_eq!(details.len(), paths.len());
+            for path in &paths {
+                assert!(
+                    details.iter().any(|(p, _)| p == path),
+                    "details should include {}",
+                    path.display()
+                );
+            }
         }
     }
 }

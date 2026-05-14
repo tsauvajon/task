@@ -1,4 +1,7 @@
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 #[cfg(test)]
 use rayon::prelude::*;
@@ -138,6 +141,91 @@ pub(super) fn is_detached_worktree_path(path: &std::path::Path) -> bool {
     is_detached_worktree(path)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TaskRefreshFingerprint {
+    entries: Vec<String>,
+}
+
+pub(super) fn task_refresh_fingerprint(
+    context: &RuntimeEnvironment,
+    repo_scope: Option<&str>,
+) -> Result<TaskRefreshFingerprint> {
+    let open_sessions = context.tasks().open_sessions();
+    let wt_dir = context.layout().wt_dir();
+    let real_wt_dir = canonical(wt_dir);
+    let repos = fingerprint_repos(context, repo_scope)?;
+    let mut entries = Vec::new();
+
+    for (repo_key, gitdir) in repos {
+        entries.push(repo_fingerprint_entry(
+            &repo_key,
+            context.layout().detached_path(&repo_key),
+        ));
+        entries.extend(task_fingerprint_entries_for_repo(
+            &repo_key,
+            &gitdir,
+            &real_wt_dir,
+            wt_dir,
+            &open_sessions,
+        ));
+    }
+
+    entries.sort();
+    Ok(TaskRefreshFingerprint { entries })
+}
+
+fn fingerprint_repos(
+    context: &RuntimeEnvironment,
+    repo_scope: Option<&str>,
+) -> Result<Vec<(RepoKey, PathBuf)>> {
+    let Some(repo_arg) = repo_scope else {
+        return context.tasks().available_repos();
+    };
+    let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
+    let gitdir = context.layout().repo_gitdir_path(&repo_key);
+    if gitdir.is_dir() {
+        Ok(vec![(repo_key, gitdir)])
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn repo_fingerprint_entry(repo_key: &RepoKey, detached_path: PathBuf) -> String {
+    format!(
+        "repo\0{}\0detached:{}",
+        repo_key,
+        is_detached_worktree_path(&detached_path)
+    )
+}
+
+fn task_fingerprint_entries_for_repo(
+    repo_key: &RepoKey,
+    gitdir: &Path,
+    real_wt_dir: &Path,
+    wt_dir: &Path,
+    open_sessions: &HashSet<String>,
+) -> Vec<String> {
+    let task_root_real = real_wt_dir.join(repo_key.as_str());
+    let mut entries = Vec::new();
+
+    for wt_path in list_registered_worktrees(gitdir) {
+        let real_path = std::fs::canonicalize(&wt_path).unwrap_or_else(|_| wt_path.clone());
+        if !real_path.starts_with(&task_root_real) || real_path == task_root_real {
+            continue;
+        }
+        let wt_name = worktree_name(wt_dir, repo_key.as_str(), &wt_path);
+        let session = session_name(repo_key.as_str(), &wt_name);
+        entries.push(format!(
+            "task\0{}\0{}\0open:{}",
+            repo_key,
+            wt_name,
+            open_sessions.contains(&session)
+        ));
+    }
+
+    entries
+}
+
 /// Count `(open, parked)` task worktrees for a repo without spawning git.
 ///
 /// Reads `<gitdir>/worktrees/*/gitdir` from disk, keeps only worktrees that
@@ -189,7 +277,6 @@ pub(super) fn count_repo_worktrees_with_canonical_wt(
     (open, parked)
 }
 
-#[cfg(test)]
 fn canonical(path: &Path) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -818,7 +905,7 @@ mod tests {
     mod count_repo_worktrees_tests {
         use std::{collections::HashSet, fs};
 
-        use super::super::count_repo_worktrees;
+        use super::super::{count_repo_worktrees, task_fingerprint_entries_for_repo};
         use crate::{runtime::RepoKey, tools::zellij::naming::session_name};
 
         struct TempDir(std::path::PathBuf);
@@ -963,6 +1050,33 @@ mod tests {
 
             let (open, parked) = count_repo_worktrees(&repo_key, &gitdir, &wt_dir, &sessions);
             assert_eq!((open, parked), (2, 1));
+        }
+
+        #[test]
+        fn fingerprint_marks_matching_session_as_open() {
+            let dir = TempDir::new("fingerprint-open");
+            let gitdir = dir.path().join("repo.git");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let wt_path = wt_dir.join("github.com/me/app/feat");
+            register(&gitdir, "feat", &wt_path);
+
+            let mut sessions = HashSet::new();
+            sessions.insert(session_name(repo_key.as_str(), "feat"));
+            let real_wt_dir = std::fs::canonicalize(&wt_dir).unwrap_or_else(|_| wt_dir.clone());
+
+            let entries = task_fingerprint_entries_for_repo(
+                &repo_key,
+                &gitdir,
+                &real_wt_dir,
+                &wt_dir,
+                &sessions,
+            );
+
+            assert_eq!(entries, vec!["task\0github.com/me/app\0feat\0open:true"]);
         }
     }
 }

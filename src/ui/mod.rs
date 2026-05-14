@@ -11,7 +11,7 @@ use self::{
     loader::LoaderHandle,
     render::render,
     state::{InputMode, UiAction, UiState, ViewMode},
-    tasks::initial_repo_scope,
+    tasks::{TaskRefreshFingerprint, initial_repo_scope, task_refresh_fingerprint},
     terminal::TerminalGuard,
 };
 use crate::{error::Result, runtime::environment::RuntimeEnvironment};
@@ -33,6 +33,10 @@ const TICK: Duration = Duration::from_millis(100);
 /// Cadence of the background OpenCode-state refresher. Short enough to
 /// feel live while the user reads the Tasks view.
 const OPENCODE_REFRESH_INTERVAL: Duration = Duration::from_millis(600);
+
+const TASK_CARD_DETAILS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+const TASK_TOPOLOGY_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     context.tasks().ensure_layout()?;
@@ -84,6 +88,7 @@ fn run_event_loop(
     // loader so they don't contend with per-repo git work. `Option`
     // because no refresher is active until the first tick deadline.
     let mut opencode_refresh: Option<LoaderHandle> = None;
+    let mut task_card_details_refresh: Option<LoaderHandle> = None;
     // Back-date the "last refresh" timestamp so the first tick fires
     // immediately on startup. `checked_sub` guards against the case
     // where the platform's monotonic clock starts close to zero (e.g.
@@ -91,32 +96,49 @@ fn run_event_loop(
     let mut last_opencode_refresh = Instant::now()
         .checked_sub(OPENCODE_REFRESH_INTERVAL)
         .unwrap_or_else(Instant::now);
+    let mut last_task_card_details_refresh = Instant::now()
+        .checked_sub(TASK_CARD_DETAILS_REFRESH_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    let mut last_task_topology_refresh = Instant::now()
+        .checked_sub(TASK_TOPOLOGY_REFRESH_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    let mut task_refresh_fingerprint: Option<TaskRefreshFingerprint> = None;
+    let mut fingerprint_generation = state.load_generation;
 
     loop {
         // Drain background loader messages before each frame.
         while let Some(msg) = loader.try_recv() {
             state.apply_load_msg(msg);
         }
-        if let Some(handle) = &opencode_refresh {
-            let mut got_tick = false;
-            while let Some(msg) = handle.try_recv() {
-                got_tick = true;
-                state.apply_load_msg(msg);
-            }
-            // The refresher emits exactly one message and exits. Drop
-            // the handle so the next interval can spawn a new one.
-            if got_tick {
-                opencode_refresh = None;
-            }
+        drain_one_shot_loader(&mut opencode_refresh, state);
+        drain_one_shot_loader(&mut task_card_details_refresh, state);
+
+        if fingerprint_generation != state.load_generation {
+            task_refresh_fingerprint = None;
+            fingerprint_generation = state.load_generation;
         }
 
         // Start a new OpenCode refresh when the interval elapses and
         // nothing is in flight. Gated on having task rows — no point
         // paying for the sysinfo scan when the list is empty.
+        maybe_auto_refresh_task_topology(
+            context,
+            state,
+            &mut loader,
+            &mut task_refresh_fingerprint,
+            &mut last_task_topology_refresh,
+            Instant::now(),
+        );
         maybe_spawn_opencode_refresh(
             state,
             &mut opencode_refresh,
             &mut last_opencode_refresh,
+            Instant::now(),
+        );
+        maybe_spawn_task_card_details_refresh(
+            state,
+            &mut task_card_details_refresh,
+            &mut last_task_card_details_refresh,
             Instant::now(),
         );
 
@@ -198,6 +220,54 @@ fn restart_loader(context: &RuntimeEnvironment, state: &mut UiState, loader: &mu
     let _ = std::mem::replace(loader, new_handle);
 }
 
+fn drain_one_shot_loader(handle: &mut Option<LoaderHandle>, state: &mut UiState) {
+    let mut got_tick = false;
+    if let Some(loader) = handle.as_ref() {
+        while let Some(msg) = loader.try_recv() {
+            got_tick = true;
+            state.apply_load_msg(msg);
+        }
+    }
+    if got_tick {
+        *handle = None;
+    }
+}
+
+fn maybe_auto_refresh_task_topology(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+    current_fingerprint: &mut Option<TaskRefreshFingerprint>,
+    last_refresh: &mut Instant,
+    now: Instant,
+) {
+    if now.saturating_duration_since(*last_refresh) < TASK_TOPOLOGY_REFRESH_INTERVAL {
+        return;
+    }
+    *last_refresh = now;
+
+    if state.task_load.is_loading() || state.repo_load.is_loading() {
+        return;
+    }
+    if matches!(state.mode, InputMode::CreateTask | InputMode::CloneRepo) {
+        return;
+    }
+
+    let Ok(next_fingerprint) = task_refresh_fingerprint(context, state.task_repo_scope.as_deref())
+    else {
+        return;
+    };
+    let Some(previous_fingerprint) = current_fingerprint.replace(next_fingerprint.clone()) else {
+        return;
+    };
+    if previous_fingerprint == next_fingerprint {
+        return;
+    }
+
+    refresh_all(context, state, loader);
+    state.message = "Task list changed; refreshing…".to_string();
+}
+
 /// Spawn a fresh OpenCode refresher when the interval has elapsed,
 /// there is no refresher already in flight, and there is at least one
 /// task row to classify. Dropping the previous handle (even if still
@@ -226,6 +296,27 @@ fn maybe_spawn_opencode_refresh(
 
     let paths: Vec<_> = state.task_rows.iter().map(|row| row.path.clone()).collect();
     *handle = Some(loader::spawn_opencode_refresh(paths));
+    *last_refresh = now;
+}
+
+fn maybe_spawn_task_card_details_refresh(
+    state: &UiState,
+    handle: &mut Option<LoaderHandle>,
+    last_refresh: &mut Instant,
+    now: Instant,
+) {
+    if handle.is_some() {
+        return;
+    }
+    if now.saturating_duration_since(*last_refresh) < TASK_CARD_DETAILS_REFRESH_INTERVAL {
+        return;
+    }
+    if state.task_rows.is_empty() {
+        return;
+    }
+
+    let paths: Vec<_> = state.task_rows.iter().map(|row| row.path.clone()).collect();
+    *handle = Some(loader::spawn_task_card_details_refresh(paths));
     *last_refresh = now;
 }
 
