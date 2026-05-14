@@ -138,6 +138,82 @@ pub fn status_porcelain(worktree: &Path) -> Result<String> {
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorktreeDiff {
+    pub added_lines: usize,
+    pub deleted_lines: usize,
+    pub changed_files: usize,
+}
+
+impl WorktreeDiff {
+    #[must_use]
+    pub fn is_clean(self) -> bool {
+        self.changed_files == 0
+    }
+
+    #[must_use]
+    pub fn label(self) -> String {
+        if self.is_clean() {
+            return "clean".to_string();
+        }
+
+        if self.added_lines == 0 && self.deleted_lines == 0 {
+            return format!(
+                "{} file{}",
+                self.changed_files,
+                if self.changed_files == 1 { "" } else { "s" }
+            );
+        }
+
+        let mut parts = Vec::new();
+        if self.added_lines > 0 {
+            parts.push(format!("+{}", self.added_lines));
+        }
+        if self.deleted_lines > 0 {
+            parts.push(format!("-{}", self.deleted_lines));
+        }
+        parts.join(" ")
+    }
+}
+
+pub fn diff_summary(worktree: &Path) -> Result<WorktreeDiff> {
+    let worktree_str = worktree.to_string_lossy();
+    capture(
+        &[
+            "-C",
+            worktree_str.as_ref(),
+            "diff",
+            "--no-ext-diff",
+            "--numstat",
+            "HEAD",
+            "--",
+        ],
+        None,
+    )
+    .map(|numstat| parse_diff_numstat(&numstat))
+}
+
+#[must_use]
+pub fn parse_diff_numstat(numstat: &str) -> WorktreeDiff {
+    let mut diff = WorktreeDiff::default();
+    for line in numstat.lines().filter(|line| !line.trim().is_empty()) {
+        add_numstat_line(line, &mut diff);
+    }
+    diff
+}
+
+fn add_numstat_line(line: &str, diff: &mut WorktreeDiff) {
+    let mut fields = line.splitn(3, '\t');
+    let (Some(added), Some(deleted), Some(_path)) = (fields.next(), fields.next(), fields.next())
+    else {
+        return;
+    };
+
+    diff.added_lines += added.parse::<usize>().unwrap_or(0);
+    diff.deleted_lines += deleted.parse::<usize>().unwrap_or(0);
+    diff.changed_files += 1;
+}
+
 pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {
     let worktree_str = worktree.to_string_lossy();
     status(&["-C", worktree_str.as_ref(), "rebase", base_ref], None)
@@ -432,7 +508,7 @@ mod tests {
     use super::{
         WorktreeEntry, add_from_base, add_tracking_remote_branch, branch_from_ref,
         branch_from_worktree_path, checkout_or_create_branch, list_registered_worktrees,
-        parse_worktree_porcelain, update_detached,
+        parse_diff_numstat, parse_worktree_porcelain, update_detached,
     };
 
     struct TempDir(PathBuf);
@@ -1186,6 +1262,37 @@ branch refs/heads/main\n\
                 out
             };
             assert_eq!(canon(fs_paths), canon(git_paths));
+        }
+    }
+
+    mod parse_diff_numstat_tests {
+        use super::*;
+
+        #[test]
+        fn empty_diff_is_clean() {
+            let diff = parse_diff_numstat("");
+            assert!(diff.is_clean());
+            assert_eq!(diff.label(), "clean");
+        }
+
+        #[test]
+        fn sums_line_changes_across_files() {
+            let diff = parse_diff_numstat("12\t3\tsrc/main.rs\n115\t20\tsrc/ui.rs\n");
+
+            assert_eq!(diff.added_lines, 127);
+            assert_eq!(diff.deleted_lines, 23);
+            assert_eq!(diff.changed_files, 2);
+            assert_eq!(diff.label(), "+127 -23");
+        }
+
+        #[test]
+        fn binary_only_changes_fall_back_to_file_count() {
+            let diff = parse_diff_numstat("-\t-\timage.png\n");
+
+            assert_eq!(diff.added_lines, 0);
+            assert_eq!(diff.deleted_lines, 0);
+            assert_eq!(diff.changed_files, 1);
+            assert_eq!(diff.label(), "1 file");
         }
     }
 }

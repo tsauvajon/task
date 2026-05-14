@@ -21,6 +21,7 @@ use rusqlite::{Connection, OpenFlags};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionMeta {
     pub id: String,
+    pub title: String,
     /// Milliseconds since UNIX_EPOCH, as stored by OpenCode.
     pub time_updated: i64,
 }
@@ -122,7 +123,7 @@ fn latest_session_in_db(db_path: &Path, directories: &[String]) -> Option<Sessio
     // Build a parameter list like "?1, ?2, ?3" for an IN() clause.
     let placeholders: Vec<String> = (1..=directories.len()).map(|i| format!("?{i}")).collect();
     let sql = format!(
-        "SELECT id, time_updated FROM session \
+        "SELECT id, title, time_updated FROM session \
          WHERE time_archived IS NULL AND directory IN ({}) \
          ORDER BY time_updated DESC LIMIT 1",
         placeholders.join(", ")
@@ -132,7 +133,8 @@ fn latest_session_in_db(db_path: &Path, directories: &[String]) -> Option<Sessio
     conn.query_row(&sql, params, |row| {
         Ok(SessionMeta {
             id: row.get::<_, String>(0)?,
-            time_updated: row.get::<_, i64>(1)?,
+            title: row.get::<_, String>(1)?,
+            time_updated: row.get::<_, i64>(2)?,
         })
     })
     .ok()
@@ -218,9 +220,20 @@ mod tests {
         time_updated: i64,
         archived: Option<i64>,
     ) {
+        insert_session_with_title(conn, id, directory, "", time_updated, archived);
+    }
+
+    fn insert_session_with_title(
+        conn: &Connection,
+        id: &str,
+        directory: &str,
+        title: &str,
+        time_updated: i64,
+        archived: Option<i64>,
+    ) {
         conn.execute(
-            "INSERT INTO session (id, directory, time_updated, time_archived) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![id, directory, time_updated, archived],
+            "INSERT INTO session (id, directory, title, time_updated, time_archived) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, directory, title, time_updated, archived],
         )
         .unwrap();
     }
@@ -325,6 +338,20 @@ mod tests {
             let got = latest_owned_session_in_dbs(&discover_in(&base), Path::new("/worktree"))
                 .expect("session");
             assert_eq!(got.session.id, "ses_live");
+
+            let _ = fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn includes_session_title() {
+            let base = temp_dir("latest-title");
+            let db = create_db(&base, "opencode-stable.db");
+            let conn = Connection::open(&db).unwrap();
+            insert_session_with_title(&conn, "ses_live", "/worktree", "Ship card view", 100, None);
+
+            let got = latest_owned_session_in_dbs(&discover_in(&base), Path::new("/worktree"))
+                .expect("session");
+            assert_eq!(got.session.title, "Ship card view");
 
             let _ = fs::remove_dir_all(&base);
         }

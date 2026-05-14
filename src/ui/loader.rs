@@ -24,28 +24,35 @@ use std::{
 use rayon::prelude::*;
 
 use super::{
-    state::{LoadMsg, RepoRow},
-    tasks::{count_repo_worktrees_with_canonical_wt, is_detached_worktree_path},
+    state::{LoadMsg, RepoRow, TaskCardDetails},
+    tasks::{
+        TaskTopologyFingerprint, compute_task_topology_fingerprint,
+        count_repo_worktrees_with_canonical_wt, is_detached_worktree_path,
+    },
 };
 use crate::{
     runtime::{RepoKey, environment::RuntimeEnvironment},
-    tools::opencode::status::OpenCodeSnapshot,
+    tools::{git::worktrees::diff_summary, opencode::status::OpenCodeSnapshot},
 };
 
 /// Handle to a spawned loader thread. Consumers poll [`Self::try_recv`]
 /// from the event loop. Dropping the handle cancels the worker.
-pub(super) struct LoaderHandle {
-    rx: mpsc::Receiver<LoadMsg>,
+pub(super) struct LoaderHandle<T = LoadMsg> {
+    rx: mpsc::Receiver<T>,
     stop: Arc<AtomicBool>,
 }
 
-impl LoaderHandle {
-    pub(super) fn try_recv(&self) -> Option<LoadMsg> {
+impl<T> LoaderHandle<T> {
+    pub(super) fn try_recv(&self) -> Option<T> {
         self.rx.try_recv().ok()
+    }
+
+    pub(super) fn try_recv_result(&self) -> std::result::Result<T, mpsc::TryRecvError> {
+        self.rx.try_recv()
     }
 }
 
-impl Drop for LoaderHandle {
+impl<T> Drop for LoaderHandle<T> {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
     }
@@ -266,6 +273,62 @@ pub(super) fn spawn_opencode_refresh(paths: Vec<PathBuf>) -> LoaderHandle {
             })
             .collect();
         let _ = tx.send(LoadMsg::OpenCodeTick { states });
+    });
+
+    LoaderHandle { rx, stop }
+}
+
+pub(super) fn spawn_task_card_details_refresh(paths: Vec<PathBuf>) -> LoaderHandle {
+    let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = Arc::clone(&stop);
+
+    thread::spawn(move || {
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let snapshot = OpenCodeSnapshot::collect();
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let details: Vec<(PathBuf, TaskCardDetails)> = paths
+            .into_iter()
+            .map(|path| {
+                let detail = TaskCardDetails {
+                    diff: diff_summary(&path).unwrap_or_default(),
+                    session_title: snapshot.title_for(&path),
+                    last_activity_ms: snapshot.last_activity_for(&path),
+                };
+                (path, detail)
+            })
+            .collect();
+        let _ = tx.send(LoadMsg::TaskCardDetailsTick { details });
+    });
+
+    LoaderHandle { rx, stop }
+}
+
+pub(super) fn spawn_task_topology_refresh(
+    context: RuntimeEnvironment,
+    task_repo_scope: Option<String>,
+) -> LoaderHandle<TaskTopologyFingerprint> {
+    let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = Arc::clone(&stop);
+
+    thread::spawn(move || {
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(fingerprint) =
+            compute_task_topology_fingerprint(&context, task_repo_scope.as_deref())
+        else {
+            return;
+        };
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = tx.send(fingerprint);
     });
 
     LoaderHandle { rx, stop }
@@ -517,6 +580,45 @@ mod tests {
             // unwinding has time to surface; Rust test harness would
             // then fail the test.
             std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    mod task_card_details_worker {
+        use std::{path::PathBuf, time::Duration};
+
+        use super::super::{LoadMsg, LoaderHandle, spawn_task_card_details_refresh};
+
+        fn wait_for_tick(handle: &LoaderHandle, timeout: Duration) -> Option<LoadMsg> {
+            let start = std::time::Instant::now();
+            while start.elapsed() < timeout {
+                if let Some(msg) = handle.try_recv() {
+                    return Some(msg);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            None
+        }
+
+        #[test]
+        fn emits_details_for_every_input_path() {
+            let paths = vec![
+                PathBuf::from("/tmp/task-rs-card-a"),
+                PathBuf::from("/tmp/task-rs-card-b"),
+            ];
+            let handle = spawn_task_card_details_refresh(paths.clone());
+
+            let msg = wait_for_tick(&handle, Duration::from_secs(2)).expect("one tick");
+            let LoadMsg::TaskCardDetailsTick { details } = msg else {
+                panic!("unexpected variant: {msg:?}");
+            };
+            assert_eq!(details.len(), paths.len());
+            for path in &paths {
+                assert!(
+                    details.iter().any(|(p, _)| p == path),
+                    "details should include {}",
+                    path.display()
+                );
+            }
         }
     }
 }

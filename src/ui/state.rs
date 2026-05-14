@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use ratatui::layout::Rect;
 
 use crate::{
     runtime::{BranchName, RepoKey, task_rows::TaskRow},
-    tools::opencode::status::OpenCodeState,
+    tools::{git::worktrees::WorktreeDiff, opencode::status::OpenCodeState},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +51,13 @@ pub(super) struct RepoRow {
     pub(super) open_tasks: usize,
     pub(super) parked_tasks: usize,
     pub(super) is_detached: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct TaskCardDetails {
+    pub(super) diff: WorktreeDiff,
+    pub(super) session_title: Option<String>,
+    pub(super) last_activity_ms: Option<i64>,
 }
 
 /// Progress of a background load. `total` is `None` while the
@@ -131,6 +138,12 @@ pub(super) enum LoadMsg {
     OpenCodeTick {
         states: Vec<(PathBuf, OpenCodeState)>,
     },
+    /// Periodic refresh of card-only metadata for every tracked task
+    /// row. Path-keyed like `OpenCodeTick`, so stale ticks can only
+    /// update rows that still exist in the current scope.
+    TaskCardDetailsTick {
+        details: Vec<(PathBuf, TaskCardDetails)>,
+    },
 }
 
 impl LoadMsg {
@@ -146,7 +159,7 @@ impl LoadMsg {
             | Self::RepoRow { generation, .. }
             | Self::RepoRowsDone { generation }
             | Self::RepoError { generation, .. } => Some(*generation),
-            Self::OpenCodeTick { .. } => None,
+            Self::OpenCodeTick { .. } | Self::TaskCardDetailsTick { .. } => None,
         }
     }
 }
@@ -161,6 +174,7 @@ pub(super) enum UiAction {
 #[derive(Debug, Clone)]
 pub(super) struct UiState {
     pub(super) task_rows: Vec<TaskRow>,
+    pub(super) task_card_details: HashMap<PathBuf, TaskCardDetails>,
     pub(super) task_filtered_indices: Vec<usize>,
     pub(super) task_selected: usize,
     pub(super) repo_rows: Vec<RepoRow>,
@@ -220,6 +234,7 @@ impl UiState {
     ) -> Self {
         let mut state = Self {
             task_rows,
+            task_card_details: HashMap::new(),
             task_filtered_indices: Vec::new(),
             task_selected: 0,
             repo_rows,
@@ -368,6 +383,9 @@ impl UiState {
             LoadMsg::OpenCodeTick { states, .. } => {
                 self.apply_opencode_states(&states);
             }
+            LoadMsg::TaskCardDetailsTick { details } => {
+                self.apply_task_card_details(&details);
+            }
         }
     }
 
@@ -384,6 +402,29 @@ impl UiState {
                 row.opencode = *state;
             }
         }
+    }
+
+    pub(super) fn apply_task_card_details(&mut self, details: &[(PathBuf, TaskCardDetails)]) {
+        if details.is_empty() || self.task_rows.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        for (path, detail) in details {
+            if self.task_rows.iter().any(|row| &row.path == path) {
+                self.task_card_details.insert(path.clone(), detail.clone());
+                changed = true;
+            }
+        }
+        if changed && !self.filter_text.is_empty() {
+            self.apply_task_filter();
+        }
+    }
+
+    pub(super) fn task_card_details_for(&self, row: &TaskRow) -> TaskCardDetails {
+        self.task_card_details
+            .get(&row.path)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Bump `load_generation` and return the new value. Use this when
@@ -403,6 +444,7 @@ impl UiState {
 
         self.load_generation = self.load_generation.wrapping_add(1);
         self.task_rows.clear();
+        self.task_card_details.clear();
         self.repo_rows.clear();
         self.task_selected = 0;
         self.repo_selected = 0;
@@ -538,11 +580,17 @@ impl UiState {
                     return true;
                 }
 
+                let session_title = self
+                    .task_card_details
+                    .get(&row.path)
+                    .and_then(|details| details.session_title.as_deref())
+                    .unwrap_or_default();
                 let haystack = format!(
-                    "{} {} {}",
+                    "{} {} {} {}",
                     row.repo.to_lowercase(),
                     row.branch.to_lowercase(),
                     row.path.to_string_lossy().to_lowercase(),
+                    session_title.to_lowercase(),
                 );
                 tokens.iter().all(|token| haystack.contains(token.as_str()))
             })
@@ -739,7 +787,7 @@ impl UiState {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{RepoRow, UiState};
+    use super::{RepoRow, TaskCardDetails, UiState};
     use crate::runtime::task_rows::{TaskRow, TaskStatus};
 
     fn repo_row(repo: &str, open_tasks: usize, parked_tasks: usize) -> RepoRow {
@@ -1273,6 +1321,31 @@ mod tests {
             );
             state.filter_text = "special".to_string();
             state.apply_task_filter();
+            assert_eq!(state.task_filtered_indices, vec![0]);
+        }
+
+        #[test]
+        fn matches_by_session_title_when_card_details_arrive() {
+            let row = task_row_for_repo("github.com/acme/app");
+            let path = row.path.clone();
+            let mut state = UiState::new(
+                vec![row, task_row_for_repo("github.com/acme/other")],
+                vec![],
+                None,
+            );
+            state.filter_text = "compact cards".to_string();
+
+            state.apply_task_filter();
+            assert!(state.task_filtered_indices.is_empty());
+
+            state.apply_task_card_details(&[(
+                path,
+                TaskCardDetails {
+                    session_title: Some("Ship compact task cards".to_string()),
+                    ..TaskCardDetails::default()
+                },
+            )]);
+
             assert_eq!(state.task_filtered_indices, vec![0]);
         }
 
@@ -2462,8 +2535,8 @@ mod tests {
         use super::*;
         use crate::{
             runtime::{BranchName, RepoKey, task_rows::TaskStatus},
-            tools::opencode::status::OpenCodeState,
-            ui::state::LoadMsg,
+            tools::{git::worktrees::WorktreeDiff, opencode::status::OpenCodeState},
+            ui::state::{LoadMsg, TaskCardDetails},
         };
 
         fn row(repo: &str, branch: &str, path: &str) -> TaskRow {
@@ -2482,6 +2555,9 @@ mod tests {
             // Ticks are path-keyed and safe to apply regardless of
             // generation, so they report no generation at all.
             let msg = LoadMsg::OpenCodeTick { states: vec![] };
+            assert_eq!(msg.generation(), None);
+
+            let msg = LoadMsg::TaskCardDetailsTick { details: vec![] };
             assert_eq!(msg.generation(), None);
         }
 
@@ -2584,6 +2660,59 @@ mod tests {
                 states: vec![(PathBuf::from("/tmp/a/main"), OpenCodeState::Hung)],
             });
             assert_eq!(state.task_rows[0].opencode, OpenCodeState::Hung);
+        }
+
+        #[test]
+        fn apply_task_card_details_updates_matching_row_by_path() {
+            let mut state = UiState::new(
+                vec![row("github.com/a/app", "main", "/tmp/a/main")],
+                vec![],
+                None,
+            );
+            state.apply_task_card_details(&[(
+                PathBuf::from("/tmp/a/main"),
+                TaskCardDetails {
+                    diff: WorktreeDiff {
+                        added_lines: 12,
+                        deleted_lines: 3,
+                        changed_files: 2,
+                    },
+                    session_title: Some("Ship cards".to_string()),
+                    last_activity_ms: Some(1_234),
+                },
+            )]);
+
+            let details = state.task_card_details_for(&state.task_rows[0]);
+            assert_eq!(details.diff.added_lines, 12);
+            assert_eq!(details.diff.deleted_lines, 3);
+            assert_eq!(details.session_title.as_deref(), Some("Ship cards"));
+            assert_eq!(details.last_activity_ms, Some(1_234));
+        }
+
+        #[test]
+        fn apply_task_card_details_preserves_filter_state_when_filter_empty() {
+            let mut state = UiState::new(
+                vec![
+                    row("github.com/a/app", "main", "/tmp/a/main"),
+                    row("github.com/b/app", "main", "/tmp/b/main"),
+                ],
+                vec![],
+                None,
+            );
+            state.task_filtered_indices = vec![1];
+            state.task_selected = 1;
+            let path = state.task_rows[0].path.clone();
+
+            state.apply_task_card_details(&[(
+                path,
+                TaskCardDetails {
+                    session_title: Some("Ship cards".to_string()),
+                    ..TaskCardDetails::default()
+                },
+            )]);
+
+            assert_eq!(state.task_filtered_indices, vec![1]);
+            assert_eq!(state.task_selected, 1);
         }
 
         /// `OpenCodeTick` is intentionally exempt from the generation

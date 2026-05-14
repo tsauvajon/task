@@ -22,6 +22,18 @@ pub(super) fn refresh_all(
     let _ = std::mem::replace(loader, new_handle);
 }
 
+pub(super) fn refresh_session_state(
+    state: &UiState,
+    task_card_details_refresh: &mut Option<LoaderHandle>,
+) {
+    if task_card_details_refresh.is_some() || state.task_rows.is_empty() {
+        return;
+    }
+
+    let paths: Vec<_> = state.task_rows.iter().map(|row| row.path.clone()).collect();
+    *task_card_details_refresh = Some(loader::spawn_task_card_details_refresh(paths));
+}
+
 pub(super) fn finish_and_refresh(
     context: &RuntimeEnvironment,
     state: &mut UiState,

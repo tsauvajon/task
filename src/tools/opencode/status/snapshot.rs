@@ -120,6 +120,24 @@ impl OpenCodeSnapshot {
             .unwrap_or(OpenCodeState::None)
     }
 
+    /// Return the latest non-empty OpenCode session title for `directory`.
+    #[must_use]
+    pub fn title_for(&self, directory: &Path) -> Option<String> {
+        self.sessions_for_directory(directory)
+            .into_iter()
+            .map(|(_, session)| session)
+            .max_by_key(|session| session.time_updated)
+            .and_then(|session| normalized_title(&session.title))
+    }
+
+    #[must_use]
+    pub fn last_activity_for(&self, directory: &Path) -> Option<i64> {
+        self.sessions_for_directory(directory)
+            .into_iter()
+            .map(|(db_path, session)| self.session_activity(&db_path, &session))
+            .max()
+    }
+
     /// Drop sessions whose latest activity predates the oldest live
     /// `opencode` process for the cwd.
     ///
@@ -135,15 +153,15 @@ impl OpenCodeSnapshot {
     ) -> Vec<(PathBuf, db::SessionMeta)> {
         sessions
             .into_iter()
-            .filter(|(db_path, session)| {
-                let activity = self
-                    .with_conn(db_path, |conn| latest_session_activity(conn, &session.id))
-                    .flatten()
-                    .unwrap_or(session.time_updated)
-                    .max(session.time_updated);
-                activity >= proc_start_ms
-            })
+            .filter(|(db_path, session)| self.session_activity(db_path, session) >= proc_start_ms)
             .collect()
+    }
+
+    fn session_activity(&self, db_path: &Path, session: &db::SessionMeta) -> i64 {
+        self.with_conn(db_path, |conn| latest_session_activity(conn, &session.id))
+            .flatten()
+            .unwrap_or(session.time_updated)
+            .max(session.time_updated)
     }
 
     /// Run `f` against the cached connection for `db_path`, opening
@@ -196,6 +214,15 @@ impl OpenCodeSnapshot {
             return OpenCodeState::Idle;
         };
         state
+    }
+}
+
+fn normalized_title(title: &str) -> Option<String> {
+    let title = title.trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
     }
 }
 
@@ -695,6 +722,71 @@ mod tests {
             let _ = fs::remove_dir_all(&base);
         }
     }
+
+    mod title_for {
+        use super::*;
+
+        #[test]
+        fn returns_latest_non_empty_title() {
+            let base = temp("title-for");
+            let db = new_db(&base, "opencode-stable.db");
+            let dir = base.join("worktree");
+            std::fs::create_dir_all(&dir).unwrap();
+
+            let conn = Connection::open(&db).unwrap();
+            insert_session_with_title(&conn, "old", &dir.to_string_lossy(), "Old title", 100);
+            insert_session_with_title(&conn, "new", &dir.to_string_lossy(), "Ship cards", 200);
+
+            let snap = snapshot_with(vec![db], 1_000, vec![dir.clone()]);
+            assert_eq!(snap.title_for(&dir).as_deref(), Some("Ship cards"));
+
+            let _ = fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn blank_title_returns_none() {
+            let base = temp("title-blank");
+            let db = new_db(&base, "opencode-stable.db");
+            let dir = base.join("worktree");
+            std::fs::create_dir_all(&dir).unwrap();
+
+            let conn = Connection::open(&db).unwrap();
+            insert_session_with_title(&conn, "session", &dir.to_string_lossy(), "   ", 100);
+
+            let snap = snapshot_with(vec![db], 1_000, vec![dir.clone()]);
+            assert!(snap.title_for(&dir).is_none());
+
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    mod last_activity_for {
+        use super::*;
+
+        #[test]
+        fn returns_latest_activity_across_matching_sessions() {
+            let base = temp("last-activity");
+            let db = new_db(&base, "opencode-stable.db");
+            let dir = base.join("worktree");
+            std::fs::create_dir_all(&dir).unwrap();
+
+            let conn = Connection::open(&db).unwrap();
+            insert_session(&conn, "older", &dir.to_string_lossy(), 100);
+            insert_session(&conn, "newer", &dir.to_string_lossy(), 200);
+            insert_message(
+                &conn,
+                "older",
+                900,
+                serde_json::json!({ "role": "assistant", "time": { "created": 900 } }),
+            );
+
+            let snap = snapshot_with(vec![db], 1_000, vec![dir.clone()]);
+            assert_eq!(snap.last_activity_for(&dir), Some(900));
+
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
     mod state_for_multi_dir {
         use super::*;
 

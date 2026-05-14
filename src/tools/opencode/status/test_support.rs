@@ -62,6 +62,20 @@ pub(super) fn insert_session(conn: &Connection, id: &str, directory: &str, time_
     insert_session_with_parent(conn, id, None, directory, time_updated, None);
 }
 
+pub(super) fn insert_session_with_title(
+    conn: &Connection,
+    id: &str,
+    directory: &str,
+    title: &str,
+    time_updated: i64,
+) {
+    conn.execute(
+        "INSERT INTO session (id, directory, title, time_updated) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![id, directory, title, time_updated],
+    )
+    .unwrap();
+}
+
 /// Insert a session row with optional `parent_id` and
 /// `time_archived`. Subagent child sessions carry a non-NULL
 /// `parent_id` pointing at the parent that spawned them.

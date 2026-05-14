@@ -1,4 +1,7 @@
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 #[cfg(test)]
 use rayon::prelude::*;
@@ -138,6 +141,107 @@ pub(super) fn is_detached_worktree_path(path: &std::path::Path) -> bool {
     is_detached_worktree(path)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TaskTopologyFingerprint {
+    pub(super) repos: Vec<(RepoKey, String)>,
+    pub(super) sessions: Vec<String>,
+}
+
+impl TaskTopologyFingerprint {
+    fn new(mut repos: Vec<(RepoKey, String)>, mut sessions: Vec<String>) -> Self {
+        repos.sort();
+        sessions.sort();
+        Self { repos, sessions }
+    }
+}
+
+pub(super) fn compute_task_topology_fingerprint(
+    context: &RuntimeEnvironment,
+    repo_scope: Option<&str>,
+) -> Result<TaskTopologyFingerprint> {
+    let open_sessions = context.tasks().open_sessions();
+    let wt_dir = context.layout().wt_dir();
+    let real_wt_dir = canonical(wt_dir);
+    let repos_to_scan = fingerprint_repos(context, repo_scope)?;
+    let mut repos = Vec::new();
+
+    for (repo_key, gitdir) in repos_to_scan {
+        repos.extend(repo_topology_entries_for_repo(
+            &repo_key,
+            &gitdir,
+            context.layout().detached_path(&repo_key),
+            &real_wt_dir,
+            wt_dir,
+        ));
+    }
+
+    Ok(TaskTopologyFingerprint::new(
+        repos,
+        open_sessions.into_iter().collect(),
+    ))
+}
+
+fn fingerprint_repos(
+    context: &RuntimeEnvironment,
+    repo_scope: Option<&str>,
+) -> Result<Vec<(RepoKey, PathBuf)>> {
+    let Some(repo_arg) = repo_scope else {
+        return context.tasks().available_repos();
+    };
+    let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
+    let gitdir = context.layout().repo_gitdir_path(&repo_key);
+    if gitdir.is_dir() {
+        Ok(vec![(repo_key, gitdir)])
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn repo_topology_entries_for_repo(
+    repo_key: &RepoKey,
+    gitdir: &Path,
+    detached_path: PathBuf,
+    real_wt_dir: &Path,
+    wt_dir: &Path,
+) -> Vec<(RepoKey, String)> {
+    let mut entries = vec![repo_detached_topology_entry(repo_key, detached_path)];
+    entries.extend(task_topology_entries_for_repo(
+        repo_key,
+        gitdir,
+        real_wt_dir,
+        wt_dir,
+    ));
+    entries
+}
+
+fn repo_detached_topology_entry(repo_key: &RepoKey, detached_path: PathBuf) -> (RepoKey, String) {
+    (
+        repo_key.clone(),
+        format!("detached:{}", is_detached_worktree_path(&detached_path)),
+    )
+}
+
+fn task_topology_entries_for_repo(
+    repo_key: &RepoKey,
+    gitdir: &Path,
+    real_wt_dir: &Path,
+    wt_dir: &Path,
+) -> Vec<(RepoKey, String)> {
+    let task_root_real = real_wt_dir.join(repo_key.as_str());
+    let mut entries = Vec::new();
+
+    for wt_path in list_registered_worktrees(gitdir) {
+        let real_path = std::fs::canonicalize(&wt_path).unwrap_or_else(|_| wt_path.clone());
+        if !real_path.starts_with(&task_root_real) || real_path == task_root_real {
+            continue;
+        }
+        let wt_name = worktree_name(wt_dir, repo_key.as_str(), &wt_path);
+        entries.push((repo_key.clone(), wt_name));
+    }
+
+    entries
+}
+
 /// Count `(open, parked)` task worktrees for a repo without spawning git.
 ///
 /// Reads `<gitdir>/worktrees/*/gitdir` from disk, keeps only worktrees that
@@ -189,7 +293,6 @@ pub(super) fn count_repo_worktrees_with_canonical_wt(
     (open, parked)
 }
 
-#[cfg(test)]
 fn canonical(path: &Path) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -818,7 +921,9 @@ mod tests {
     mod count_repo_worktrees_tests {
         use std::{collections::HashSet, fs};
 
-        use super::super::count_repo_worktrees;
+        use super::super::{
+            TaskTopologyFingerprint, count_repo_worktrees, task_topology_entries_for_repo,
+        };
         use crate::{runtime::RepoKey, tools::zellij::naming::session_name};
 
         struct TempDir(std::path::PathBuf);
@@ -963,6 +1068,45 @@ mod tests {
 
             let (open, parked) = count_repo_worktrees(&repo_key, &gitdir, &wt_dir, &sessions);
             assert_eq!((open, parked), (2, 1));
+        }
+
+        #[test]
+        fn task_topology_entries_include_registered_worktree() {
+            let dir = TempDir::new("topology-entry");
+            let gitdir = dir.path().join("repo.git");
+            let wt_dir = dir.path().join("wt");
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::create_dir_all(&wt_dir).unwrap();
+
+            let repo_key = RepoKey::new("github.com/me/app");
+            let wt_path = wt_dir.join("github.com/me/app/feat");
+            register(&gitdir, "feat", &wt_path);
+
+            let real_wt_dir = std::fs::canonicalize(&wt_dir).unwrap_or_else(|_| wt_dir.clone());
+
+            let entries = task_topology_entries_for_repo(&repo_key, &gitdir, &real_wt_dir, &wt_dir);
+
+            assert_eq!(entries, vec![(repo_key, "feat".to_string())]);
+        }
+
+        #[test]
+        fn task_topology_fingerprint_sorts_entries_before_comparing() {
+            let repo_a = RepoKey::new("github.com/me/a");
+            let repo_b = RepoKey::new("github.com/me/b");
+
+            let left = TaskTopologyFingerprint::new(
+                vec![
+                    (repo_b.clone(), "z".to_string()),
+                    (repo_a.clone(), "a".to_string()),
+                ],
+                vec!["session-z".to_string(), "session-a".to_string()],
+            );
+            let right = TaskTopologyFingerprint::new(
+                vec![(repo_a, "a".to_string()), (repo_b, "z".to_string())],
+                vec!["session-a".to_string(), "session-z".to_string()],
+            );
+
+            assert_eq!(left, right);
         }
     }
 }

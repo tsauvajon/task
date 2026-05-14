@@ -1,17 +1,20 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc::TryRecvError,
+    time::{Duration, Instant},
+};
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use self::{
     effects::{
         clone_and_refresh, create_action, finish_and_refresh, park_and_refresh, refresh_all,
-        toggle_detach_and_refresh,
+        refresh_session_state, toggle_detach_and_refresh,
     },
     intent::{UiIntent, from_key},
     loader::LoaderHandle,
     render::render,
     state::{InputMode, UiAction, UiState, ViewMode},
-    tasks::initial_repo_scope,
+    tasks::{TaskTopologyFingerprint, initial_repo_scope},
     terminal::TerminalGuard,
 };
 use crate::{error::Result, runtime::environment::RuntimeEnvironment};
@@ -33,6 +36,10 @@ const TICK: Duration = Duration::from_millis(100);
 /// Cadence of the background OpenCode-state refresher. Short enough to
 /// feel live while the user reads the Tasks view.
 const OPENCODE_REFRESH_INTERVAL: Duration = Duration::from_millis(600);
+
+const TASK_CARD_DETAILS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+const TASK_TOPOLOGY_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
     context.tasks().ensure_layout()?;
@@ -84,6 +91,8 @@ fn run_event_loop(
     // loader so they don't contend with per-repo git work. `Option`
     // because no refresher is active until the first tick deadline.
     let mut opencode_refresh: Option<LoaderHandle> = None;
+    let mut task_card_details_refresh: Option<LoaderHandle> = None;
+    let mut task_topology_refresh: Option<LoaderHandle<TaskTopologyFingerprint>> = None;
     // Back-date the "last refresh" timestamp so the first tick fires
     // immediately on startup. `checked_sub` guards against the case
     // where the platform's monotonic clock starts close to zero (e.g.
@@ -91,32 +100,57 @@ fn run_event_loop(
     let mut last_opencode_refresh = Instant::now()
         .checked_sub(OPENCODE_REFRESH_INTERVAL)
         .unwrap_or_else(Instant::now);
+    let mut last_task_card_details_refresh = Instant::now()
+        .checked_sub(TASK_CARD_DETAILS_REFRESH_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    let mut last_task_topology_refresh = Instant::now()
+        .checked_sub(TASK_TOPOLOGY_REFRESH_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    let mut task_topology_fingerprint: Option<TaskTopologyFingerprint> = None;
+    let mut fingerprint_generation = state.load_generation;
 
     loop {
         // Drain background loader messages before each frame.
         while let Some(msg) = loader.try_recv() {
             state.apply_load_msg(msg);
         }
-        if let Some(handle) = &opencode_refresh {
-            let mut got_tick = false;
-            while let Some(msg) = handle.try_recv() {
-                got_tick = true;
-                state.apply_load_msg(msg);
-            }
-            // The refresher emits exactly one message and exits. Drop
-            // the handle so the next interval can spawn a new one.
-            if got_tick {
-                opencode_refresh = None;
-            }
+        drain_one_shot_loader(&mut opencode_refresh, state);
+        drain_one_shot_loader(&mut task_card_details_refresh, state);
+        drain_task_topology_refresh(
+            context,
+            state,
+            &mut loader,
+            &mut task_card_details_refresh,
+            &mut task_topology_refresh,
+            &mut task_topology_fingerprint,
+        );
+
+        if fingerprint_generation != state.load_generation {
+            task_topology_fingerprint = None;
+            task_topology_refresh = None;
+            fingerprint_generation = state.load_generation;
         }
 
         // Start a new OpenCode refresh when the interval elapses and
         // nothing is in flight. Gated on having task rows — no point
         // paying for the sysinfo scan when the list is empty.
+        maybe_spawn_task_topology_refresh(
+            context,
+            state,
+            &mut task_topology_refresh,
+            &mut last_task_topology_refresh,
+            Instant::now(),
+        );
         maybe_spawn_opencode_refresh(
             state,
             &mut opencode_refresh,
             &mut last_opencode_refresh,
+            Instant::now(),
+        );
+        maybe_spawn_task_card_details_refresh(
+            state,
+            &mut task_card_details_refresh,
+            &mut last_task_card_details_refresh,
             Instant::now(),
         );
 
@@ -198,6 +232,102 @@ fn restart_loader(context: &RuntimeEnvironment, state: &mut UiState, loader: &mu
     let _ = std::mem::replace(loader, new_handle);
 }
 
+fn drain_one_shot_loader(handle: &mut Option<LoaderHandle>, state: &mut UiState) {
+    let mut got_tick = false;
+    if let Some(loader) = handle.as_ref() {
+        while let Some(msg) = loader.try_recv() {
+            got_tick = true;
+            state.apply_load_msg(msg);
+        }
+    }
+    if got_tick {
+        *handle = None;
+    }
+}
+
+fn drain_task_topology_refresh(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+    task_card_details_refresh: &mut Option<LoaderHandle>,
+    handle: &mut Option<LoaderHandle<TaskTopologyFingerprint>>,
+    current_fingerprint: &mut Option<TaskTopologyFingerprint>,
+) {
+    let Some(topology_loader) = handle.as_ref() else {
+        return;
+    };
+    let next_fingerprint = match topology_loader.try_recv_result() {
+        Ok(fingerprint) => fingerprint,
+        Err(TryRecvError::Empty) => return,
+        Err(TryRecvError::Disconnected) => {
+            *handle = None;
+            return;
+        }
+    };
+
+    *handle = None;
+    handle_task_topology_fingerprint(
+        context,
+        state,
+        loader,
+        task_card_details_refresh,
+        current_fingerprint,
+        next_fingerprint,
+    );
+}
+
+fn handle_task_topology_fingerprint(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+    task_card_details_refresh: &mut Option<LoaderHandle>,
+    current_fingerprint: &mut Option<TaskTopologyFingerprint>,
+    next_fingerprint: TaskTopologyFingerprint,
+) {
+    let Some(previous_fingerprint) = current_fingerprint.as_ref() else {
+        *current_fingerprint = Some(next_fingerprint);
+        return;
+    };
+    let repos_changed = previous_fingerprint.repos != next_fingerprint.repos;
+    let sessions_changed = previous_fingerprint.sessions != next_fingerprint.sessions;
+    *current_fingerprint = Some(next_fingerprint);
+
+    if repos_changed {
+        refresh_all(context, state, loader);
+        state.message = "Task list changed; refreshing…".to_string();
+    } else if sessions_changed {
+        refresh_session_state(state, task_card_details_refresh);
+    }
+}
+
+fn maybe_spawn_task_topology_refresh(
+    context: &RuntimeEnvironment,
+    state: &UiState,
+    handle: &mut Option<LoaderHandle<TaskTopologyFingerprint>>,
+    last_refresh: &mut Instant,
+    now: Instant,
+) {
+    if handle.is_some() {
+        return;
+    }
+    if now.saturating_duration_since(*last_refresh) < TASK_TOPOLOGY_REFRESH_INTERVAL {
+        return;
+    }
+
+    if state.task_load.is_loading() || state.repo_load.is_loading() {
+        return;
+    }
+    if matches!(state.mode, InputMode::CreateTask | InputMode::CloneRepo) {
+        return;
+    }
+
+    *handle = Some(loader::spawn_task_topology_refresh(
+        context.clone(),
+        state.task_repo_scope.clone(),
+    ));
+    *last_refresh = now;
+}
+
 /// Spawn a fresh OpenCode refresher when the interval has elapsed,
 /// there is no refresher already in flight, and there is at least one
 /// task row to classify. Dropping the previous handle (even if still
@@ -226,6 +356,27 @@ fn maybe_spawn_opencode_refresh(
 
     let paths: Vec<_> = state.task_rows.iter().map(|row| row.path.clone()).collect();
     *handle = Some(loader::spawn_opencode_refresh(paths));
+    *last_refresh = now;
+}
+
+fn maybe_spawn_task_card_details_refresh(
+    state: &UiState,
+    handle: &mut Option<LoaderHandle>,
+    last_refresh: &mut Instant,
+    now: Instant,
+) {
+    if handle.is_some() {
+        return;
+    }
+    if now.saturating_duration_since(*last_refresh) < TASK_CARD_DETAILS_REFRESH_INTERVAL {
+        return;
+    }
+    if state.task_rows.is_empty() {
+        return;
+    }
+
+    let paths: Vec<_> = state.task_rows.iter().map(|row| row.path.clone()).collect();
+    *handle = Some(loader::spawn_task_card_details_refresh(paths));
     *last_refresh = now;
 }
 
@@ -1476,6 +1627,136 @@ mod tests {
             "message should mention empty branch: {}",
             state.message
         );
+    }
+
+    mod task_topology_refresh {
+        use std::path::PathBuf;
+
+        use super::{
+            super::{TaskTopologyFingerprint, handle_task_topology_fingerprint},
+            *,
+        };
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        fn task_row(repo: &str, branch: &str) -> TaskRow {
+            TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(repo),
+                branch: BranchName::new(branch),
+                worktree_name: branch.to_string(),
+                path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
+            }
+        }
+
+        fn fingerprint(repo_entry: &str, session: &str) -> TaskTopologyFingerprint {
+            TaskTopologyFingerprint {
+                repos: vec![(RepoKey::new("github.com/acme/app"), repo_entry.to_string())],
+                sessions: vec![session.to_string()],
+            }
+        }
+
+        #[test]
+        fn first_fingerprint_is_stored_without_refreshing() {
+            let ctx = test_env();
+            let mut state =
+                UiState::new(vec![task_row("github.com/acme/app", "main")], vec![], None);
+            let mut loader = LoaderHandle::noop();
+            let mut card_refresh = None;
+            let mut current = None;
+
+            handle_task_topology_fingerprint(
+                &ctx,
+                &mut state,
+                &mut loader,
+                &mut card_refresh,
+                &mut current,
+                fingerprint("main", "session-a"),
+            );
+
+            assert!(current.is_some());
+            assert_eq!(state.task_rows.len(), 1);
+            assert!(card_refresh.is_none());
+        }
+
+        #[test]
+        fn repo_change_triggers_full_refresh() {
+            let ctx = test_env();
+            let mut state =
+                UiState::new(vec![task_row("github.com/acme/app", "main")], vec![], None);
+            let mut loader = LoaderHandle::noop();
+            let mut card_refresh = None;
+            let mut current = Some(fingerprint("main", "session-a"));
+
+            handle_task_topology_fingerprint(
+                &ctx,
+                &mut state,
+                &mut loader,
+                &mut card_refresh,
+                &mut current,
+                fingerprint("other", "session-a"),
+            );
+
+            assert!(state.task_rows.is_empty());
+            assert!(state.task_load.is_loading());
+            assert_eq!(state.message, "Task list changed; refreshing…");
+        }
+
+        #[test]
+        fn identical_fingerprint_does_not_refresh() {
+            let ctx = test_env();
+            let mut state =
+                UiState::new(vec![task_row("github.com/acme/app", "main")], vec![], None);
+            let mut loader = LoaderHandle::noop();
+            let mut card_refresh = None;
+            let mut current = Some(fingerprint("main", "session-a"));
+
+            handle_task_topology_fingerprint(
+                &ctx,
+                &mut state,
+                &mut loader,
+                &mut card_refresh,
+                &mut current,
+                fingerprint("main", "session-a"),
+            );
+
+            assert_eq!(state.task_rows.len(), 1);
+            assert!(!state.task_load.is_loading());
+            assert!(card_refresh.is_none());
+        }
+
+        #[test]
+        fn sessions_only_change_preserves_selection_and_refreshes_card_details() {
+            let ctx = test_env();
+            let mut state = UiState::new(
+                vec![
+                    task_row("github.com/acme/app", "main"),
+                    task_row("github.com/acme/app", "feature"),
+                ],
+                vec![],
+                None,
+            );
+            state.task_selected = 1;
+            let mut loader = LoaderHandle::noop();
+            let mut card_refresh = None;
+            let mut current = Some(fingerprint("main", "session-a"));
+
+            handle_task_topology_fingerprint(
+                &ctx,
+                &mut state,
+                &mut loader,
+                &mut card_refresh,
+                &mut current,
+                fingerprint("main", "session-b"),
+            );
+
+            assert_eq!(state.task_rows.len(), 2);
+            assert_eq!(state.task_selected, 1);
+            assert!(card_refresh.is_some());
+        }
     }
 
     mod opencode_refresh_scheduler {

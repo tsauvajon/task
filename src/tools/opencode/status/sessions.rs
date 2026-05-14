@@ -25,7 +25,7 @@ pub(super) fn sessions_in_db(conn: &Connection, directories: &[String]) -> Vec<S
     }
     let placeholders: Vec<String> = (1..=directories.len()).map(|i| format!("?{i}")).collect();
     let sql = format!(
-        "SELECT id, time_updated FROM session \
+        "SELECT id, title, time_updated FROM session \
          WHERE time_archived IS NULL AND directory IN ({}) \
          ORDER BY time_updated DESC LIMIT {}",
         placeholders.join(", "),
@@ -40,7 +40,8 @@ pub(super) fn sessions_in_db(conn: &Connection, directories: &[String]) -> Vec<S
         .query_map(params, |row| {
             Ok(SessionMeta {
                 id: row.get::<_, String>(0)?,
-                time_updated: row.get::<_, i64>(1)?,
+                title: row.get::<_, String>(1)?,
+                time_updated: row.get::<_, i64>(2)?,
             })
         })
         .ok();
