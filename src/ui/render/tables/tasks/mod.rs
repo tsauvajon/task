@@ -6,21 +6,18 @@ use ratatui::{
     widgets::{Block, List, ListItem, ListState, Padding},
 };
 
-use self::compact::CellLabel;
 use super::{
     super::scrollbar::render_scrollbar,
-    cells::{opencode_cell_style, session_cell_style, short_last_segment},
+    cells::{opencode_cell_style, short_last_segment},
 };
 use crate::{
     runtime::task_rows::{TaskRow, TaskStatus},
-    tools::opencode::status::OpenCodeState,
+    tools::{git::worktrees::WorktreeDiff, opencode::status::OpenCodeState},
     ui::{
         state::{TaskCardDetails, UiState},
         theme::Theme,
     },
 };
-
-mod compact;
 
 const CARD_HEIGHT: usize = 4;
 
@@ -97,28 +94,18 @@ fn task_card<'a>(
             .fg(theme.accent)
             .add_modifier(Modifier::BOLD)
     };
-    let session_style = if inactive {
-        theme.muted_style()
-    } else {
-        session_cell_style(row.status, theme)
-    };
     let agent_style = if inactive {
         theme.muted_style()
     } else {
         opencode_cell_style(row.opencode, theme)
     };
-    let diff_style = if details.diff.is_clean() {
-        theme.muted_style()
-    } else {
-        Style::default().fg(theme.secondary)
-    };
-
     let branch = display_branch(row, width);
     let repo = display_repo(row, scoped, width);
     let title = details
         .session_title
         .as_deref()
         .unwrap_or("No session title");
+    let diff_line = diff_line(side_style, details.diff, title, inactive, theme);
 
     ListItem::new(vec![
         Line::from(vec![
@@ -127,25 +114,75 @@ fn task_card<'a>(
             Span::styled(agent_icon(row.opencode), agent_style),
             Span::raw(" "),
             Span::styled(branch, branch_style),
-            Span::raw("  "),
-            Span::styled(row.status.label(false), session_style),
-            Span::raw(" · "),
-            Span::styled(row.opencode.label(false), agent_style),
         ]),
         Line::from(vec![
             side_span(side_style),
             Span::raw(" "),
             Span::styled(repo, text_style),
         ]),
-        Line::from(vec![
-            side_span(side_style),
-            Span::raw(" Δ "),
-            Span::styled(details.diff.label(), diff_style),
-            Span::raw(" · "),
-            Span::styled(title.to_string(), theme.muted_style()),
-        ]),
+        Line::from(diff_line),
         Line::from(""),
     ])
+}
+
+fn diff_line<'a>(
+    side_style: Style,
+    diff: WorktreeDiff,
+    title: &str,
+    inactive: bool,
+    theme: &Theme,
+) -> Vec<Span<'a>> {
+    let mut spans = vec![side_span(side_style), Span::raw(" ")];
+    spans.extend(diff_spans(diff, inactive, theme));
+    spans.push(Span::raw(" · "));
+    spans.push(Span::styled(title.to_string(), theme.muted_style()));
+    spans
+}
+
+fn diff_spans<'a>(diff: WorktreeDiff, inactive: bool, theme: &Theme) -> Vec<Span<'a>> {
+    let muted = theme.muted_style();
+    let icon_style = if inactive {
+        muted
+    } else {
+        Style::default().fg(theme.secondary)
+    };
+    if diff.is_clean() {
+        return vec![Span::styled("✎", icon_style), Span::styled(" clean", muted)];
+    }
+    if diff.added_lines == 0 && diff.deleted_lines == 0 {
+        return vec![
+            Span::styled("✎", icon_style),
+            Span::raw(" "),
+            Span::styled(diff.label(), muted),
+        ];
+    }
+
+    let addition_style = if inactive {
+        muted
+    } else {
+        Style::default().fg(theme.success)
+    };
+    let deletion_style = if inactive {
+        muted
+    } else {
+        Style::default().fg(theme.error)
+    };
+    let mut spans = vec![Span::styled("✎", icon_style)];
+    if diff.added_lines > 0 {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("+{}", diff.added_lines),
+            addition_style,
+        ));
+    }
+    if diff.deleted_lines > 0 {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("-{}", diff.deleted_lines),
+            deletion_style,
+        ));
+    }
+    spans
 }
 
 fn visible_cards(height: u16) -> usize {
@@ -252,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn card_renders_branch_repo_agent_and_session_state() {
+    fn card_renders_branch_repo_and_agent_icon() {
         let row = task_row(
             "github.com/acme/app",
             "feat/card-view",
@@ -269,7 +306,8 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("github.com/acme/app"))
         );
-        assert!(lines.iter().any(|line| line.contains("open · busy")));
+        assert!(lines.iter().any(|line| line.contains("●")));
+        assert!(!lines.iter().any(|line| line.contains("open · busy")));
     }
 
     #[test]
@@ -286,10 +324,9 @@ mod tests {
             path,
             TaskCardDetails {
                 diff: WorktreeDiff {
-                    added: 1,
-                    modified: 2,
-                    untracked: 1,
-                    ..WorktreeDiff::default()
+                    added_lines: 127,
+                    deleted_lines: 23,
+                    changed_files: 3,
                 },
                 session_title: Some("Improve compact TUI".to_string()),
             },
@@ -297,7 +334,7 @@ mod tests {
 
         let lines = render_to_lines(&mut state, 100, 8);
 
-        assert!(lines.iter().any(|line| line.contains("+1 ~2 ?1")));
+        assert!(lines.iter().any(|line| line.contains("✎ +127 -23")));
         assert!(
             lines
                 .iter()
@@ -306,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn parked_task_without_agent_renders_muted_status_text() {
+    fn parked_task_without_agent_omits_status_pair() {
         let row = task_row(
             "github.com/acme/app",
             "feat/parked",
@@ -317,7 +354,32 @@ mod tests {
 
         let lines = render_to_lines(&mut state, 80, 8);
 
-        assert!(lines.iter().any(|line| line.contains("parked · ·")));
+        assert!(lines.iter().any(|line| line.contains("feat/parked")));
+        assert!(!lines.iter().any(|line| line.contains("parked · ·")));
+    }
+
+    #[test]
+    fn card_does_not_repeat_status_pairs() {
+        let rows = vec![
+            task_row(
+                "github.com/acme/app",
+                "feat/hung",
+                TaskStatus::Open,
+                OpenCodeState::Hung,
+            ),
+            task_row(
+                "github.com/acme/app",
+                "feat/idle",
+                TaskStatus::Parked,
+                OpenCodeState::Idle,
+            ),
+        ];
+        let mut state = UiState::new(rows, vec![], None);
+
+        let lines = render_to_lines(&mut state, 100, 12);
+
+        assert!(!lines.iter().any(|line| line.contains("open · hung")));
+        assert!(!lines.iter().any(|line| line.contains("parked · idle")));
     }
 
     #[test]

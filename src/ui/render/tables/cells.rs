@@ -1,8 +1,6 @@
 use ratatui::style::Style;
 
-use crate::{
-    runtime::task_rows::TaskStatus, tools::opencode::status::OpenCodeState, ui::theme::Theme,
-};
+use crate::{tools::opencode::status::OpenCodeState, ui::theme::Theme};
 
 /// Keep only the last `/`-separated segment; return the input unchanged
 /// if it has no `/`.
@@ -10,31 +8,8 @@ pub(super) fn short_last_segment(full: &str) -> &str {
     full.rsplit_once('/').map_or(full, |(_, last)| last)
 }
 
-/// First Unicode character of `s` returned as a `&str` slice (so
-/// callers can use it as a header label or cell value). Preserves
-/// the input lifetime: `&'static str` in, `&'static str` out — which
-/// matters for column header folding. Returns `""` for empty input.
-pub(super) fn first_char_str(s: &str) -> &str {
-    match s.chars().next() {
-        Some(c) => &s[..c.len_utf8()],
-        None => "",
-    }
-}
-
-/// Style for a `Session` column cell. BOLD is intentionally absent: it
-/// is reserved for the highlighted row (added via
-/// `row_highlight_style`) so the eye is drawn to the current
-/// selection rather than every active session.
-pub(super) fn session_cell_style(status: TaskStatus, theme: &Theme) -> Style {
-    match status {
-        TaskStatus::Open => Style::default().fg(theme.success),
-        TaskStatus::Parked => Style::default().fg(theme.warning),
-    }
-}
-
 pub(super) fn opencode_cell_style(state: OpenCodeState, theme: &Theme) -> Style {
-    // Colour language mirrors the Session column so the Tasks view reads
-    // consistently:
+    // Colour language keeps the Tasks view readable at a glance:
     //   - `idle` (amber) — ready for attention.
     //   - `busy` (green) — background work.
     //   - `hung` uses the error colour (salmon) — needs a look.
@@ -92,90 +67,6 @@ mod tests {
         }
     }
 
-    mod first_char_str_tests {
-        use super::first_char_str;
-
-        #[test]
-        fn empty_string_returns_empty() {
-            assert_eq!(first_char_str(""), "");
-        }
-
-        #[test]
-        fn single_ascii_char_returns_self() {
-            assert_eq!(first_char_str("o"), "o");
-        }
-
-        #[test]
-        fn ascii_word_returns_first_letter() {
-            assert_eq!(first_char_str("open"), "o");
-            assert_eq!(first_char_str("parked"), "p");
-            assert_eq!(first_char_str("idle"), "i");
-            assert_eq!(first_char_str("Session"), "S");
-            assert_eq!(first_char_str("Agent"), "A");
-        }
-
-        #[test]
-        fn multibyte_single_char_returns_self() {
-            // `·` is U+00B7, two bytes in example. The slice must
-            // include both bytes so the result is still valid example.
-            assert_eq!(first_char_str("·"), "·");
-        }
-
-        #[test]
-        fn multibyte_word_returns_first_grapheme() {
-            // Mixed-byte input: the first character is `ü` (2 bytes).
-            assert_eq!(first_char_str("über"), "ü");
-        }
-
-        #[test]
-        fn preserves_static_lifetime() {
-            // The slice must inherit the input's lifetime so it can
-            // be used as a `&'static str` header label.
-            const FULL: &str = "Session";
-            let short: &'static str = first_char_str(FULL);
-            assert_eq!(short, "S");
-        }
-    }
-
-    mod session_cell_style_tests {
-        use ratatui::style::Modifier;
-
-        use super::*;
-
-        #[test]
-        fn open_uses_success_foreground_and_is_not_bold() {
-            // BOLD is reserved for the highlighted row, so `open`
-            // must carry colour but no bold by default.
-            let theme = Theme::dark();
-            let style = session_cell_style(TaskStatus::Open, &theme);
-            assert_eq!(style.fg, Some(theme.success));
-            assert!(!style.add_modifier.contains(Modifier::BOLD));
-        }
-
-        #[test]
-        fn parked_uses_warning_foreground_and_is_not_bold() {
-            let theme = Theme::dark();
-            let style = session_cell_style(TaskStatus::Parked, &theme);
-            assert_eq!(style.fg, Some(theme.warning));
-            assert!(!style.add_modifier.contains(Modifier::BOLD));
-        }
-
-        #[test]
-        fn no_session_status_is_bold_by_default() {
-            // Bold is applied only by the row highlight; verify the
-            // contract holds for every `TaskStatus` so a future edit
-            // can't silently reintroduce default-bold styling.
-            let theme = Theme::dark();
-            for status in [TaskStatus::Open, TaskStatus::Parked] {
-                let style = session_cell_style(status, &theme);
-                assert!(
-                    !style.add_modifier.contains(Modifier::BOLD),
-                    "{status:?} must not carry BOLD by default"
-                );
-            }
-        }
-    }
-
     mod opencode_cell_style_tests {
         use ratatui::style::Modifier;
 
@@ -193,10 +84,8 @@ mod tests {
         }
 
         #[test]
-        fn idle_matches_session_parked_colour_and_is_not_bold() {
-            // Idle on the OpenCode column reads like `parked` in the
-            // Session column: amber, not bold — the agent is waiting for
-            // attention. Bold is reserved for the highlighted row.
+        fn idle_uses_warning_foreground_and_is_not_bold() {
+            // Amber signals that the agent is waiting for attention.
             let theme = Theme::dark();
             let style = opencode_cell_style(OpenCodeState::Idle, &theme);
             assert_eq!(style.fg, Some(theme.warning));
@@ -204,9 +93,8 @@ mod tests {
         }
 
         #[test]
-        fn busy_matches_session_open_colour_and_is_not_bold() {
-            // Busy mirrors `open` in the Session column: green, not
-            // bold — the agent is actively working in the background.
+        fn busy_uses_success_foreground_and_is_not_bold() {
+            // Green signals background work.
             let theme = Theme::dark();
             let style = opencode_cell_style(OpenCodeState::Busy, &theme);
             assert_eq!(style.fg, Some(theme.success));

@@ -2636,15 +2636,17 @@ mod tests {
                 PathBuf::from("/tmp/a/main"),
                 TaskCardDetails {
                     diff: WorktreeDiff {
-                        modified: 2,
-                        ..WorktreeDiff::default()
+                        added_lines: 12,
+                        deleted_lines: 3,
+                        changed_files: 2,
                     },
                     session_title: Some("Ship cards".to_string()),
                 },
             )]);
 
             let details = state.task_card_details_for(&state.task_rows[0]);
-            assert_eq!(details.diff.modified, 2);
+            assert_eq!(details.diff.added_lines, 12);
+            assert_eq!(details.diff.deleted_lines, 3);
             assert_eq!(details.session_title.as_deref(), Some("Ship cards"));
         }
 
