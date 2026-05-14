@@ -415,7 +415,7 @@ impl UiState {
                 changed = true;
             }
         }
-        if changed {
+        if changed && !self.filter_text.is_empty() {
             self.apply_task_filter();
         }
     }
@@ -2687,6 +2687,32 @@ mod tests {
             assert_eq!(details.diff.deleted_lines, 3);
             assert_eq!(details.session_title.as_deref(), Some("Ship cards"));
             assert_eq!(details.last_activity_ms, Some(1_234));
+        }
+
+        #[test]
+        fn apply_task_card_details_preserves_filter_state_when_filter_empty() {
+            let mut state = UiState::new(
+                vec![
+                    row("github.com/a/app", "main", "/tmp/a/main"),
+                    row("github.com/b/app", "main", "/tmp/b/main"),
+                ],
+                vec![],
+                None,
+            );
+            state.task_filtered_indices = vec![1];
+            state.task_selected = 1;
+            let path = state.task_rows[0].path.clone();
+
+            state.apply_task_card_details(&[(
+                path,
+                TaskCardDetails {
+                    session_title: Some("Ship cards".to_string()),
+                    ..TaskCardDetails::default()
+                },
+            )]);
+
+            assert_eq!(state.task_filtered_indices, vec![1]);
+            assert_eq!(state.task_selected, 1);
         }
 
         /// `OpenCodeTick` is intentionally exempt from the generation

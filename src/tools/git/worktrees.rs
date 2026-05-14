@@ -209,13 +209,9 @@ fn add_numstat_line(line: &str, diff: &mut WorktreeDiff) {
         return;
     };
 
-    diff.added_lines += parse_numstat_count(added).unwrap_or(0);
-    diff.deleted_lines += parse_numstat_count(deleted).unwrap_or(0);
+    diff.added_lines += added.parse::<usize>().unwrap_or(0);
+    diff.deleted_lines += deleted.parse::<usize>().unwrap_or(0);
     diff.changed_files += 1;
-}
-
-fn parse_numstat_count(value: &str) -> Option<usize> {
-    value.parse().ok()
 }
 
 pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {

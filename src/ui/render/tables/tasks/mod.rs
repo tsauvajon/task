@@ -29,6 +29,7 @@ pub(in crate::ui::render) fn render_tasks(
     theme: &Theme,
 ) {
     let scoped = state.task_repo_scope.is_some();
+    let today = Local::now().date_naive();
     let rows: Vec<ListItem> = state
         .task_filtered_indices
         .iter()
@@ -42,6 +43,7 @@ pub(in crate::ui::render) fn render_tasks(
                 scoped,
                 area.width,
                 visible_index == state.task_selected,
+                today,
                 theme,
             ))
         })
@@ -63,12 +65,18 @@ pub(in crate::ui::render) fn render_tasks(
     frame.render_stateful_widget(list, area, &mut list_state);
 
     let visible_cards = visible_cards(area.height);
-    state.set_visible_rows(visible_cards);
+    state.set_visible_rows(visible_cards.max(1));
 
-    if row_count > visible_cards {
+    if visible_cards > 0 && row_count > visible_cards {
+        let sb_area = Rect {
+            x: area.x + area.width.saturating_sub(1),
+            y: area.y,
+            width: 1,
+            height: (visible_cards as u16) * (CARD_HEIGHT as u16),
+        };
         render_scrollbar(
             frame,
-            area,
+            sb_area,
             state.task_selected,
             row_count,
             visible_cards,
@@ -83,6 +91,7 @@ fn task_card(
     scoped: bool,
     width: u16,
     selected: bool,
+    today: NaiveDate,
     theme: &Theme,
 ) -> ListItem<'static> {
     let inactive = is_inactive(row);
@@ -112,8 +121,8 @@ fn task_card(
     let repo = display_repo(row, scoped, width);
     let title = details
         .session_title
-        .as_deref()
-        .unwrap_or("No session title");
+        .clone()
+        .unwrap_or_else(|| "No session title".to_string());
     let branch_line = branch_line(BranchLineArgs {
         side_style,
         icon: agent_icon(row.opencode),
@@ -121,6 +130,7 @@ fn task_card(
         branch,
         branch_style,
         last_activity_ms: details.last_activity_ms,
+        today,
         width,
         theme,
     });
@@ -159,6 +169,7 @@ struct BranchLineArgs<'a> {
     branch: String,
     branch_style: Style,
     last_activity_ms: Option<i64>,
+    today: NaiveDate,
     width: u16,
     theme: &'a Theme,
 }
@@ -172,7 +183,10 @@ fn branch_line(args: BranchLineArgs<'_>) -> Vec<Span<'static>> {
         Span::raw(" "),
         Span::styled(args.branch, args.branch_style),
     ];
-    let Some(label) = args.last_activity_ms.and_then(activity_label) else {
+    let Some(label) = args
+        .last_activity_ms
+        .and_then(|activity_ms| activity_label(args.today, activity_ms))
+    else {
         return spans;
     };
 
@@ -217,12 +231,12 @@ fn repo_line(args: RepoLineArgs<'_>) -> Vec<Span<'static>> {
     spans
 }
 
-fn title_line(side_style: Style, title: &str, theme: &Theme) -> Vec<Span<'static>> {
+fn title_line(side_style: Style, title: String, theme: &Theme) -> Vec<Span<'static>> {
     vec![
         selection_marker(false, theme),
         side_span(side_style),
         Span::raw(" "),
-        Span::styled(title.to_string(), theme.muted_style()),
+        Span::styled(title, theme.muted_style()),
     ]
 }
 
@@ -230,12 +244,9 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|span| span.content.chars().count()).sum()
 }
 
-fn activity_label(activity_ms: i64) -> Option<String> {
+fn activity_label(today: NaiveDate, activity_ms: i64) -> Option<String> {
     let activity = Local.timestamp_millis_opt(activity_ms).single()?;
-    Some(format_activity_for_today(
-        activity.naive_local(),
-        Local::now().date_naive(),
-    ))
+    Some(format_activity_for_today(activity.naive_local(), today))
 }
 
 fn format_activity_for_today(activity: NaiveDateTime, today: NaiveDate) -> String {
@@ -293,7 +304,7 @@ fn diff_spans(diff: WorktreeDiff, inactive: bool, theme: &Theme) -> Vec<Span<'st
 }
 
 fn visible_cards(height: u16) -> usize {
-    (usize::from(height) / CARD_HEIGHT).max(1)
+    usize::from(height) / CARD_HEIGHT
 }
 
 fn display_branch(row: &TaskRow, width: u16) -> String {
@@ -306,6 +317,9 @@ fn display_branch(row: &TaskRow, width: u16) -> String {
 
 fn display_repo(row: &TaskRow, scoped: bool, width: u16) -> String {
     if scoped {
+        if width < 44 {
+            return short_last_segment(&row.path.to_string_lossy()).to_string();
+        }
         return row.path.display().to_string();
     }
     if width < 64 {
@@ -439,8 +453,10 @@ mod tests {
             OpenCodeState::Busy,
         );
         let path = row.path.clone();
-        let last_activity_ms = chrono::Local::now().timestamp_millis();
-        let expected = activity_label(last_activity_ms).expect("activity label");
+        let now = chrono::Local::now();
+        let today = now.date_naive();
+        let last_activity_ms = now.timestamp_millis();
+        let expected = activity_label(today, last_activity_ms).expect("activity label");
         let mut state = UiState::new(vec![row], vec![], None);
         state.apply_task_card_details(&[(
             path,
@@ -606,8 +622,133 @@ mod tests {
     }
 
     #[test]
+    fn medium_width_keeps_branch_and_shortens_repo_path() {
+        let row = task_row(
+            "github.com/thomas.sauvajon/goto",
+            "feat/example/short-desc",
+            TaskStatus::Open,
+            OpenCodeState::Idle,
+        );
+        let mut state = UiState::new(vec![row], vec![], None);
+
+        let lines = render_to_lines(&mut state, 50, 8);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("feat/example/short-desc"))
+        );
+        assert!(lines.iter().any(|line| line.contains("goto")));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("github.com/thomas.sauvajon/goto"))
+        );
+    }
+
+    #[test]
+    fn wide_card_keeps_full_branch_and_repo() {
+        let row = task_row(
+            "github.com/thomas.sauvajon/goto",
+            "feat/example/short-desc",
+            TaskStatus::Open,
+            OpenCodeState::Idle,
+        );
+        let mut state = UiState::new(vec![row], vec![], None);
+
+        let lines = render_to_lines(&mut state, 70, 8);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("feat/example/short-desc"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("github.com/thomas.sauvajon/goto"))
+        );
+    }
+
+    #[test]
+    fn scoped_narrow_card_shortens_repo_path() {
+        let row = task_row(
+            "github.com/thomas.sauvajon/goto",
+            "feat/example/short-desc",
+            TaskStatus::Open,
+            OpenCodeState::Idle,
+        );
+        let mut state = UiState::new(
+            vec![row],
+            vec![],
+            Some("github.com/thomas.sauvajon/goto".to_string()),
+        );
+
+        let lines = render_to_lines(&mut state, 35, 8);
+
+        assert!(lines.iter().any(|line| line.contains("short-desc")));
+        assert!(!lines.iter().any(|line| line.contains("/tmp/github.com")));
+    }
+
+    #[test]
+    fn scrollbar_stops_at_last_complete_card() {
+        let rows = vec![
+            task_row(
+                "github.com/acme/app",
+                "one",
+                TaskStatus::Open,
+                OpenCodeState::Idle,
+            ),
+            task_row(
+                "github.com/acme/app",
+                "two",
+                TaskStatus::Open,
+                OpenCodeState::Idle,
+            ),
+            task_row(
+                "github.com/acme/app",
+                "three",
+                TaskStatus::Open,
+                OpenCodeState::Idle,
+            ),
+        ];
+        let mut state = UiState::new(rows, vec![], None);
+
+        let lines = render_to_lines(&mut state, 50, 10);
+
+        assert!(!lines[8].contains('│'));
+        assert!(!lines[8].contains('┃'));
+        assert!(!lines[9].contains('│'));
+        assert!(!lines[9].contains('┃'));
+    }
+
+    #[test]
+    fn sub_card_height_draws_no_scrollbar() {
+        let rows = vec![
+            task_row(
+                "github.com/acme/app",
+                "one",
+                TaskStatus::Open,
+                OpenCodeState::Idle,
+            ),
+            task_row(
+                "github.com/acme/app",
+                "two",
+                TaskStatus::Open,
+                OpenCodeState::Idle,
+            ),
+        ];
+        let mut state = UiState::new(rows, vec![], None);
+
+        let lines = render_to_lines(&mut state, 50, 2);
+
+        assert!(!lines.iter().any(|line| line.contains('│')));
+        assert!(!lines.iter().any(|line| line.contains('┃')));
+    }
+
+    #[test]
     fn visible_cards_accounts_for_multiline_card_height() {
-        assert_eq!(visible_cards(2), 1);
+        assert_eq!(visible_cards(2), 0);
         assert_eq!(visible_cards(4), 1);
         assert_eq!(visible_cards(10), 2);
     }

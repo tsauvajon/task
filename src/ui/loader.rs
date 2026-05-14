@@ -25,7 +25,10 @@ use rayon::prelude::*;
 
 use super::{
     state::{LoadMsg, RepoRow, TaskCardDetails},
-    tasks::{count_repo_worktrees_with_canonical_wt, is_detached_worktree_path},
+    tasks::{
+        TaskTopologyFingerprint, compute_task_topology_fingerprint,
+        count_repo_worktrees_with_canonical_wt, is_detached_worktree_path,
+    },
 };
 use crate::{
     runtime::{RepoKey, environment::RuntimeEnvironment},
@@ -34,18 +37,22 @@ use crate::{
 
 /// Handle to a spawned loader thread. Consumers poll [`Self::try_recv`]
 /// from the event loop. Dropping the handle cancels the worker.
-pub(super) struct LoaderHandle {
-    rx: mpsc::Receiver<LoadMsg>,
+pub(super) struct LoaderHandle<T = LoadMsg> {
+    rx: mpsc::Receiver<T>,
     stop: Arc<AtomicBool>,
 }
 
-impl LoaderHandle {
-    pub(super) fn try_recv(&self) -> Option<LoadMsg> {
+impl<T> LoaderHandle<T> {
+    pub(super) fn try_recv(&self) -> Option<T> {
         self.rx.try_recv().ok()
+    }
+
+    pub(super) fn try_recv_result(&self) -> std::result::Result<T, mpsc::TryRecvError> {
+        self.rx.try_recv()
     }
 }
 
-impl Drop for LoaderHandle {
+impl<T> Drop for LoaderHandle<T> {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
     }
@@ -296,6 +303,32 @@ pub(super) fn spawn_task_card_details_refresh(paths: Vec<PathBuf>) -> LoaderHand
             })
             .collect();
         let _ = tx.send(LoadMsg::TaskCardDetailsTick { details });
+    });
+
+    LoaderHandle { rx, stop }
+}
+
+pub(super) fn spawn_task_topology_refresh(
+    context: RuntimeEnvironment,
+    task_repo_scope: Option<String>,
+) -> LoaderHandle<TaskTopologyFingerprint> {
+    let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = Arc::clone(&stop);
+
+    thread::spawn(move || {
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(fingerprint) =
+            compute_task_topology_fingerprint(&context, task_repo_scope.as_deref())
+        else {
+            return;
+        };
+        if stop_thread.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = tx.send(fingerprint);
     });
 
     LoaderHandle { rx, stop }
