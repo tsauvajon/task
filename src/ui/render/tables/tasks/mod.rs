@@ -76,14 +76,14 @@ pub(in crate::ui::render) fn render_tasks(
     }
 }
 
-fn task_card<'a>(
+fn task_card(
     row: &TaskRow,
     details: &TaskCardDetails,
     scoped: bool,
     width: u16,
     selected: bool,
     theme: &Theme,
-) -> ListItem<'a> {
+) -> ListItem<'static> {
     let inactive = is_inactive(row);
     let side_style = Style::default().fg(if inactive {
         theme.muted
@@ -113,7 +113,17 @@ fn task_card<'a>(
         .session_title
         .as_deref()
         .unwrap_or("No session title");
-    let diff_line = diff_line(side_style, details.diff, title, inactive, theme);
+    let repo_line = repo_line(RepoLineArgs {
+        selected,
+        side_style,
+        repo,
+        text_style,
+        diff: details.diff,
+        inactive,
+        width,
+        theme,
+    });
+    let title_line = title_line(side_style, title, theme);
 
     ListItem::new(vec![
         Line::from(vec![
@@ -124,13 +134,8 @@ fn task_card<'a>(
             Span::raw(" "),
             Span::styled(branch, branch_style),
         ]),
-        Line::from(vec![
-            selection_marker(selected, theme),
-            side_span(side_style),
-            Span::raw(" "),
-            Span::styled(repo, text_style),
-        ]),
-        Line::from(diff_line_with_marker(diff_line, theme)),
+        Line::from(repo_line),
+        Line::from(title_line),
         Line::from(""),
     ])
 }
@@ -143,26 +148,52 @@ fn selection_marker(selected: bool, theme: &Theme) -> Span<'static> {
     }
 }
 
-fn diff_line_with_marker<'a>(mut diff_line: Vec<Span<'a>>, theme: &Theme) -> Vec<Span<'a>> {
-    diff_line.insert(0, selection_marker(false, theme));
-    diff_line
+struct RepoLineArgs<'a> {
+    selected: bool,
+    side_style: Style,
+    repo: String,
+    text_style: Style,
+    diff: WorktreeDiff,
+    inactive: bool,
+    width: u16,
+    theme: &'a Theme,
 }
 
-fn diff_line<'a>(
-    side_style: Style,
-    diff: WorktreeDiff,
-    title: &str,
-    inactive: bool,
-    theme: &Theme,
-) -> Vec<Span<'a>> {
-    let mut spans = vec![side_span(side_style), Span::raw(" ")];
-    spans.extend(diff_spans(diff, inactive, theme));
-    spans.push(Span::raw(" · "));
-    spans.push(Span::styled(title.to_string(), theme.muted_style()));
+fn repo_line(args: RepoLineArgs<'_>) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        selection_marker(args.selected, args.theme),
+        side_span(args.side_style),
+        Span::raw(" "),
+        Span::styled(args.repo, args.text_style),
+    ];
+    let diff = diff_spans(args.diff, args.inactive, args.theme);
+    if diff.is_empty() {
+        return spans;
+    }
+
+    let inner_width = usize::from(args.width).saturating_sub(2);
+    let left_width = spans_width(&spans);
+    let diff_width = spans_width(&diff);
+    let gap = inner_width.saturating_sub(left_width + diff_width).max(1);
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.extend(diff);
     spans
 }
 
-fn diff_spans<'a>(diff: WorktreeDiff, inactive: bool, theme: &Theme) -> Vec<Span<'a>> {
+fn title_line(side_style: Style, title: &str, theme: &Theme) -> Vec<Span<'static>> {
+    vec![
+        selection_marker(false, theme),
+        side_span(side_style),
+        Span::raw(" "),
+        Span::styled(title.to_string(), theme.muted_style()),
+    ]
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|span| span.content.chars().count()).sum()
+}
+
+fn diff_spans(diff: WorktreeDiff, inactive: bool, theme: &Theme) -> Vec<Span<'static>> {
     let muted = theme.muted_style();
     let icon_style = if inactive {
         muted
@@ -170,7 +201,7 @@ fn diff_spans<'a>(diff: WorktreeDiff, inactive: bool, theme: &Theme) -> Vec<Span
         Style::default().fg(theme.secondary)
     };
     if diff.is_clean() {
-        return vec![Span::styled("✎", icon_style), Span::styled(" clean", muted)];
+        return Vec::new();
     }
     if diff.added_lines == 0 && diff.deleted_lines == 0 {
         return vec![
@@ -334,6 +365,27 @@ mod tests {
     }
 
     #[test]
+    fn clean_card_metadata_line_shows_only_session_title() {
+        let row = task_row(
+            "github.com/acme/app",
+            "feat/card-view",
+            TaskStatus::Open,
+            OpenCodeState::Busy,
+        );
+        let mut state = UiState::new(vec![row], vec![], None);
+
+        let lines = render_to_lines(&mut state, 100, 8);
+        let title_line = lines
+            .iter()
+            .find(|line| line.contains("No session title"))
+            .expect("title line");
+
+        assert!(!title_line.contains("✎"));
+        assert!(!title_line.contains("clean"));
+        assert!(!title_line.contains(" · "));
+    }
+
+    #[test]
     fn selected_card_indicator_is_centered_on_middle_content_line() {
         let row = task_row(
             "github.com/acme/app",
@@ -352,14 +404,14 @@ mod tests {
             .iter()
             .find(|line| line.contains("github.com/acme/app"))
             .expect("repo line");
-        let diff_line = lines
+        let title_line = lines
             .iter()
-            .find(|line| line.contains("clean"))
-            .expect("diff line");
+            .find(|line| line.contains("No session title"))
+            .expect("title line");
 
         assert!(!branch_line.contains("▶"));
         assert!(repo_line.contains("▶"));
-        assert!(!diff_line.contains("▶"));
+        assert!(!title_line.contains("▶"));
     }
 
     #[test]
@@ -385,13 +437,18 @@ mod tests {
         )]);
 
         let lines = render_to_lines(&mut state, 100, 8);
+        let repo_line = lines
+            .iter()
+            .find(|line| line.contains("github.com/acme/app"))
+            .expect("repo line");
+        let title_line = lines
+            .iter()
+            .find(|line| line.contains("Improve compact TUI"))
+            .expect("title line");
 
-        assert!(lines.iter().any(|line| line.contains("✎ +127 -23")));
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Improve compact TUI"))
-        );
+        assert!(repo_line.ends_with("✎ +127 -23"));
+        assert!(!title_line.contains("✎"));
+        assert!(!title_line.contains(" · "));
     }
 
     #[test]
