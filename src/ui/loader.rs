@@ -290,6 +290,7 @@ pub(super) fn spawn_task_card_details_refresh(paths: Vec<PathBuf>) -> LoaderHand
                 let detail = TaskCardDetails {
                     diff: diff_summary(&path).unwrap_or_default(),
                     session_title: snapshot.title_for(&path),
+                    last_activity_ms: snapshot.last_activity_for(&path),
                 };
                 (path, detail)
             })

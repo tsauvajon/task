@@ -57,6 +57,7 @@ pub(super) struct RepoRow {
 pub(super) struct TaskCardDetails {
     pub(super) diff: WorktreeDiff,
     pub(super) session_title: Option<String>,
+    pub(super) last_activity_ms: Option<i64>,
 }
 
 /// Progress of a background load. `total` is `None` while the
@@ -2641,6 +2642,7 @@ mod tests {
                         changed_files: 2,
                     },
                     session_title: Some("Ship cards".to_string()),
+                    last_activity_ms: Some(1_234),
                 },
             )]);
 
@@ -2648,6 +2650,7 @@ mod tests {
             assert_eq!(details.diff.added_lines, 12);
             assert_eq!(details.diff.deleted_lines, 3);
             assert_eq!(details.session_title.as_deref(), Some("Ship cards"));
+            assert_eq!(details.last_activity_ms, Some(1_234));
         }
 
         /// `OpenCodeTick` is intentionally exempt from the generation

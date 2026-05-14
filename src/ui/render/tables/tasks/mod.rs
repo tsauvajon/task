@@ -1,3 +1,4 @@
+use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -113,6 +114,16 @@ fn task_card(
         .session_title
         .as_deref()
         .unwrap_or("No session title");
+    let branch_line = branch_line(BranchLineArgs {
+        side_style,
+        icon: agent_icon(row.opencode),
+        icon_style: agent_style,
+        branch,
+        branch_style,
+        last_activity_ms: details.last_activity_ms,
+        width,
+        theme,
+    });
     let repo_line = repo_line(RepoLineArgs {
         selected,
         side_style,
@@ -126,14 +137,7 @@ fn task_card(
     let title_line = title_line(side_style, title, theme);
 
     ListItem::new(vec![
-        Line::from(vec![
-            selection_marker(false, theme),
-            side_span(side_style),
-            Span::raw(" "),
-            Span::styled(agent_icon(row.opencode), agent_style),
-            Span::raw(" "),
-            Span::styled(branch, branch_style),
-        ]),
+        Line::from(branch_line),
         Line::from(repo_line),
         Line::from(title_line),
         Line::from(""),
@@ -146,6 +150,39 @@ fn selection_marker(selected: bool, theme: &Theme) -> Span<'static> {
     } else {
         Span::raw("  ")
     }
+}
+
+struct BranchLineArgs<'a> {
+    side_style: Style,
+    icon: &'static str,
+    icon_style: Style,
+    branch: String,
+    branch_style: Style,
+    last_activity_ms: Option<i64>,
+    width: u16,
+    theme: &'a Theme,
+}
+
+fn branch_line(args: BranchLineArgs<'_>) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        selection_marker(false, args.theme),
+        side_span(args.side_style),
+        Span::raw(" "),
+        Span::styled(args.icon, args.icon_style),
+        Span::raw(" "),
+        Span::styled(args.branch, args.branch_style),
+    ];
+    let Some(label) = args.last_activity_ms.and_then(activity_label) else {
+        return spans;
+    };
+
+    let inner_width = usize::from(args.width).saturating_sub(2);
+    let left_width = spans_width(&spans);
+    let label_width = label.chars().count();
+    let gap = inner_width.saturating_sub(left_width + label_width).max(1);
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.push(Span::styled(label, args.theme.muted_style()));
+    spans
 }
 
 struct RepoLineArgs<'a> {
@@ -191,6 +228,22 @@ fn title_line(side_style: Style, title: &str, theme: &Theme) -> Vec<Span<'static
 
 fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|span| span.content.chars().count()).sum()
+}
+
+fn activity_label(activity_ms: i64) -> Option<String> {
+    let activity = Local.timestamp_millis_opt(activity_ms).single()?;
+    Some(format_activity_for_today(
+        activity.naive_local(),
+        Local::now().date_naive(),
+    ))
+}
+
+fn format_activity_for_today(activity: NaiveDateTime, today: NaiveDate) -> String {
+    if activity.date() == today {
+        activity.format("%H:%M").to_string()
+    } else {
+        activity.format("%d/%m").to_string()
+    }
 }
 
 fn diff_spans(diff: WorktreeDiff, inactive: bool, theme: &Theme) -> Vec<Span<'static>> {
@@ -296,7 +349,7 @@ mod tests {
 
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
-    use super::{super::render_tasks, visible_cards};
+    use super::{super::render_tasks, activity_label, format_activity_for_today, visible_cards};
     use crate::{
         runtime::{
             BranchName, RepoKey,
@@ -362,6 +415,49 @@ mod tests {
         );
         assert!(lines.iter().any(|line| line.contains("●")));
         assert!(!lines.iter().any(|line| line.contains("open · busy")));
+    }
+
+    #[test]
+    fn activity_label_is_time_for_today_and_date_for_older_days() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 14).expect("date");
+        let today_activity = today.and_hms_opt(9, 7, 0).expect("time");
+        let older_activity = chrono::NaiveDate::from_ymd_opt(2026, 5, 13)
+            .expect("date")
+            .and_hms_opt(23, 59, 0)
+            .expect("time");
+
+        assert_eq!(format_activity_for_today(today_activity, today), "09:07");
+        assert_eq!(format_activity_for_today(older_activity, today), "13/05");
+    }
+
+    #[test]
+    fn branch_line_renders_last_activity_right_aligned() {
+        let row = task_row(
+            "github.com/acme/app",
+            "feat/card-view",
+            TaskStatus::Open,
+            OpenCodeState::Busy,
+        );
+        let path = row.path.clone();
+        let last_activity_ms = chrono::Local::now().timestamp_millis();
+        let expected = activity_label(last_activity_ms).expect("activity label");
+        let mut state = UiState::new(vec![row], vec![], None);
+        state.apply_task_card_details(&[(
+            path,
+            TaskCardDetails {
+                diff: WorktreeDiff::default(),
+                session_title: None,
+                last_activity_ms: Some(last_activity_ms),
+            },
+        )]);
+
+        let lines = render_to_lines(&mut state, 100, 8);
+        let branch_line = lines
+            .iter()
+            .find(|line| line.contains("feat/card-view"))
+            .expect("branch line");
+
+        assert!(branch_line.ends_with(&expected));
     }
 
     #[test]
@@ -433,6 +529,7 @@ mod tests {
                     changed_files: 3,
                 },
                 session_title: Some("Improve compact TUI".to_string()),
+                last_activity_ms: None,
             },
         )]);
 
