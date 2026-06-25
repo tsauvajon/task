@@ -51,7 +51,7 @@ fn resolve_explicit_repo_branch_target(
     repo_arg: &str,
     branch_arg: &str,
 ) -> Result<Option<(RepoKey, BranchName)>> {
-    let repo_key = match context.tasks().resolve_repo_key_input(repo_arg) {
+    let repo_key = match context.tasks().resolve_existing_repo_key(repo_arg) {
         Ok(repo_key) => repo_key,
         Err(Error::NotFound(_)) => return Ok(None),
         Err(err) => return Err(err),
@@ -59,7 +59,13 @@ fn resolve_explicit_repo_branch_target(
     let branch = BranchName::new(branch_arg);
     let worktree = context.tasks().resolve_worktree_path(&repo_key, &branch);
 
-    Ok(worktree.exists().then_some((repo_key, branch)))
+    if worktree.exists() {
+        Ok(Some((repo_key, branch)))
+    } else {
+        Err(Error::not_found(format!(
+            "Task not found: {repo_key} {branch}"
+        )))
+    }
 }
 
 pub(crate) fn run_resolved(
@@ -315,7 +321,10 @@ mod tests {
 
     mod resolve_explicit_repo_branch {
         use super::{super::resolve_explicit_repo_branch_target, *};
-        use crate::runtime::{BranchName, RepoKey, environment::RuntimeEnvironment};
+        use crate::{
+            error::Error,
+            runtime::{BranchName, RepoKey, environment::RuntimeEnvironment},
+        };
 
         fn environment_for(dir: &TempDir) -> RuntimeEnvironment {
             fs::create_dir_all(dir.path().join("repos")).unwrap();
@@ -328,10 +337,15 @@ mod tests {
             )
         }
 
+        fn create_repo_gitdir(dir: &TempDir) {
+            fs::create_dir_all(dir.path().join("repos/github.com/me/app.git")).unwrap();
+        }
+
         #[test]
         fn returns_target_when_dot_git_missing() {
             let dir = TempDir::new("explicit-stale");
             let context = environment_for(&dir);
+            create_repo_gitdir(&dir);
             fs::create_dir_all(dir.path().join("wt/github.com/me/app/feature-x")).unwrap();
 
             let target =
@@ -351,6 +365,7 @@ mod tests {
         fn returns_target_when_dot_git_exists() {
             let dir = TempDir::new("explicit-live");
             let context = environment_for(&dir);
+            create_repo_gitdir(&dir);
             fs::create_dir_all(dir.path().join("wt/github.com/me/app/feature-y/.git")).unwrap();
 
             let target =
@@ -367,13 +382,25 @@ mod tests {
         }
 
         #[test]
-        fn returns_none_when_worktree_path_is_absent() {
+        fn returns_not_found_when_worktree_path_is_absent() {
             let dir = TempDir::new("explicit-absent");
+            let context = environment_for(&dir);
+            create_repo_gitdir(&dir);
+
+            let err =
+                resolve_explicit_repo_branch_target(&context, "github.com/me/app", "feature-z")
+                    .unwrap_err();
+
+            assert!(matches!(err, Error::NotFound(_)));
+        }
+
+        #[test]
+        fn returns_none_when_first_arg_is_not_a_repo() {
+            let dir = TempDir::new("explicit-not-repo");
             let context = environment_for(&dir);
 
             let target =
-                resolve_explicit_repo_branch_target(&context, "github.com/me/app", "feature-z")
-                    .unwrap();
+                resolve_explicit_repo_branch_target(&context, "feature-a", "feature-b").unwrap();
 
             assert_eq!(target, None);
         }
