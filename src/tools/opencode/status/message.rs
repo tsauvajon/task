@@ -32,12 +32,12 @@ pub(super) fn latest_message(conn: &Connection, session_id: &str) -> Option<Mess
 
 fn parse_message_summary(data: &str) -> Option<MessageSummary> {
     let value: serde_json::Value = serde_json::from_str(data).ok()?;
-    let role = value.get("role")?.as_str()?.to_string();
+    let role = value.get("role")?.as_str()?.to_owned();
     let time = value.get("time")?;
     let time_created = time.get("created")?.as_i64()?;
     let time_completed = time.get("completed").and_then(serde_json::Value::as_i64);
     let error = value.get("error");
-    let has_error = error.map(|v| !v.is_null()).unwrap_or(false);
+    let has_error = error.is_some_and(|v| !v.is_null());
     let is_aborted = error
         .and_then(|e| e.get("name"))
         .and_then(serde_json::Value::as_str)

@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use crate::{error::Result, runtime::environment::RuntimeEnvironment};
+use crate::{
+    error::Result,
+    runtime::{environment::RuntimeEnvironment, process},
+};
 
 pub fn run(
     context: &RuntimeEnvironment,
@@ -14,8 +17,7 @@ pub fn run(
         |repo| context.tasks().resolve_repo_key_input(repo),
         |repo_key, branch| context.tasks().resolve_worktree_path(repo_key, branch),
     )?;
-    println!("{}", worktree.display());
-    Ok(())
+    process::write_stdout_line(worktree.display())
 }
 
 fn resolve_output_path<ResolveInputs, ResolveRepoKey, ResolveWorktree, RepoArg, RepoKey, Branch>(
@@ -50,11 +52,11 @@ mod tests {
             |repo, branch| {
                 assert_eq!(repo, Some("org/repo"));
                 assert_eq!(branch, Some("feat"));
-                Ok(("org/repo".to_string(), "feat".to_string()))
+                Ok(("org/repo".to_owned(), "feat".to_owned()))
             },
             |repo| {
                 assert_eq!(repo, "org/repo");
-                Ok("org/repo".to_string())
+                Ok("org/repo".to_owned())
             },
             |repo_key, branch| {
                 assert_eq!(repo_key, "org/repo");
@@ -73,7 +75,7 @@ mod tests {
             None,
             None,
             |_repo, _branch| Err(Error::failed("input error")),
-            |_repo: &String| Ok("unused".to_string()),
+            |_repo: &String| Ok("unused".to_owned()),
             |_repo: &String, _branch: &String| PathBuf::from("unused"),
         )
         .expect_err("expected input error");
@@ -86,7 +88,7 @@ mod tests {
         let err = resolve_output_path(
             Some("org/repo"),
             Some("feat"),
-            |_repo, _branch| Ok(("org/repo".to_string(), "feat".to_string())),
+            |_repo, _branch| Ok(("org/repo".to_owned(), "feat".to_owned())),
             |_repo| Err(Error::failed("repo key error")),
             |_repo: &String, _branch: &String| PathBuf::from("unused"),
         )

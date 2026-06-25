@@ -73,12 +73,12 @@ impl RuntimeEnvironment {
     }
 
     #[must_use]
-    pub fn layout(&self) -> &WorkspacePaths {
+    pub const fn layout(&self) -> &WorkspacePaths {
         &self.layout
     }
 
     #[must_use]
-    pub fn tasks(&self) -> &TaskResolver {
+    pub const fn tasks(&self) -> &TaskResolver {
         &self.tasks
     }
 

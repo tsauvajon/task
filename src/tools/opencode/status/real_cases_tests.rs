@@ -1,4 +1,4 @@
-//! Table-driven integration suite hitting real OpenCode session shapes.
+//! Table-driven integration suite hitting real `OpenCode` session shapes.
 //!
 //! Pulled into the module tree via `#[path]` from `mod.rs` under the
 //! module name `real_cases`, so tests here run as
@@ -1046,8 +1046,6 @@ const CASES: &[Case] = &[
         tool_parts: &[],
         expected: &[("task", OpenCodeState::Hung)],
     },
-    // --- Subagent classification real cases ------------------
-    //
     // OpenCode's `task` tool spawns a child session whose id
     // is recorded on the parent part as
     // `state.metadata.sessionId`. The classifier uses the
@@ -1916,7 +1914,13 @@ fn every_real_case_matches_expected_state() {
         let live_cwds_with_start = case
             .live_cwds
             .iter()
-            .map(|cwd| (PathBuf::from(cwd), case.proc_start_ms as u64))
+            .map(|cwd| {
+                (
+                    PathBuf::from(cwd),
+                    u64::try_from(case.proc_start_ms)
+                        .expect("real case start time is non-negative"),
+                )
+            })
             .collect::<Vec<_>>();
         let snap = snapshot_with_proc_starts(dbs, case.now_ms, live_cwds_with_start);
 
@@ -1930,7 +1934,7 @@ fn every_real_case_matches_expected_state() {
             );
         }
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 }
 
@@ -1953,11 +1957,7 @@ fn latest_message_picked_from_large_history_real() {
     for i in 0..99 {
         let role = if i % 2 == 0 { "assistant" } else { "user" };
         let created = T0 + i * 1_000;
-        let completed = if role == "assistant" {
-            Some(serde_json::json!(created + 500))
-        } else {
-            None
-        };
+        let completed = (role == "assistant").then(|| serde_json::json!(created + 500));
         let mut time = serde_json::json!({ "created": created });
         if let Some(c) = completed {
             time["completed"] = c;
@@ -1992,7 +1992,7 @@ fn latest_message_picked_from_large_history_real() {
     let snap = snapshot_with(vec![db], T0 + 200_000, vec![PathBuf::from(dir)]);
     assert_eq!(snap.state_for(Path::new(dir)), OpenCodeState::Hung);
 
-    let _ = fs::remove_dir_all(&base);
+    _ = fs::remove_dir_all(&base);
 }
 
 /// Real DB has one directory with 116 active sessions. The
@@ -2052,5 +2052,5 @@ fn rollup_surfaces_hung_session_regardless_of_age_real() {
          tightened again — a buried Hung session must not be hidden"
     );
 
-    let _ = fs::remove_dir_all(&base);
+    _ = fs::remove_dir_all(&base);
 }

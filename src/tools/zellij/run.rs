@@ -17,7 +17,7 @@ pub(super) fn capture(args: &[&str], cwd: Option<&Path>) -> Result<String> {
     let mut cmd = build_zellij_command(args, cwd);
     let output = cmd.output().map_err(spawn_error_from_io)?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         let msg = if stderr.is_empty() {
             format!("command failed with status {}", output.status)
         } else {
@@ -25,7 +25,7 @@ pub(super) fn capture(args: &[&str], cwd: Option<&Path>) -> Result<String> {
         };
         return Err(Error::failed(msg));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 pub(super) fn status(args: &[&str], cwd: Option<&Path>) -> Result<()> {

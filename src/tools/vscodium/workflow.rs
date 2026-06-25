@@ -68,8 +68,8 @@ pub fn seed_task_trusted_roots(
 
 fn codium_args(user_data_dir: &Path, worktree_path: &Path) -> Vec<String> {
     vec![
-        "--new-window".to_string(),
-        "--user-data-dir".to_string(),
+        "--new-window".to_owned(),
+        "--user-data-dir".to_owned(),
         user_data_dir.to_string_lossy().into_owned(),
         worktree_path.to_string_lossy().into_owned(),
     ]
@@ -84,11 +84,11 @@ pub enum CodiumState {
 pub fn codium_state(repo_key: &str, worktree_name: &str) -> Result<CodiumState> {
     let user_data_dir = user_data_dir(repo_key, worktree_name);
     let pids = codium_pids_for_user_data_dir(&user_data_dir);
-    if pids.is_empty() {
-        Ok(CodiumState::NotRunning)
+    Ok(if pids.is_empty() {
+        CodiumState::NotRunning
     } else {
-        Ok(CodiumState::Running)
-    }
+        CodiumState::Running
+    })
 }
 
 pub fn close_windows(repo_key: &str, worktree_name: &str) -> Result<()> {
@@ -117,7 +117,7 @@ fn codium_pids_for_user_data_dir(user_data_dir: &Path) -> Vec<u32> {
             let args: Vec<String> = process
                 .cmd()
                 .iter()
-                .map(|arg| arg.to_string_lossy().to_string())
+                .map(|arg| arg.to_string_lossy().into_owned())
                 .collect();
             cmdline_matches_user_data_dir(&args, user_data_dir)
         })
@@ -235,25 +235,25 @@ mod tests {
         #[test]
         fn removes_existing_directory() {
             let base = std::env::temp_dir().join("task-vscodium-cleanup-existing");
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
             let target = base.join("task/codium/session");
             fs::create_dir_all(target.join("User")).expect("create nested dir");
 
             cleanup_user_data_dir(&target).expect("cleanup state");
             assert!(!target.exists());
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
         fn ignores_missing_directory() {
             let base = std::env::temp_dir().join("task-vscodium-cleanup-missing");
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
             let target = base.join("task/codium/missing");
 
             cleanup_user_data_dir(&target).expect("cleanup missing state");
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 }

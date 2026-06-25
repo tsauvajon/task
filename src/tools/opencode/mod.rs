@@ -1,8 +1,8 @@
-//! OpenCode integration.
+//! `OpenCode` integration.
 //!
-//! - [`db`]: locate OpenCode SQLite databases on disk and resolve the most
+//! - [`db`]: locate `OpenCode` `SQLite` databases on disk and resolve the most
 //!   recent session for a worktree across all channels.
-//! - [`status`]: classify the live state of OpenCode sessions for the TUI.
+//! - [`status`]: classify the live state of `OpenCode` sessions for the TUI.
 //! - [`process`]: discover running `opencode` processes and their cwds.
 
 use std::path::Path;
@@ -21,17 +21,14 @@ pub fn auth_storage_reachable() -> bool {
 /// Returns the full command plan for launching opencode for a worktree.
 ///
 /// If a previous opencode session exists for that exact directory in any
-/// installed OpenCode database (the `opencode*.db` files under the data
+/// installed `OpenCode` database (the `opencode*.db` files under the data
 /// dir), the command includes `--session <id>` so the TUI resumes it.
 #[must_use]
 pub fn launch_command(directory: &Path) -> CommandPlan {
-    match db::latest_session_for(directory) {
-        Some(session) => CommandPlan::for_tool(
-            ExternalTool::Opencode,
-            vec!["--session".to_string(), session.id],
-        ),
-        None => CommandPlan::for_tool(ExternalTool::Opencode, Vec::new()),
-    }
+    let args = db::latest_session_for(directory)
+        .map(|session| vec!["--session".to_owned(), session.id])
+        .unwrap_or_default();
+    CommandPlan::for_tool(ExternalTool::Opencode, args)
 }
 
 #[cfg(test)]

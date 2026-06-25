@@ -11,14 +11,14 @@ use crate::error::{Error, Result};
 
 const TRUST_MODEL_KEY: &str = "content.trust.model.key";
 
-/// Seeds trusted workspace roots into a task-specific VSCodium profile.
+/// Seeds trusted workspace roots into a task-specific `VSCodium` profile.
 ///
-/// VSCodium stores workspace trust in `<user-data-dir>/User/globalStorage/state.vscdb`
+/// `VSCodium` stores workspace trust in `<user-data-dir>/User/globalStorage/state.vscdb`
 /// under the `content.trust.model.key` row of `ItemTable`.
 ///
 /// We merge configured trusted roots into that JSON document before opening the editor
 /// so task worktrees under those roots open as trusted without disabling workspace trust.
-pub fn seed_trusted_roots(user_data_dir: &Path, trusted_roots: &[PathBuf]) -> Result<()> {
+pub(super) fn seed_trusted_roots(user_data_dir: &Path, trusted_roots: &[PathBuf]) -> Result<()> {
     let normalized_roots: Vec<String> = trusted_roots.iter().map(|r| normalize_path(r)).collect();
 
     if normalized_roots.is_empty() {
@@ -110,12 +110,15 @@ fn normalize_path(path: &Path) -> String {
     if text == "/" {
         return text.into_owned();
     }
-    text.trim_end_matches('/').to_string()
+    text.trim_end_matches('/').to_owned()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs, path::Path};
+    use std::{
+        env, fs,
+        path::{Path, PathBuf},
+    };
 
     use rusqlite::Connection;
 
@@ -157,8 +160,8 @@ mod tests {
 
         #[test]
         fn creates_new_model_when_existing_is_none() {
-            let result = merge_trust_model(None, &["/home/user/dev".to_string()])
-                .expect("merge trust model");
+            let result =
+                merge_trust_model(None, &["/home/user/dev".to_owned()]).expect("merge trust model");
             let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid json");
             let entries = parsed["uriTrustInfo"].as_array().expect("array");
             assert_eq!(entries.len(), 1);
@@ -167,8 +170,8 @@ mod tests {
 
         #[test]
         fn does_not_duplicate_existing_entry() {
-            let first = merge_trust_model(None, &["/home/user/dev".to_string()]).unwrap();
-            let second = merge_trust_model(Some(&first), &["/home/user/dev".to_string()]).unwrap();
+            let first = merge_trust_model(None, &["/home/user/dev".to_owned()]).unwrap();
+            let second = merge_trust_model(Some(&first), &["/home/user/dev".to_owned()]).unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&second).expect("valid json");
             let entries = parsed["uriTrustInfo"].as_array().expect("array");
             assert_eq!(entries.len(), 1, "duplicate should not be inserted");
@@ -176,10 +179,10 @@ mod tests {
 
         #[test]
         fn adds_new_root_without_removing_existing() {
-            let first = merge_trust_model(None, &["/home/user/dev".to_string()]).unwrap();
+            let first = merge_trust_model(None, &["/home/user/dev".to_owned()]).unwrap();
             let second = merge_trust_model(
                 Some(&first),
-                &["/home/user/dev".to_string(), "/mnt/repos".to_string()],
+                &["/home/user/dev".to_owned(), "/mnt/repos".to_owned()],
             )
             .unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&second).expect("valid json");
@@ -189,7 +192,7 @@ mod tests {
 
         #[test]
         fn handles_invalid_existing_json_as_empty() {
-            let result = merge_trust_model(Some("not valid json"), &["/home/user".to_string()])
+            let result = merge_trust_model(Some("not valid json"), &["/home/user".to_owned()])
                 .expect("merge trust model");
             let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid json");
             let entries = parsed["uriTrustInfo"].as_array().expect("array");
@@ -206,7 +209,7 @@ mod tests {
 
         #[test]
         fn trusted_entry_has_expected_fields() {
-            let result = merge_trust_model(None, &["/mnt/work".to_string()]).unwrap();
+            let result = merge_trust_model(None, &["/mnt/work".to_owned()]).unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
             let entry = &parsed["uriTrustInfo"][0];
             assert_eq!(entry["trusted"], true);
@@ -219,38 +222,38 @@ mod tests {
     #[test]
     fn seed_trusted_roots_creates_trust_model_for_empty_profile() {
         let base = env::temp_dir().join("task-vscodium-trust-empty");
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
         let user_data_dir = base.join("profile");
 
         seed_trusted_roots(
             &user_data_dir,
-            &["/home/thomas/dev/wt/github.com/tsauvajon".into()],
+            &[PathBuf::from("/home/thomas/dev/wt/github.com/tsauvajon")],
         )
         .expect("seed trusted roots");
 
         let value = read_trust_model(&user_data_dir);
         assert!(value.contains("/home/thomas/dev/wt/github.com/tsauvajon"));
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn seed_trusted_roots_merges_without_duplicates() {
         let base = env::temp_dir().join("task-vscodium-trust-merge");
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
         let user_data_dir = base.join("profile");
 
         seed_trusted_roots(
             &user_data_dir,
-            &["/home/thomas/dev/wt/github.com/tsauvajon".into()],
+            &[PathBuf::from("/home/thomas/dev/wt/github.com/tsauvajon")],
         )
         .expect("seed initial trusted root");
 
         seed_trusted_roots(
             &user_data_dir,
             &[
-                "/home/thomas/dev/wt/github.com/tsauvajon".into(),
-                "/mnt/linux/dev/repos/github.com/tsauvajon".into(),
+                PathBuf::from("/home/thomas/dev/wt/github.com/tsauvajon"),
+                PathBuf::from("/mnt/linux/dev/repos/github.com/tsauvajon"),
             ],
         )
         .expect("seed additional trusted roots");
@@ -271,6 +274,6 @@ mod tests {
             .count();
         assert_eq!(trusted_count, 2);
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 }

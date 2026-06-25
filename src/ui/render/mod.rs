@@ -27,6 +27,7 @@ mod tables;
 
 pub(super) fn render(frame: &mut Frame, state: &mut UiState) {
     let theme = Theme::dark();
+    state.clear_mouse_hit_targets();
 
     let outer = UiLayout::default()
         .direction(Direction::Vertical)
@@ -113,4 +114,29 @@ fn render_body(frame: &mut Frame, area: ratatui::layout::Rect, state: &mut UiSta
     );
     frame.render_widget(details_panel, *actions_area);
     render_activity(frame, *activity_area, state, theme);
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    use super::render;
+    use crate::ui::state::{MouseHit, UiState};
+
+    #[test]
+    fn render_clears_stale_mouse_hit_targets() {
+        let backend = TestBackend::new(40, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut state = UiState::new(vec![], vec![], None);
+        state.push_mouse_hit_target_for_test(
+            Rect::new(0, 0, 10, 1),
+            MouseHit::Task { filtered_index: 0 },
+        );
+
+        terminal
+            .draw(|frame| render(frame, &mut state))
+            .expect("draw");
+
+        assert_eq!(state.mouse_hit(0, 0), None);
+    }
 }

@@ -53,15 +53,15 @@ enum RebaseInput {
 fn parse_rebase_input(args: &[String]) -> Result<RebaseInput> {
     match args {
         [] => Ok(RebaseInput::CurrentTask),
-        [query] => Ok(RebaseInput::Query(query.to_string())),
+        [query] => Ok(RebaseInput::Query(query.clone())),
         [repo_arg, branch] => Ok(RebaseInput::RepoBranch {
-            repo_arg: repo_arg.to_string(),
-            branch: branch.to_string(),
+            repo_arg: repo_arg.clone(),
+            branch: branch.clone(),
         }),
         [repo_arg, branch, base_ref] => Ok(RebaseInput::RepoBranchBase {
-            repo_arg: repo_arg.to_string(),
-            branch: branch.to_string(),
-            base_ref: base_ref.to_string(),
+            repo_arg: repo_arg.clone(),
+            branch: branch.clone(),
+            base_ref: base_ref.clone(),
         }),
         _ => Err(Error::failed(
             "Usage: task rebase [query] | [repo branch [base-ref]]",
@@ -118,21 +118,21 @@ mod tests {
 
         #[test]
         fn handles_query() {
-            let args = vec!["feature/login".to_string()];
+            let args = vec!["feature/login".to_owned()];
             assert_eq!(
                 parse_rebase_input(&args).unwrap(),
-                RebaseInput::Query("feature/login".to_string())
+                RebaseInput::Query("feature/login".to_owned())
             );
         }
 
         #[test]
         fn handles_repo_branch() {
-            let args = vec!["task".to_string(), "feature/login".to_string()];
+            let args = vec!["task".to_owned(), "feature/login".to_owned()];
             assert_eq!(
                 parse_rebase_input(&args).unwrap(),
                 RebaseInput::RepoBranch {
-                    repo_arg: "task".to_string(),
-                    branch: "feature/login".to_string(),
+                    repo_arg: "task".to_owned(),
+                    branch: "feature/login".to_owned(),
                 }
             );
         }
@@ -140,16 +140,16 @@ mod tests {
         #[test]
         fn handles_repo_branch_base() {
             let args = vec![
-                "task".to_string(),
-                "feature/login".to_string(),
-                "origin/main".to_string(),
+                "task".to_owned(),
+                "feature/login".to_owned(),
+                "origin/main".to_owned(),
             ];
             assert_eq!(
                 parse_rebase_input(&args).unwrap(),
                 RebaseInput::RepoBranchBase {
-                    repo_arg: "task".to_string(),
-                    branch: "feature/login".to_string(),
-                    base_ref: "origin/main".to_string(),
+                    repo_arg: "task".to_owned(),
+                    branch: "feature/login".to_owned(),
+                    base_ref: "origin/main".to_owned(),
                 }
             );
         }
@@ -157,10 +157,10 @@ mod tests {
         #[test]
         fn rejects_too_many_args() {
             let args = vec![
-                "task".to_string(),
-                "feature/login".to_string(),
-                "origin/main".to_string(),
-                "extra".to_string(),
+                "task".to_owned(),
+                "feature/login".to_owned(),
+                "origin/main".to_owned(),
+                "extra".to_owned(),
             ];
             let error = parse_rebase_input(&args).expect_err("must reject extra args");
             assert_eq!(
@@ -171,13 +171,13 @@ mod tests {
 
         #[test]
         fn repo_branch_captures_correct_fields() {
-            let args = vec!["myrepo".to_string(), "feat/xyz".to_string()];
+            let args = vec!["myrepo".to_owned(), "feat/xyz".to_owned()];
             let input = parse_rebase_input(&args).unwrap();
             assert_eq!(
                 input,
                 RebaseInput::RepoBranch {
-                    repo_arg: "myrepo".to_string(),
-                    branch: "feat/xyz".to_string(),
+                    repo_arg: "myrepo".to_owned(),
+                    branch: "feat/xyz".to_owned(),
                 }
             );
         }
@@ -185,36 +185,36 @@ mod tests {
         #[test]
         fn repo_branch_base_captures_correct_fields() {
             let args = vec![
-                "myrepo".to_string(),
-                "feat/xyz".to_string(),
-                "origin/develop".to_string(),
+                "myrepo".to_owned(),
+                "feat/xyz".to_owned(),
+                "origin/develop".to_owned(),
             ];
             let input = parse_rebase_input(&args).unwrap();
             assert_eq!(
                 input,
                 RebaseInput::RepoBranchBase {
-                    repo_arg: "myrepo".to_string(),
-                    branch: "feat/xyz".to_string(),
-                    base_ref: "origin/develop".to_string(),
+                    repo_arg: "myrepo".to_owned(),
+                    branch: "feat/xyz".to_owned(),
+                    base_ref: "origin/develop".to_owned(),
                 }
             );
         }
 
         #[test]
         fn query_captures_slash_in_branch_name() {
-            let args = vec!["feat/my-feature".to_string()];
+            let args = vec!["feat/my-feature".to_owned()];
             let input = parse_rebase_input(&args).unwrap();
-            assert_eq!(input, RebaseInput::Query("feat/my-feature".to_string()));
+            assert_eq!(input, RebaseInput::Query("feat/my-feature".to_owned()));
         }
 
         #[test]
         fn rejects_five_args() {
             let args = vec![
-                "a".to_string(),
-                "b".to_string(),
-                "c".to_string(),
-                "d".to_string(),
-                "e".to_string(),
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+                "d".to_owned(),
+                "e".to_owned(),
             ];
             assert!(
                 parse_rebase_input(&args).is_err(),
@@ -225,16 +225,15 @@ mod tests {
         #[test]
         fn error_message_contains_usage() {
             let args = vec![
-                "a".to_string(),
-                "b".to_string(),
-                "c".to_string(),
-                "d".to_string(),
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+                "d".to_owned(),
             ];
             let err = parse_rebase_input(&args).unwrap_err();
             assert!(
                 err.to_string().contains("Usage:"),
-                "error should contain usage hint: {}",
-                err
+                "error should contain usage hint: {err}"
             );
         }
     }

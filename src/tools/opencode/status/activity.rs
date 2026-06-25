@@ -1,9 +1,9 @@
-//! Last-activity timestamp for a single OpenCode session.
+//! Last-activity timestamp for a single `OpenCode` session.
 //!
 //! Shared between the classifier (which uses it to measure subagent
 //! child liveness) and the snapshot filter (which uses it to reject
 //! zombie sessions whose latest activity predates every currently
-//! live OpenCode process).
+//! live `OpenCode` process).
 
 use rusqlite::Connection;
 
@@ -64,7 +64,7 @@ mod tests {
 
         assert_eq!(latest_session_activity(&conn, "s1"), None);
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -80,7 +80,7 @@ mod tests {
 
         assert_eq!(latest_session_activity(&conn, "s1"), Some(500));
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -91,7 +91,7 @@ mod tests {
 
         assert_eq!(latest_session_activity(&conn, "s1"), Some(777));
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 
     /// Freshest row wins regardless of which table it lives in.
@@ -118,7 +118,7 @@ mod tests {
         );
         assert_eq!(latest_session_activity(&conn, "s1"), Some(1_500));
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(latest_session_activity(&conn, "s1"), Some(100));
         assert_eq!(latest_session_activity(&conn, "s2"), Some(999));
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 
     /// A session whose messages/parts belong to archived cohorts
@@ -162,6 +162,6 @@ mod tests {
 
         assert_eq!(latest_session_activity(&conn, "s1"), Some(900));
 
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
     }
 }

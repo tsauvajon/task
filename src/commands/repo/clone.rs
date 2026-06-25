@@ -4,7 +4,11 @@ use crate::{
     tools::git::repo::{default_clone_url, parse_repo_input},
 };
 
-pub fn run(env: &RuntimeEnvironment, repo_url: &str, repo_key: Option<String>) -> Result<()> {
+pub(super) fn run(
+    env: &RuntimeEnvironment,
+    repo_url: &str,
+    repo_key: Option<String>,
+) -> Result<()> {
     env.tasks().ensure_layout()?;
     let parsed = parse_repo_input(repo_url);
     let clone_url = parsed
@@ -27,7 +31,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = env::temp_dir().join(format!("task-rs-clone-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -39,7 +43,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -82,7 +86,7 @@ mod tests {
             let result = super::super::run(
                 &env,
                 "https://invalid.example.invalid/nonexistent/repo.git",
-                Some("example.invalid/nonexistent/repo".to_string()),
+                Some("example.invalid/nonexistent/repo".to_owned()),
             );
             assert!(
                 result.is_err(),

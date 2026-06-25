@@ -1,6 +1,11 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use detach::DetachCommand;
 
-pub mod check;
+use crate::{
+    error::{Error, Result},
+    runtime::environment::RuntimeEnvironment,
+};
+
 pub mod complete;
 pub mod completions;
 pub mod coverage;
@@ -16,10 +21,6 @@ pub mod rebase;
 pub mod repo;
 pub mod start;
 pub mod ui;
-
-use detach::DetachCommand;
-
-use crate::{error::Result, runtime::environment::RuntimeEnvironment};
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "task", about = "Task workflow helper", version)]
@@ -64,15 +65,13 @@ pub enum Command {
     List { repo: Option<String> },
     #[command(about = "Open interactive TUI")]
     Ui { repo: Option<String> },
-    #[command(about = "Remove a task worktree")]
+    #[command(about = "Remove task worktrees by task query")]
     Finish {
-        repo: Option<String>,
-        branch: Option<String>,
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
         #[arg(long)]
         force: bool,
     },
-    #[command(about = "Run project checks for current task", alias = "done")]
-    Check { worktree_path: Option<String> },
     #[command(about = "Run Rust test coverage via cargo-llvm-cov")]
     Coverage { worktree_path: Option<String> },
     #[command(about = "Rebase task branch onto a base ref")]
@@ -124,40 +123,50 @@ pub fn run(cli: Cli) -> Result<()> {
 
 fn run_with_context(command: Option<Command>) -> Result<()> {
     let context = RuntimeEnvironment::new()?;
+    let Some(command) = command else {
+        return ui::run(&context, None);
+    };
 
     match command {
-        None => ui::run(&context, None),
-        Some(Command::Doctor) => doctor::run(&context),
-        Some(Command::Repo { command }) => repo::run(&context, command),
-        Some(Command::Start {
+        Command::Doctor => doctor::run(&context),
+        Command::Start {
             repo,
             branch,
             base_ref,
             no_open,
-        }) => start::run(&context, &repo, &branch, base_ref.as_deref(), no_open),
-        Some(Command::Open { repo, branch }) => {
-            open::run(&context, repo.as_deref(), branch.as_deref())
-        }
-        Some(Command::Park) => park::run(&context),
-        Some(Command::Path { repo, branch }) => {
-            path::run(&context, repo.as_deref(), branch.as_deref())
-        }
-        Some(Command::List { repo }) => list::run(&context, repo.as_deref()),
-        Some(Command::Ui { repo }) => ui::run(&context, repo.as_deref()),
-        Some(Command::Finish {
-            repo,
-            branch,
-            force,
-        }) => finish::run(&context, repo.as_deref(), branch.as_deref(), force),
-        Some(Command::Check { worktree_path }) => check::run(&context, worktree_path.as_deref()),
-        Some(Command::Coverage { worktree_path }) => {
-            coverage::run(&context, worktree_path.as_deref())
-        }
-        Some(Command::Rebase { args }) => rebase::run(&context, &args),
-        Some(Command::Detach { command }) => detach::run(&context, command),
-        Some(Command::Completions { .. }) | Some(Command::Complete { .. }) => {
-            unreachable!("completion commands are handled before runtime initialization")
-        }
+        } => start::run(&context, &repo, &branch, base_ref.as_deref(), no_open),
+        Command::Open { repo, branch } => open::run(&context, repo.as_deref(), branch.as_deref()),
+        Command::Park => park::run(&context),
+        Command::Path { repo, branch } => path::run(&context, repo.as_deref(), branch.as_deref()),
+        Command::Finish { tasks, force } => finish::run(&context, &tasks, force),
+        Command::Coverage { worktree_path } => coverage::run(&context, worktree_path.as_deref()),
+        Command::Rebase { args } => rebase::run(&context, &args),
+        passthrough @ (Command::Repo { .. }
+        | Command::List { .. }
+        | Command::Ui { .. }
+        | Command::Detach { .. }) => run_context_passthrough(&context, passthrough),
+        Command::Completions { .. } | Command::Complete { .. } => Err(Error::failed(
+            "completion commands must be handled before runtime initialization",
+        )),
+    }
+}
+
+fn run_context_passthrough(context: &RuntimeEnvironment, command: Command) -> Result<()> {
+    match command {
+        Command::List { repo } => list::run(context, repo.as_deref()),
+        Command::Ui { repo } => ui::run(context, repo.as_deref()),
+        Command::Repo { command } => repo::run(context, command),
+        Command::Detach { command } => detach::run(context, command),
+        Command::Doctor
+        | Command::Start { .. }
+        | Command::Open { .. }
+        | Command::Park
+        | Command::Path { .. }
+        | Command::Finish { .. }
+        | Command::Coverage { .. }
+        | Command::Rebase { .. }
+        | Command::Completions { .. }
+        | Command::Complete { .. } => Err(Error::failed("internal command dispatch mismatch")),
     }
 }
 
@@ -176,8 +185,8 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Start {
-                    repo: "goto".to_string(),
-                    branch: "bump-deps".to_string(),
+                    repo: "goto".to_owned(),
+                    branch: "bump-deps".to_owned(),
                     base_ref: None,
                     no_open: false,
                 })
@@ -219,7 +228,7 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Open {
-                    repo: Some("goto".to_string()),
+                    repo: Some("goto".to_owned()),
                     branch: None,
                 })
             );
@@ -231,7 +240,7 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Rebase {
-                    args: vec!["goto".to_string(), "bump-deps".to_string()],
+                    args: vec!["goto".to_owned(), "bump-deps".to_owned()],
                 })
             );
         }
@@ -248,7 +257,7 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Rebase {
-                    args: vec!["bump-deps".to_string()],
+                    args: vec!["bump-deps".to_owned()],
                 })
             );
         }
@@ -259,8 +268,7 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Finish {
-                    repo: None,
-                    branch: None,
+                    tasks: Vec::new(),
                     force: true,
                 })
             );
@@ -273,17 +281,6 @@ mod tests {
                 cli.command,
                 Some(Command::Repo {
                     command: RepoCommand::Prune { repo: None },
-                })
-            );
-        }
-
-        #[test]
-        fn parses_check_command() {
-            let cli = Cli::parse_from(["task", "check"]);
-            assert_eq!(
-                cli.command,
-                Some(Command::Check {
-                    worktree_path: None
                 })
             );
         }
@@ -311,7 +308,7 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Ui {
-                    repo: Some("goto".to_string()),
+                    repo: Some("goto".to_owned()),
                 })
             );
         }
@@ -335,8 +332,8 @@ mod tests {
                 cli.command,
                 Some(Command::Repo {
                     command: RepoCommand::Clone {
-                        repo_url: "git@github.com:me/app.git".to_string(),
-                        repo_key: Some("app".to_string()),
+                        repo_url: "git@github.com:me/app.git".to_owned(),
+                        repo_key: Some("app".to_owned()),
                     },
                 })
             );
@@ -355,7 +352,7 @@ mod tests {
                 cli.command,
                 Some(Command::Detach {
                     command: DetachCommand::Add {
-                        repo: "myrepo".to_string(),
+                        repo: "myrepo".to_owned(),
                     },
                 })
             );
@@ -368,7 +365,7 @@ mod tests {
                 cli.command,
                 Some(Command::Detach {
                     command: DetachCommand::Update {
-                        repo: Some("myrepo".to_string()),
+                        repo: Some("myrepo".to_owned()),
                     },
                 })
             );
@@ -392,7 +389,7 @@ mod tests {
                 cli.command,
                 Some(Command::Detach {
                     command: DetachCommand::Remove {
-                        repo: "myrepo".to_string(),
+                        repo: "myrepo".to_owned(),
                         force: false,
                     },
                 })
@@ -406,7 +403,7 @@ mod tests {
                 cli.command,
                 Some(Command::Detach {
                     command: DetachCommand::Remove {
-                        repo: "myrepo".to_string(),
+                        repo: "myrepo".to_owned(),
                         force: true,
                     },
                 })
@@ -434,9 +431,9 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Start {
-                    repo: "goto".to_string(),
-                    branch: "bump-deps".to_string(),
-                    base_ref: Some("origin/main".to_string()),
+                    repo: "goto".to_owned(),
+                    branch: "bump-deps".to_owned(),
+                    base_ref: Some("origin/main".to_owned()),
                     no_open: false,
                 })
             );
@@ -448,8 +445,8 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Start {
-                    repo: "goto".to_string(),
-                    branch: "bump-deps".to_string(),
+                    repo: "goto".to_owned(),
+                    branch: "bump-deps".to_owned(),
                     base_ref: None,
                     no_open: true,
                 })
@@ -469,9 +466,9 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Start {
-                    repo: "goto".to_string(),
-                    branch: "bump-deps".to_string(),
-                    base_ref: Some("origin/main".to_string()),
+                    repo: "goto".to_owned(),
+                    branch: "bump-deps".to_owned(),
+                    base_ref: Some("origin/main".to_owned()),
                     no_open: true,
                 })
             );
@@ -483,7 +480,7 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::List {
-                    repo: Some("goto".to_string()),
+                    repo: Some("goto".to_owned()),
                 })
             );
         }
@@ -500,8 +497,8 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Path {
-                    repo: Some("goto".to_string()),
-                    branch: Some("bump-deps".to_string()),
+                    repo: Some("goto".to_owned()),
+                    branch: Some("bump-deps".to_owned()),
                 })
             );
         }
@@ -512,8 +509,7 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Finish {
-                    repo: Some("goto".to_string()),
-                    branch: Some("bump-deps".to_string()),
+                    tasks: vec!["goto".to_owned(), "bump-deps".to_owned()],
                     force: true,
                 })
             );
@@ -526,7 +522,7 @@ mod tests {
                 cli.command,
                 Some(Command::Repo {
                     command: RepoCommand::Prune {
-                        repo: Some("goto".to_string()),
+                        repo: Some("goto".to_owned()),
                     },
                 })
             );
@@ -538,18 +534,7 @@ mod tests {
             assert_eq!(
                 cli.command,
                 Some(Command::Coverage {
-                    worktree_path: Some("/tmp/some/path".to_string()),
-                })
-            );
-        }
-
-        #[test]
-        fn parses_check_with_path() {
-            let cli = Cli::parse_from(["task", "check", "/tmp/some/path"]);
-            assert_eq!(
-                cli.command,
-                Some(Command::Check {
-                    worktree_path: Some("/tmp/some/path".to_string()),
+                    worktree_path: Some("/tmp/some/path".to_owned()),
                 })
             );
         }
@@ -583,7 +568,7 @@ mod tests {
                 cli.command,
                 Some(Command::Repo {
                     command: RepoCommand::Clone {
-                        repo_url: "git@github.com:me/app.git".to_string(),
+                        repo_url: "git@github.com:me/app.git".to_owned(),
                         repo_key: None,
                     },
                 })

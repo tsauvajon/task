@@ -1,4 +1,4 @@
-//! Discover running OpenCode processes and their cwds.
+//! Discover running `OpenCode` processes and their cwds.
 //!
 //! We identify the process by name (`opencode` or the Nix-wrapper
 //! `.opencode-wrapped`) and read its cwd via `sysinfo`. On macOS,
@@ -147,7 +147,7 @@ impl LiveOpencodeProcesses {
             .iter()
             .map(|p| p.start_ms)
             .min()
-            .map(|ms| ms as i64)
+            .map(|ms| i64::try_from(ms).unwrap_or(i64::MAX))
     }
 
     fn processes_for(&self, directory: &Path) -> Option<&Vec<LiveOpencodeProcess>> {
@@ -280,7 +280,7 @@ mod tests {
             let probe = LiveOpencodeProcesses::collect_from(&mut system);
             // No assertion on content; behavior depends on host.
             // Just exercise `has_cwd` to ensure the HashMap is usable.
-            let _ = probe.has_cwd(Path::new("/"));
+            _ = probe.has_cwd(Path::new("/"));
         }
     }
 }

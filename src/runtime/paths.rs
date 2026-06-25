@@ -4,9 +4,9 @@ use crate::runtime::{BranchName, RepoKey};
 
 #[derive(Debug, Clone)]
 pub struct WorkspacePaths {
-    repos_dir: PathBuf,
-    wt_dir: PathBuf,
-    detached_dir: PathBuf,
+    repos: PathBuf,
+    wt: PathBuf,
+    detached: PathBuf,
 }
 
 impl WorkspacePaths {
@@ -19,40 +19,40 @@ impl WorkspacePaths {
         let wt_dir = wt_dir.as_ref().to_path_buf();
         let detached_dir = detached_dir.as_ref().to_path_buf();
         Self {
-            repos_dir,
-            wt_dir,
-            detached_dir,
+            repos: repos_dir,
+            wt: wt_dir,
+            detached: detached_dir,
         }
     }
 
     #[must_use]
     pub fn repos_dir(&self) -> &Path {
-        &self.repos_dir
+        &self.repos
     }
 
     #[must_use]
     pub fn wt_dir(&self) -> &Path {
-        &self.wt_dir
+        &self.wt
     }
 
     #[must_use]
     pub fn detached_dir(&self) -> &Path {
-        &self.detached_dir
+        &self.detached
     }
 
     #[must_use]
     pub fn repo_gitdir_path(&self, repo_key: &RepoKey) -> PathBuf {
-        self.repos_dir.join(format!("{repo_key}.git"))
+        self.repos.join(format!("{repo_key}.git"))
     }
 
     #[must_use]
     pub fn worktree_path(&self, repo_key: &RepoKey, branch: &BranchName) -> PathBuf {
-        self.wt_dir.join(repo_key.as_str()).join(branch.as_str())
+        self.wt.join(repo_key.as_str()).join(branch.as_str())
     }
 
     #[must_use]
     pub fn detached_path(&self, repo_key: &RepoKey) -> PathBuf {
-        self.detached_dir.join(repo_key.as_str())
+        self.detached.join(repo_key.as_str())
     }
 }
 

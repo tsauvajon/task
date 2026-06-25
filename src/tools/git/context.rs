@@ -140,14 +140,11 @@ mod tests {
                 .as_nanos();
             let base = std::env::temp_dir().join(format!("task-context-test-{unique}"));
 
-            let real_repos_dir = base.join("real").join("repos");
-            let repo_common_dir = real_repos_dir
-                .join("github.com")
-                .join("tsauvajon")
-                .join("task.git");
+            let real_repos_dir = base.join("real/repos");
+            let repo_common_dir = real_repos_dir.join("github.com/tsauvajon/task.git");
             fs::create_dir_all(&repo_common_dir).expect("create real repos dir");
 
-            let symlinked_repos_dir = base.join("linked").join("repos");
+            let symlinked_repos_dir = base.join("linked/repos");
             fs::create_dir_all(
                 symlinked_repos_dir
                     .parent()

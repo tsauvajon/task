@@ -1,11 +1,11 @@
 use std::path::Path;
 
 #[must_use]
-pub fn cmdline_matches_user_data_dir(args: &[String], user_data_dir: &Path) -> bool {
-    let Some(arg0) = args.first() else {
+pub(super) fn cmdline_matches_user_data_dir(args: &[String], user_data_dir: &Path) -> bool {
+    let Some(program_arg) = args.first() else {
         return false;
     };
-    if !is_codium_binary(arg0) {
+    if !is_codium_binary(program_arg) {
         return false;
     }
 
@@ -20,13 +20,13 @@ pub fn cmdline_matches_user_data_dir(args: &[String], user_data_dir: &Path) -> b
         })
 }
 
-fn is_codium_binary(arg0: &str) -> bool {
+fn is_codium_binary(program_arg: &str) -> bool {
     // On Linux, argv[0] is typically the `codium` wrapper script or binary.
     // On macOS (nix), VSCodium launches as `VSCodium` (note the capital C)
     // inside the .app bundle, so we use case-insensitive matching.
     // It can also appear as the `Electron` binary under a vscodium nix store
     // path.
-    let path = Path::new(arg0);
+    let path = Path::new(program_arg);
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -93,11 +93,11 @@ mod tests {
         #[test]
         fn matches_split_flag_form() {
             let args = vec![
-                "codium".to_string(),
-                "--new-window".to_string(),
-                "--user-data-dir".to_string(),
-                "/tmp/task/codium/a".to_string(),
-                "/tmp/wt/repo".to_string(),
+                "codium".to_owned(),
+                "--new-window".to_owned(),
+                "--user-data-dir".to_owned(),
+                "/tmp/task/codium/a".to_owned(),
+                "/tmp/wt/repo".to_owned(),
             ];
             assert!(cmdline_matches_user_data_dir(
                 &args,
@@ -108,8 +108,8 @@ mod tests {
         #[test]
         fn matches_equals_flag_form() {
             let args = vec![
-                "/usr/bin/codium".to_string(),
-                "--user-data-dir=/tmp/task/codium/a".to_string(),
+                "/usr/bin/codium".to_owned(),
+                "--user-data-dir=/tmp/task/codium/a".to_owned(),
             ];
             assert!(cmdline_matches_user_data_dir(
                 &args,
@@ -120,9 +120,9 @@ mod tests {
         #[test]
         fn rejects_non_matching_directory() {
             let args = vec![
-                "codium".to_string(),
-                "--user-data-dir".to_string(),
-                "/tmp/task/codium/a".to_string(),
+                "codium".to_owned(),
+                "--user-data-dir".to_owned(),
+                "/tmp/task/codium/a".to_owned(),
             ];
             assert!(!cmdline_matches_user_data_dir(
                 &args,
@@ -133,9 +133,9 @@ mod tests {
         #[test]
         fn rejects_non_codium_binary() {
             let args = vec![
-                "bash".to_string(),
-                "--user-data-dir".to_string(),
-                "/tmp/task/codium/a".to_string(),
+                "bash".to_owned(),
+                "--user-data-dir".to_owned(),
+                "/tmp/task/codium/a".to_owned(),
             ];
             assert!(!cmdline_matches_user_data_dir(
                 &args,
@@ -155,9 +155,9 @@ mod tests {
         fn matches_path_binary_prefix() {
             // Binary with an absolute path containing "codium"
             let args = vec![
-                "/usr/lib/vscodium-bin/codium".to_string(),
-                "--user-data-dir".to_string(),
-                "/tmp/task/codium/a".to_string(),
+                "/usr/lib/vscodium-bin/codium".to_owned(),
+                "--user-data-dir".to_owned(),
+                "/tmp/task/codium/a".to_owned(),
             ];
             assert!(cmdline_matches_user_data_dir(
                 &args,
@@ -168,8 +168,8 @@ mod tests {
         #[test]
         fn rejects_equals_form_with_wrong_value() {
             let args = vec![
-                "codium".to_string(),
-                "--user-data-dir=/tmp/task/codium/wrong".to_string(),
+                "codium".to_owned(),
+                "--user-data-dir=/tmp/task/codium/wrong".to_owned(),
             ];
             assert!(!cmdline_matches_user_data_dir(
                 &args,
@@ -182,11 +182,11 @@ mod tests {
     fn cmdline_matches_macos_electron_in_vscodium_bundle() {
         let args = vec![
             "/nix/store/abc123-vscodium-1.2.3/Applications/VSCodium.app/Contents/MacOS/Electron"
-                .to_string(),
-            "--new-window".to_string(),
-            "--user-data-dir".to_string(),
-            "/tmp/task/codium/a".to_string(),
-            "/tmp/wt/repo".to_string(),
+                .to_owned(),
+            "--new-window".to_owned(),
+            "--user-data-dir".to_owned(),
+            "/tmp/task/codium/a".to_owned(),
+            "/tmp/wt/repo".to_owned(),
         ];
         assert!(cmdline_matches_user_data_dir(
             &args,
@@ -198,9 +198,9 @@ mod tests {
     fn cmdline_rejects_non_vscodium_electron_binary() {
         // Electron in a non-vscodium app should not match
         let args = vec![
-            "/Applications/SomeOtherApp.app/Contents/MacOS/Electron".to_string(),
-            "--user-data-dir".to_string(),
-            "/tmp/task/codium/a".to_string(),
+            "/Applications/SomeOtherApp.app/Contents/MacOS/Electron".to_owned(),
+            "--user-data-dir".to_owned(),
+            "/tmp/task/codium/a".to_owned(),
         ];
         assert!(!cmdline_matches_user_data_dir(
             &args,
@@ -214,9 +214,9 @@ mod tests {
         // not "codium" as on Linux.
         let args = vec![
             "/nix/store/abc-vscodium-1.2.3/Applications/VSCodium.app/Contents/MacOS/VSCodium"
-                .to_string(),
-            "--user-data-dir".to_string(),
-            "/tmp/task/codium/a".to_string(),
+                .to_owned(),
+            "--user-data-dir".to_owned(),
+            "/tmp/task/codium/a".to_owned(),
         ];
         assert!(cmdline_matches_user_data_dir(
             &args,

@@ -19,11 +19,7 @@ pub enum ResolveResult {
 pub fn parse_repo_input(input: &str) -> RepoInput {
     let trimmed = input.trim();
     let repo_key = normalize_repo_key(trimmed);
-    let clone_url = if is_git_url(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
-    };
+    let clone_url = is_git_url(trimmed).then(|| trimmed.to_owned());
     RepoInput {
         repo_key,
         clone_url,
@@ -34,37 +30,33 @@ pub fn parse_repo_input(input: &str) -> RepoInput {
 pub fn default_clone_url(input: &str) -> String {
     let trimmed = input.trim();
     if is_git_url(trimmed) {
-        return trimmed.to_string();
+        return trimmed.to_owned();
     }
     if looks_like_host_path(trimmed) {
         return format!("https://{trimmed}");
     }
-    trimmed.to_string()
+    trimmed.to_owned()
 }
 
 #[must_use]
 pub fn normalize_repo_key(input: &str) -> String {
-    let mut key = input.trim().to_string();
+    let mut key = input.trim().to_owned();
 
     if let Some((_, rest)) = key.split_once("://") {
-        key = rest.to_string();
+        key = rest.to_owned();
     }
 
     let first_slash = key.find('/').unwrap_or(key.len());
     let first_colon = key.find(':').unwrap_or(key.len());
     let boundary = first_slash.min(first_colon);
-    if let Some(at_index) = key.find('@')
-        && at_index < boundary
-        && let Some(rest) = key.get((at_index + 1)..)
-    {
-        key = rest.to_string();
+    if let Some(rest) = key_without_user_prefix(&key, boundary) {
+        key = rest.to_owned();
     }
 
     if let Some(colon_index) = key.find(':')
         && key
             .find('/')
-            .map(|slash_index| colon_index < slash_index)
-            .unwrap_or(true)
+            .is_none_or(|slash_index| colon_index < slash_index)
     {
         key.replace_range(colon_index..=colon_index, "/");
     }
@@ -74,10 +66,18 @@ pub fn normalize_repo_key(input: &str) -> String {
     }
 
     if let Some(stripped) = key.strip_suffix(".git") {
-        return stripped.to_string();
+        return stripped.to_owned();
     }
 
     key
+}
+
+fn key_without_user_prefix(key: &str, boundary: usize) -> Option<&str> {
+    let at_index = key.find('@')?;
+    if at_index >= boundary {
+        return None;
+    }
+    key.get(at_index.checked_add(1)?..)
 }
 
 #[must_use]
@@ -285,7 +285,7 @@ mod tests {
             assert_eq!(parsed.repo_key, "github.com/tsauvajon/goto");
             assert_eq!(
                 parsed.clone_url,
-                Some("git@github.com:tsauvajon/goto.git".to_string())
+                Some("git@github.com:tsauvajon/goto.git".to_owned())
             );
         }
 
@@ -357,30 +357,30 @@ mod tests {
         #[test]
         fn by_short_name_when_unique() {
             let keys = vec![
-                "github.com/tsauvajon/goto".to_string(),
-                "github.com/tsauvajon/task".to_string(),
+                "github.com/tsauvajon/goto".to_owned(),
+                "github.com/tsauvajon/task".to_owned(),
             ];
 
             let resolved = resolve_repo_query("goto", &keys);
             assert_eq!(
                 resolved,
-                ResolveResult::Resolved("github.com/tsauvajon/goto".to_string())
+                ResolveResult::Resolved("github.com/tsauvajon/goto".to_owned())
             );
         }
 
         #[test]
         fn reports_ambiguity() {
             let keys = vec![
-                "github.com/tsauvajon/goto".to_string(),
-                "github.com/example/goto".to_string(),
+                "github.com/tsauvajon/goto".to_owned(),
+                "github.com/example/goto".to_owned(),
             ];
 
             let resolved = resolve_repo_query("goto", &keys);
             assert_eq!(
                 resolved,
                 ResolveResult::Ambiguous(vec![
-                    "github.com/example/goto".to_string(),
-                    "github.com/tsauvajon/goto".to_string(),
+                    "github.com/example/goto".to_owned(),
+                    "github.com/tsauvajon/goto".to_owned(),
                 ])
             );
         }
@@ -389,24 +389,24 @@ mod tests {
         fn falls_through_to_resolved_when_no_matches() {
             // When there are no suffix matches the query is returned as
             // Resolved (treated as a new key the caller provides).
-            let keys = vec!["github.com/acme/alpha".to_string()];
+            let keys = vec!["github.com/acme/alpha".to_owned()];
             let result = resolve_repo_query("github.com/acme/beta", &keys);
             assert_eq!(
                 result,
-                ResolveResult::Resolved("github.com/acme/beta".to_string())
+                ResolveResult::Resolved("github.com/acme/beta".to_owned())
             );
         }
 
         #[test]
         fn matches_full_key_exactly() {
             let keys = vec![
-                "github.com/acme/alpha".to_string(),
-                "github.com/acme/beta".to_string(),
+                "github.com/acme/alpha".to_owned(),
+                "github.com/acme/beta".to_owned(),
             ];
             let result = resolve_repo_query("github.com/acme/alpha", &keys);
             assert_eq!(
                 result,
-                ResolveResult::Resolved("github.com/acme/alpha".to_string())
+                ResolveResult::Resolved("github.com/acme/alpha".to_owned())
             );
         }
     }
@@ -417,25 +417,25 @@ mod tests {
         #[test]
         fn rejects_nonexistent_path() {
             let path = env::temp_dir().join("task-rs-nonexistent-bare-repo");
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             assert!(!is_valid_bare_repo(&path));
         }
 
         #[test]
         fn rejects_empty_directory() {
             let path = env::temp_dir().join("task-rs-empty-bare-repo");
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create empty dir");
 
             assert!(!is_valid_bare_repo(&path));
 
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
         }
 
         #[test]
         fn accepts_real_bare_repo() {
             let path = env::temp_dir().join("task-rs-valid-bare-repo.git");
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
 
             let output = std::process::Command::new("git")
                 .args(["init", "--bare", &path.to_string_lossy()])
@@ -447,7 +447,7 @@ mod tests {
 
             assert!(is_valid_bare_repo(&path));
 
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
         }
     }
 }

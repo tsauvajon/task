@@ -18,38 +18,40 @@ pub struct GitDir<'a> {
 
 impl<'a> GitDir<'a> {
     #[must_use]
-    pub fn new(path: &'a Path) -> Self {
+    pub const fn new(path: &'a Path) -> Self {
         Self { path }
     }
 
     #[must_use]
-    pub fn path(&self) -> &Path {
+    pub const fn path(&self) -> &Path {
         self.path
     }
 
     /// Run a git command with `--git-dir <self>` prepended, capturing stdout.
     pub fn capture(&self, args: &[&str]) -> Result<String> {
-        let path_str = self.path_str();
-        let mut full_args = vec!["--git-dir", path_str.as_ref()];
-        full_args.extend_from_slice(args);
-        capture(&full_args, None)
+        self.with_git_dir_args(args, |full_args| capture(full_args, None))
     }
 
     /// Run a git command with `--git-dir <self>` prepended, checking exit status.
     pub fn status(&self, args: &[&str]) -> Result<()> {
-        let path_str = self.path_str();
-        let mut full_args = vec!["--git-dir", path_str.as_ref()];
-        full_args.extend_from_slice(args);
-        status(&full_args, None)
+        self.with_git_dir_args(args, |full_args| status(full_args, None))
     }
 
     /// Run a git command with `--git-dir <self>` prepended, checking exit status,
     /// and setting the working directory.
     pub fn status_in(&self, args: &[&str], cwd: &Path) -> Result<()> {
+        self.with_git_dir_args(args, |full_args| status(full_args, Some(cwd)))
+    }
+
+    fn with_git_dir_args<T>(
+        &self,
+        args: &[&str],
+        run: impl FnOnce(&[&str]) -> Result<T>,
+    ) -> Result<T> {
         let path_str = self.path_str();
         let mut full_args = vec!["--git-dir", path_str.as_ref()];
         full_args.extend_from_slice(args);
-        status(&full_args, Some(cwd))
+        run(&full_args)
     }
 
     fn path_str(&self) -> Cow<'_, str> {
@@ -80,7 +82,7 @@ mod tests {
     /// don't collide.
     fn make_bare_repo(name: &str) -> std::path::PathBuf {
         let dir = env::temp_dir().join(format!("task-rs-gitdir-{name}.git"));
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
         let status = Command::new("git")
             .args(["init", "--bare", dir.to_str().expect("valid utf-8 path")])
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -115,7 +117,7 @@ mod tests {
             .expect("git rev-parse --git-dir should succeed");
         // git outputs "." when queried from inside the bare repo directory.
         assert!(!output.trim().is_empty(), "output should not be empty");
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -125,13 +127,13 @@ mod tests {
         // `git rev-parse --git-dir` exits 0 on a valid repo.
         gd.status(&["rev-parse", "--git-dir"])
             .expect("status should succeed on a valid bare repo");
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn status_errors_on_nonexistent_path() {
         let dir = env::temp_dir().join("task-rs-gitdir-nonexistent-12345.git");
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
         let gd = GitDir::new(&dir);
         let result = gd.status(&["rev-parse", "--git-dir"]);
         assert!(result.is_err(), "should fail for a nonexistent git dir");
@@ -144,7 +146,7 @@ mod tests {
         let parent = env::temp_dir();
         gd.status_in(&["rev-parse", "--git-dir"], &parent)
             .expect("status_in should succeed on a valid bare repo");
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -158,6 +160,6 @@ mod tests {
             !out.trim().is_empty(),
             "git rev-parse --git-dir should produce output"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        _ = std::fs::remove_dir_all(&dir);
     }
 }

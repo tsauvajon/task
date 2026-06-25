@@ -27,9 +27,10 @@ pub fn run(_env: &RuntimeEnvironment, worktree_path: Option<&str>) -> Result<()>
 }
 
 fn resolve_check_path(worktree_path: Option<&str>) -> PathBuf {
-    worktree_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    worktree_path.map_or_else(
+        || env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        PathBuf::from,
+    )
 }
 
 #[cfg(test)]

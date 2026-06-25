@@ -23,7 +23,7 @@ pub struct TaskRow {
     /// and profile naming instead of `branch` (which can change).
     pub worktree_name: String,
     pub path: PathBuf,
-    /// Rolled-up OpenCode session state for the worktree. Populated by
+    /// Rolled-up `OpenCode` session state for the worktree. Populated by
     /// the TUI loader; other callers leave it `None`.
     pub opencode: OpenCodeState,
 }
@@ -62,7 +62,7 @@ pub fn build_task_rows(
                         .file_name()
                         .map(|name| name.to_string_lossy().into_owned())
                 })
-                .unwrap_or_else(|| "unknown".to_string());
+                .unwrap_or_else(|| "unknown".to_owned());
 
             // Stable identity: derived from the worktree directory path,
             // not the (potentially renamed) Git branch.
@@ -88,13 +88,20 @@ pub fn build_task_rows(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::{TaskRow, TaskStatus, build_task_rows};
     use crate::{
         runtime::{BranchName, RepoKey},
-        tools::{git::worktrees::WorktreeEntry, opencode::status::OpenCodeState},
+        tools::{
+            git::worktrees::WorktreeEntry, opencode::status::OpenCodeState,
+            zellij::naming::session_name,
+        },
     };
+
+    fn path_buf(path: &str) -> PathBuf {
+        PathBuf::from(path)
+    }
 
     mod task_status {
         use super::*;
@@ -128,18 +135,18 @@ mod tests {
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
-                    branch_ref: Some("refs/heads/rewrite-in-rust".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust"),
+                    branch_ref: Some("refs/heads/rewrite-in-rust".to_owned()),
                     is_bare: false,
                 },
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
-                    branch_ref: Some("refs/heads/bump-deps".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/bump-deps"),
+                    branch_ref: Some("refs/heads/bump-deps".to_owned()),
                     is_bare: false,
                 },
             ];
 
-            let open_sessions = vec!["github_com_tsauvajon_task-rewrite-in-rust".to_string()];
+            let open_sessions = vec!["github_com_tsauvajon_task-rewrite-in-rust".to_owned()];
             let rows = build_task_rows(&repo_key, wt_dir, &entries, &open_sessions);
 
             assert_eq!(
@@ -149,16 +156,16 @@ mod tests {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/tsauvajon/task"),
                         branch: BranchName::new("rewrite-in-rust"),
-                        worktree_name: "rewrite-in-rust".to_string(),
-                        path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
+                        worktree_name: "rewrite-in-rust".to_owned(),
+                        path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust"),
                         opencode: OpenCodeState::None,
                     },
                     TaskRow {
                         status: TaskStatus::Parked,
                         repo: RepoKey::new("github.com/tsauvajon/task"),
                         branch: BranchName::new("bump-deps"),
-                        worktree_name: "bump-deps".to_string(),
-                        path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
+                        worktree_name: "bump-deps".to_owned(),
+                        path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/bump-deps"),
                         opencode: OpenCodeState::None,
                     },
                 ]
@@ -171,13 +178,13 @@ mod tests {
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![
                 WorktreeEntry {
-                    path: "/tmp/dev/repos/github.com/tsauvajon/task.git".into(),
+                    path: path_buf("/tmp/dev/repos/github.com/tsauvajon/task.git"),
                     branch_ref: None,
                     is_bare: true,
                 },
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/main".into(),
-                    branch_ref: Some("refs/heads/main".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/main"),
+                    branch_ref: Some("refs/heads/main".to_owned()),
                     is_bare: false,
                 },
             ];
@@ -195,20 +202,20 @@ mod tests {
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/feat".into(),
-                    branch_ref: Some("refs/heads/feat".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/feat"),
+                    branch_ref: Some("refs/heads/feat".to_owned()),
                     is_bare: false,
                 },
                 // Detached snapshot under detached_dir — must be excluded.
                 WorktreeEntry {
-                    path: "/tmp/dev/detached/github.com/tsauvajon/task".into(),
+                    path: path_buf("/tmp/dev/detached/github.com/tsauvajon/task"),
                     branch_ref: None,
                     is_bare: false,
                 },
                 // Arbitrary external checkout — must be excluded.
                 WorktreeEntry {
-                    path: "/some/other/dir/mybranch".into(),
-                    branch_ref: Some("refs/heads/mybranch".to_string()),
+                    path: path_buf("/some/other/dir/mybranch"),
+                    branch_ref: Some("refs/heads/mybranch".to_owned()),
                     is_bare: false,
                 },
             ];
@@ -227,7 +234,7 @@ mod tests {
             let wt_dir = Path::new("/tmp/dev/wt");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![WorktreeEntry {
-                path: "/tmp/dev/repos/github.com/tsauvajon/task.git".into(),
+                path: path_buf("/tmp/dev/repos/github.com/tsauvajon/task.git"),
                 branch_ref: None,
                 is_bare: true,
             }];
@@ -250,25 +257,25 @@ mod tests {
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/branch-a".into(),
-                    branch_ref: Some("refs/heads/branch-a".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/branch-a"),
+                    branch_ref: Some("refs/heads/branch-a".to_owned()),
                     is_bare: false,
                 },
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/branch-b".into(),
-                    branch_ref: Some("refs/heads/branch-b".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/branch-b"),
+                    branch_ref: Some("refs/heads/branch-b".to_owned()),
                     is_bare: false,
                 },
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/branch-c".into(),
-                    branch_ref: Some("refs/heads/branch-c".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/branch-c"),
+                    branch_ref: Some("refs/heads/branch-c".to_owned()),
                     is_bare: false,
                 },
             ];
 
             let open_sessions = vec![
-                "github_com_tsauvajon_task-branch-a".to_string(),
-                "github_com_tsauvajon_task-branch-c".to_string(),
+                "github_com_tsauvajon_task-branch-a".to_owned(),
+                "github_com_tsauvajon_task-branch-c".to_owned(),
             ];
             let rows = build_task_rows(&repo_key, wt_dir, &entries, &open_sessions);
 
@@ -279,13 +286,46 @@ mod tests {
         }
 
         #[test]
+        fn legacy_colliding_long_worktree_names_do_not_share_open_state() {
+            let wt_dir = Path::new("/tmp/dev/wt");
+            let repo_key = RepoKey::new("github.com/tsauvajon/task");
+            let first_worktree = format!(
+                "same-readable-prefix-with-identical-start-first-{}",
+                "a".repeat(40)
+            );
+            let second_worktree = format!(
+                "same-readable-prefix-with-identical-start-second-{}",
+                "b".repeat(40)
+            );
+            let entries = vec![
+                WorktreeEntry {
+                    path: wt_dir.join(repo_key.as_str()).join(&first_worktree),
+                    branch_ref: Some(format!("refs/heads/{first_worktree}")),
+                    is_bare: false,
+                },
+                WorktreeEntry {
+                    path: wt_dir.join(repo_key.as_str()).join(&second_worktree),
+                    branch_ref: Some(format!("refs/heads/{second_worktree}")),
+                    is_bare: false,
+                },
+            ];
+
+            let open_sessions = vec![session_name(repo_key.as_str(), &first_worktree)];
+            let rows = build_task_rows(&repo_key, wt_dir, &entries, &open_sessions);
+
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0].status, TaskStatus::Open);
+            assert_eq!(rows[1].status, TaskStatus::Parked);
+        }
+
+        #[test]
         fn branch_from_worktree_path_fallback() {
             // branch_ref is None but path is under wt_dir/repo_key prefix:
             // branch is derived from the relative path.
             let wt_dir = Path::new("/tmp/dev/wt");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![WorktreeEntry {
-                path: "/tmp/dev/wt/github.com/tsauvajon/task/feature-xyz".into(),
+                path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/feature-xyz"),
                 branch_ref: None,
                 is_bare: false,
             }];
@@ -300,8 +340,8 @@ mod tests {
             let wt_dir = Path::new("/tmp/dev/wt");
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![WorktreeEntry {
-                path: "/tmp/dev/wt/github.com/tsauvajon/task/main".into(),
-                branch_ref: Some("refs/heads/main".to_string()),
+                path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/main"),
+                branch_ref: Some("refs/heads/main".to_owned()),
                 is_bare: false,
             }];
 
@@ -316,7 +356,7 @@ mod tests {
             let path = std::path::PathBuf::from("/tmp/dev/wt/github.com/tsauvajon/task/main");
             let entries = vec![WorktreeEntry {
                 path: path.clone(),
-                branch_ref: Some("refs/heads/main".to_string()),
+                branch_ref: Some("refs/heads/main".to_owned()),
                 is_bare: false,
             }];
 
@@ -330,13 +370,13 @@ mod tests {
             let repo_key = RepoKey::new("github.com/tsauvajon/task");
             let entries = vec![
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/main".into(),
-                    branch_ref: Some("refs/heads/main".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/main"),
+                    branch_ref: Some("refs/heads/main".to_owned()),
                     is_bare: false,
                 },
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/bump-deps".into(),
-                    branch_ref: Some("refs/heads/bump-deps".to_string()),
+                    path: path_buf("/tmp/dev/wt/github.com/tsauvajon/task/bump-deps"),
+                    branch_ref: Some("refs/heads/bump-deps".to_owned()),
                     is_bare: false,
                 },
             ];

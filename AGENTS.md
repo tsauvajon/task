@@ -34,7 +34,6 @@ Quick orientation for coding agents working on `task`.
   - `finish`: `src/commands/finish.rs`
   - `list/path`: corresponding files in `src/commands/`
 - Quality commands:
-  - `check`: `src/commands/check.rs`
   - `coverage`: `src/commands/coverage.rs`
 - Detached workflows: `src/commands/detach.rs`
 
@@ -69,13 +68,7 @@ Quick orientation for coding agents working on `task`.
 
 - Prefer colocated unit tests in each module under `#[cfg(test)]`.
 - Keep tests focused on behavior, not internals.
-- Validate changes with:
-
-```bash
-task check
-```
-
-- Do not run `cargo fmt` directly; rely on `task check`.
+- Validate changes with the relevant Cargo/Nix commands for the code path you changed.
 
 ## Practical coding guidance for this repo
 

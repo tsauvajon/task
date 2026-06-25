@@ -11,7 +11,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
 
     let mut rows: Vec<TaskRow> = Vec::new();
     let repo_arg = repo_arg
-        .map(str::to_string)
+        .map(str::to_owned)
         .or_else(|| context.tasks().current_repo_key().map(String::from));
 
     if let Some(repo_arg) = repo_arg.as_deref() {
@@ -29,7 +29,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
         if rows.is_empty() {
             process::log(&format!("No tasks found for {repo_key}"));
         } else {
-            context.tasks().print_task_rows_table(&rows);
+            context.tasks().print_task_rows_table(&rows)?;
         }
         return Ok(());
     }
@@ -62,7 +62,7 @@ pub fn run(context: &RuntimeEnvironment, repo_arg: Option<&str>) -> Result<()> {
             context.layout().wt_dir().display()
         ));
     } else {
-        context.tasks().print_task_rows_table(&rows);
+        context.tasks().print_task_rows_table(&rows)?;
     }
 
     for (repo_key, err) in skipped_repos {
@@ -83,7 +83,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = env::temp_dir().join(format!("task-rs-list-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -95,7 +95,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 

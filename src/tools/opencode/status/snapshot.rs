@@ -21,10 +21,11 @@ use super::{
 };
 use crate::tools::opencode::{db, process::LiveOpencodeProcesses};
 
-/// One-shot snapshot reused across many `classify` calls in a single
-/// refresh cycle. Holds the list of live OpenCode cwds, the discovered
-/// DB files, and a lazy cache of read-only connections so that
-/// classifying N paths does not re-open the same DB 2N+ times.
+/// One-shot snapshot reused across many `classify` calls in one refresh.
+///
+/// Holds live `OpenCode` cwds, discovered DB files, and a lazy read-only
+/// connection cache so classifying many paths does not repeatedly open DBs.
+#[derive(Debug)]
 pub struct OpenCodeSnapshot {
     processes: LiveOpencodeProcesses,
     dbs: Vec<PathBuf>,
@@ -120,7 +121,7 @@ impl OpenCodeSnapshot {
             .unwrap_or(OpenCodeState::None)
     }
 
-    /// Return the latest non-empty OpenCode session title for `directory`.
+    /// Return the latest non-empty `OpenCode` session title for `directory`.
     #[must_use]
     pub fn title_for(&self, directory: &Path) -> Option<String> {
         self.sessions_for_directory(directory)
@@ -173,14 +174,13 @@ impl OpenCodeSnapshot {
     /// across it is fine in practice. Per-rayon-thread connections
     /// would be an option if contention shows up in a profile.
     fn with_conn<R>(&self, db_path: &Path, f: impl FnOnce(&Connection) -> R) -> Option<R> {
-        let mut cache = self
-            .connections
+        self.connections
             .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        let entry = cache
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(db_path.to_path_buf())
-            .or_insert_with(|| db::open_ro(db_path));
-        entry.as_ref().map(f)
+            .or_insert_with(|| db::open_ro(db_path))
+            .as_ref()
+            .map(f)
     }
 
     fn sessions_for_directory(&self, directory: &Path) -> Vec<(PathBuf, db::SessionMeta)> {
@@ -222,7 +222,7 @@ fn normalized_title(title: &str) -> Option<String> {
     if title.is_empty() {
         None
     } else {
-        Some(title.to_string())
+        Some(title.to_owned())
     }
 }
 
@@ -253,7 +253,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, Vec::new());
             assert_eq!(snap.state_for(Path::new("/wt/here")), OpenCodeState::None);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -266,7 +266,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, Vec::new());
             assert_eq!(snap.state_for(Path::new("/wt/here")), OpenCodeState::Gone);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -288,7 +288,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Idle);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -310,7 +310,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 10_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Busy);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -332,7 +332,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 200_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Hung);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -357,7 +357,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Hung);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -382,7 +382,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Hung);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -409,7 +409,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Idle);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -432,7 +432,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Busy);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -455,7 +455,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 200_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Hung);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -491,7 +491,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![base.clone()]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Hung);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
     mod live_owned_filter {
@@ -522,7 +522,7 @@ mod tests {
             let snap = snapshot_with_proc_starts(vec![db], 200_000, vec![(base.clone(), 10_000)]);
             assert_eq!(snap.state_for(&base), OpenCodeState::None);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Session whose activity crosses the process-start boundary
@@ -545,7 +545,7 @@ mod tests {
             let snap = snapshot_with_proc_starts(vec![db], 11_000, vec![(base.clone(), 10_000)]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Busy);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Live-owned Busy session plus zombie Hung session in the
@@ -579,7 +579,7 @@ mod tests {
             let snap = snapshot_with_proc_starts(vec![db], 11_000, vec![(base.clone(), 10_000)]);
             assert_eq!(snap.state_for(&base), OpenCodeState::Busy);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Every session in the cwd is a zombie → classifier returns
@@ -606,7 +606,7 @@ mod tests {
             let snap = snapshot_with_proc_starts(vec![db], 200_000, vec![(base.clone(), 10_000)]);
             assert_eq!(snap.state_for(&base), OpenCodeState::None);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Two live opencode processes in the same cwd: the oldest
@@ -635,7 +635,7 @@ mod tests {
             );
             assert_eq!(snap.state_for(&base), OpenCodeState::Busy);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// `Gone` still applies when a session exists but no live
@@ -660,7 +660,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 11_000, Vec::new());
             assert_eq!(snap.state_for(&base), OpenCodeState::Gone);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
     mod with_conn_cache {
@@ -678,7 +678,7 @@ mod tests {
             );
 
             // First call opens the connection and caches it.
-            let first = snapshot.with_conn(&db, |_| 1u32);
+            let first = snapshot.with_conn(&db, |_| 1_u32);
             assert_eq!(first, Some(1));
 
             // Remove the file. Because the connection is already cached,
@@ -686,14 +686,14 @@ mod tests {
             // re-open).
             std::fs::remove_file(&db).unwrap();
 
-            let second = snapshot.with_conn(&db, |_| 2u32);
+            let second = snapshot.with_conn(&db, |_| 2_u32);
             assert_eq!(
                 second,
                 Some(2),
                 "cached connection must be reused even after the file is gone"
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -719,7 +719,7 @@ mod tests {
             assert!(second.is_none());
             assert_eq!(calls, 0, "closure must not be invoked for a cached None");
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 
@@ -740,7 +740,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![dir.clone()]);
             assert_eq!(snap.title_for(&dir).as_deref(), Some("Ship cards"));
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -756,7 +756,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![dir.clone()]);
             assert!(snap.title_for(&dir).is_none());
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 
@@ -783,7 +783,7 @@ mod tests {
             let snap = snapshot_with(vec![db], 1_000, vec![dir.clone()]);
             assert_eq!(snap.last_activity_for(&dir), Some(900));
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 
@@ -830,7 +830,7 @@ mod tests {
             assert_eq!(snap.state_for(&dir_a), OpenCodeState::Idle);
             assert_eq!(snap.state_for(&dir_b), OpenCodeState::Hung);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 }

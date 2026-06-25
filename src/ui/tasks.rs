@@ -27,6 +27,18 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FinishMode {
+    Normal,
+    Force,
+}
+
+impl FinishMode {
+    const fn force(self) -> bool {
+        matches!(self, Self::Force)
+    }
+}
+
 /// Initial repo scope for the Tasks view.
 ///
 /// The UI defaults to an **unscoped** view (all tasks across all
@@ -35,7 +47,7 @@ use crate::{
 /// user expectation that `task ui` is a dashboard, not an
 /// auto-filtered subset driven by CWD.
 pub(super) fn initial_repo_scope(repo_arg: Option<&str>) -> Option<String> {
-    repo_arg.map(str::to_string)
+    repo_arg.map(str::to_owned)
 }
 
 /// Synchronously load every task row across the workspace.
@@ -166,10 +178,11 @@ pub(super) fn compute_task_topology_fingerprint(
     let mut repos = Vec::new();
 
     for (repo_key, gitdir) in repos_to_scan {
+        let detached_path = context.layout().detached_path(&repo_key);
         repos.extend(repo_topology_entries_for_repo(
             &repo_key,
             &gitdir,
-            context.layout().detached_path(&repo_key),
+            &detached_path,
             &real_wt_dir,
             wt_dir,
         ));
@@ -190,17 +203,17 @@ fn fingerprint_repos(
     };
     let repo_key = context.tasks().resolve_repo_key_input(repo_arg)?;
     let gitdir = context.layout().repo_gitdir_path(&repo_key);
-    if gitdir.is_dir() {
-        Ok(vec![(repo_key, gitdir)])
+    Ok(if gitdir.is_dir() {
+        vec![(repo_key, gitdir)]
     } else {
-        Ok(Vec::new())
-    }
+        Vec::new()
+    })
 }
 
 fn repo_topology_entries_for_repo(
     repo_key: &RepoKey,
     gitdir: &Path,
-    detached_path: PathBuf,
+    detached_path: &Path,
     real_wt_dir: &Path,
     wt_dir: &Path,
 ) -> Vec<(RepoKey, String)> {
@@ -214,10 +227,10 @@ fn repo_topology_entries_for_repo(
     entries
 }
 
-fn repo_detached_topology_entry(repo_key: &RepoKey, detached_path: PathBuf) -> (RepoKey, String) {
+fn repo_detached_topology_entry(repo_key: &RepoKey, detached_path: &Path) -> (RepoKey, String) {
     (
         repo_key.clone(),
-        format!("detached:{}", is_detached_worktree_path(&detached_path)),
+        format!("detached:{}", is_detached_worktree_path(detached_path)),
     )
 }
 
@@ -273,8 +286,8 @@ pub(super) fn count_repo_worktrees_with_canonical_wt(
     open_sessions: &HashSet<String>,
 ) -> (usize, usize) {
     let task_root_real = real_wt_dir.join(repo_key.as_str());
-    let mut open = 0usize;
-    let mut parked = 0usize;
+    let mut open = 0_usize;
+    let mut parked = 0_usize;
 
     for wt_path in list_registered_worktrees(gitdir) {
         let real_path = std::fs::canonicalize(&wt_path).unwrap_or_else(|_| wt_path.clone());
@@ -284,9 +297,9 @@ pub(super) fn count_repo_worktrees_with_canonical_wt(
         let wt_name = worktree_name(wt_dir, repo_key.as_str(), &wt_path);
         let session = session_name(repo_key.as_str(), &wt_name);
         if open_sessions.contains(&session) {
-            open += 1;
+            open = open.saturating_add(1);
         } else {
-            parked += 1;
+            parked = parked.saturating_add(1);
         }
     }
 
@@ -299,7 +312,7 @@ fn canonical(path: &Path) -> std::path::PathBuf {
 
 pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
     let Some(row) = state.selected_task_row().cloned() else {
-        state.message = "No selected task".to_string();
+        state.set_message("No selected task");
         return Ok(());
     };
 
@@ -312,25 +325,24 @@ pub(super) fn park_selected(_context: &RuntimeEnvironment, state: &mut UiState) 
     match park(&row.repo, &row.worktree_name, &row.path)? {
         ParkResult::Parked => state.message = format!("Parked task: {} {}", row.repo, row.branch),
         ParkResult::AlreadyParked => {
-            state.message = format!("Task already parked: {} {}", row.repo, row.branch)
+            state.message = format!("Task already parked: {} {}", row.repo, row.branch);
         }
     }
 
     Ok(())
 }
 
-pub(super) fn finish_selected(context: &RuntimeEnvironment, state: &mut UiState) -> Result<()> {
+pub(super) fn finish_selected(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    mode: FinishMode,
+) -> Result<()> {
     let Some(row) = state.selected_task_row().cloned() else {
-        state.message = "No selected task".to_string();
+        state.set_message("No selected task");
         return Ok(());
     };
 
-    crate::commands::finish::run(
-        context,
-        Some(row.repo.as_str()),
-        Some(row.branch.as_str()),
-        false,
-    )?;
+    crate::commands::finish::run_resolved(context, &row.repo, &row.branch, mode.force())?;
     state.message = format!("Finished task: {} {}", row.repo, row.branch);
     Ok(())
 }
@@ -380,12 +392,16 @@ fn parse_clone_input_args(input: &str) -> Result<(&str, Option<String>)> {
     let Some(repo_url) = tokens.first() else {
         return Err(Error::failed("Clone input cannot be empty"));
     };
-    Ok((repo_url, tokens.get(1).map(|token| (*token).to_string())))
+    Ok((repo_url, tokens.get(1).map(|token| (*token).to_owned())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::parse_clone_input_args;
+
+    fn remove_dir_all_best_effort(path: &std::path::Path) {
+        let _cleanup_error = std::fs::remove_dir_all(path).err();
+    }
 
     mod parse_clone_input_args {
         use super::*;
@@ -403,7 +419,7 @@ mod tests {
             let parsed = parse_clone_input_args("git@github.com:me/app.git github.com/me/app")
                 .expect("parse clone input");
             assert_eq!(parsed.0, "git@github.com:me/app.git");
-            assert_eq!(parsed.1, Some("github.com/me/app".to_string()));
+            assert_eq!(parsed.1, Some("github.com/me/app".to_owned()));
         }
 
         #[test]
@@ -436,7 +452,7 @@ mod tests {
                 status,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
-                worktree_name: branch.to_string(),
+                worktree_name: branch.to_owned(),
                 path: PathBuf::from("/tmp"),
                 opencode: OpenCodeState::None,
             }
@@ -641,7 +657,7 @@ mod tests {
             );
             // Manually replicate the guard logic to ensure the message assignment path:
             let message_before = state.message.clone();
-            state.message = "No selected task".to_string();
+            state.set_message("No selected task");
             assert_ne!(state.message, message_before);
             assert_eq!(state.message, "No selected task");
         }
@@ -663,7 +679,7 @@ mod tests {
         fn returns_repo_arg_when_provided() {
             assert_eq!(
                 initial_repo_scope(Some("github.com/me/app")),
-                Some("github.com/me/app".to_string())
+                Some("github.com/me/app".to_owned())
             );
         }
 
@@ -701,7 +717,7 @@ mod tests {
             let repos_dir = base_dir.join("repos");
             let wt_dir = base_dir.join("wt");
             let detached_dir = base_dir.join("detached");
-            let _ = fs::remove_dir_all(&base_dir);
+            super::remove_dir_all_best_effort(&base_dir);
             fs::create_dir_all(&repos_dir).unwrap();
             fs::create_dir_all(&wt_dir).unwrap();
             let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir);
@@ -738,7 +754,7 @@ mod tests {
                 rows.is_empty(),
                 "expected no task rows for a bare repo with no worktrees"
             );
-            let _ = fs::remove_dir_all(&base);
+            super::remove_dir_all_best_effort(&base);
         }
 
         #[test]
@@ -770,7 +786,7 @@ mod tests {
                 );
             }
 
-            let _ = fs::remove_dir_all(&base);
+            super::remove_dir_all_best_effort(&base);
         }
     }
 
@@ -799,7 +815,7 @@ mod tests {
             let repos_dir = base_dir.join("repos");
             let wt_dir = base_dir.join("wt");
             let detached_dir = base_dir.join("detached");
-            let _ = fs::remove_dir_all(&base_dir);
+            super::remove_dir_all_best_effort(&base_dir);
             fs::create_dir_all(&repos_dir).unwrap();
             fs::create_dir_all(&wt_dir).unwrap();
             let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir);
@@ -853,20 +869,20 @@ mod tests {
                 );
             }
 
-            let _ = fs::remove_dir_all(&base);
+            super::remove_dir_all_best_effort(&base);
         }
     }
 
     mod is_detached_worktree_tests {
         use std::{env, fs};
 
-        use super::super::is_detached_worktree;
+        use super::{super::is_detached_worktree, remove_dir_all_best_effort};
 
         struct TempDir(std::path::PathBuf);
         impl TempDir {
             fn new(name: &str) -> Self {
                 let path = env::temp_dir().join(format!("task-rs-detached-{name}"));
-                let _ = fs::remove_dir_all(&path);
+                remove_dir_all_best_effort(&path);
                 fs::create_dir_all(&path).expect("create temp dir");
                 Self(path)
             }
@@ -877,7 +893,7 @@ mod tests {
         }
         impl Drop for TempDir {
             fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
+                remove_dir_all_best_effort(&self.0);
             }
         }
 
@@ -913,7 +929,7 @@ mod tests {
         #[test]
         fn returns_false_for_nonexistent_path() {
             let path = env::temp_dir().join("task-rs-detached-nonexistent-12345");
-            let _ = fs::remove_dir_all(&path);
+            remove_dir_all_best_effort(&path);
             assert!(!is_detached_worktree(&path));
         }
     }
@@ -921,8 +937,11 @@ mod tests {
     mod count_repo_worktrees_tests {
         use std::{collections::HashSet, fs};
 
-        use super::super::{
-            TaskTopologyFingerprint, count_repo_worktrees, task_topology_entries_for_repo,
+        use super::{
+            super::{
+                TaskTopologyFingerprint, count_repo_worktrees, task_topology_entries_for_repo,
+            },
+            remove_dir_all_best_effort,
         };
         use crate::{runtime::RepoKey, tools::zellij::naming::session_name};
 
@@ -930,7 +949,7 @@ mod tests {
         impl TempDir {
             fn new(name: &str) -> Self {
                 let path = std::env::temp_dir().join(format!("task-rs-count-wt-{name}"));
-                let _ = fs::remove_dir_all(&path);
+                remove_dir_all_best_effort(&path);
                 fs::create_dir_all(&path).expect("create temp dir");
                 Self(path)
             }
@@ -941,7 +960,7 @@ mod tests {
         }
         impl Drop for TempDir {
             fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
+                remove_dir_all_best_effort(&self.0);
             }
         }
 
@@ -1086,7 +1105,7 @@ mod tests {
 
             let entries = task_topology_entries_for_repo(&repo_key, &gitdir, &real_wt_dir, &wt_dir);
 
-            assert_eq!(entries, vec![(repo_key, "feat".to_string())]);
+            assert_eq!(entries, vec![(repo_key, "feat".to_owned())]);
         }
 
         #[test]
@@ -1096,14 +1115,14 @@ mod tests {
 
             let left = TaskTopologyFingerprint::new(
                 vec![
-                    (repo_b.clone(), "z".to_string()),
-                    (repo_a.clone(), "a".to_string()),
+                    (repo_b.clone(), "z".to_owned()),
+                    (repo_a.clone(), "a".to_owned()),
                 ],
-                vec!["session-z".to_string(), "session-a".to_string()],
+                vec!["session-z".to_owned(), "session-a".to_owned()],
             );
             let right = TaskTopologyFingerprint::new(
-                vec![(repo_a, "a".to_string()), (repo_b, "z".to_string())],
-                vec!["session-a".to_string(), "session-z".to_string()],
+                vec![(repo_a, "a".to_owned()), (repo_b, "z".to_owned())],
+                vec!["session-a".to_owned(), "session-z".to_owned()],
             );
 
             assert_eq!(left, right);

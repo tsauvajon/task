@@ -1,8 +1,8 @@
-use std::fs;
+use std::{collections::HashSet, fs};
 
 use crate::{
     error::{Error, Result},
-    runtime::{environment::RuntimeEnvironment, process},
+    runtime::{BranchName, RepoKey, environment::RuntimeEnvironment, process},
     tools::{
         git::worktrees::{self, prune, remove, status_porcelain},
         vscodium::workflow::cleanup,
@@ -10,18 +10,66 @@ use crate::{
     },
 };
 
-pub fn run(
+pub fn run(context: &RuntimeEnvironment, tasks: &[String], force: bool) -> Result<()> {
+    if tasks.is_empty() {
+        let (repo_key, branch, _) = context.tasks().current_task_info()?;
+        return run_resolved(context, &repo_key, &branch, force);
+    }
+
+    for (repo_key, branch) in resolve_task_targets(context, tasks)? {
+        run_resolved(context, &repo_key, &branch, force)?;
+    }
+
+    Ok(())
+}
+
+fn resolve_task_targets(
     context: &RuntimeEnvironment,
-    repo_arg: Option<&str>,
-    branch_arg: Option<&str>,
+    tasks: &[String],
+) -> Result<Vec<(RepoKey, BranchName)>> {
+    if let [repo_arg, branch_arg] = tasks
+        && let Some(target) = resolve_explicit_repo_branch_target(context, repo_arg, branch_arg)?
+    {
+        return Ok(vec![target]);
+    }
+
+    let mut seen = HashSet::new();
+    let mut targets = Vec::new();
+
+    for task in tasks {
+        let target = context.tasks().resolve_task_from_query(task)?;
+        if seen.insert(target.clone()) {
+            targets.push(target);
+        }
+    }
+
+    Ok(targets)
+}
+
+fn resolve_explicit_repo_branch_target(
+    context: &RuntimeEnvironment,
+    repo_arg: &str,
+    branch_arg: &str,
+) -> Result<Option<(RepoKey, BranchName)>> {
+    let repo_key = match context.tasks().resolve_repo_key_input(repo_arg) {
+        Ok(repo_key) => repo_key,
+        Err(Error::NotFound(_)) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let branch = BranchName::new(branch_arg);
+    let worktree = context.tasks().resolve_worktree_path(&repo_key, &branch);
+
+    Ok(worktree.exists().then_some((repo_key, branch)))
+}
+
+pub(crate) fn run_resolved(
+    context: &RuntimeEnvironment,
+    repo_key: &RepoKey,
+    branch: &BranchName,
     force: bool,
 ) -> Result<()> {
-    let (repo_key_raw, branch) = context
-        .tasks()
-        .resolve_repo_branch_inputs(repo_arg, branch_arg)?;
-    let repo_key = context.tasks().resolve_repo_key_input(&repo_key_raw)?;
-    let gitdir = context.layout().repo_gitdir_path(&repo_key);
-    let worktree = context.tasks().resolve_worktree_path(&repo_key, &branch);
+    let gitdir = context.layout().repo_gitdir_path(repo_key);
+    let worktree = context.tasks().resolve_worktree_path(repo_key, branch);
 
     if !gitdir.is_dir() {
         return Err(Error::not_found(format!("Repo not found: {repo_key}")));
@@ -39,7 +87,7 @@ pub fn run(
             if worktree.exists() {
                 let is_empty = fs::read_dir(&worktree)?.next().is_none();
                 if is_empty {
-                    let _ = fs::remove_dir(&worktree);
+                    drop(fs::remove_dir(&worktree));
                 } else {
                     process::warn(&format!(
                         "Left non-worktree directory in place: {}",
@@ -53,14 +101,14 @@ pub fn run(
             remove(&gitdir, &worktree, force)?;
 
             if let Some(parent) = worktree.parent() {
-                let _ = fs::remove_dir(parent);
+                drop(fs::remove_dir(parent));
             }
         }
     }
 
-    let wt_name = worktrees::worktree_name(context.layout().wt_dir(), &repo_key, &worktree);
-    finish_session(&repo_key, &wt_name, &gitdir)?;
-    if let Err(err) = cleanup(&repo_key, &wt_name) {
+    let wt_name = worktrees::worktree_name(context.layout().wt_dir(), repo_key, &worktree);
+    finish_session(repo_key, &wt_name, &gitdir)?;
+    if let Err(err) = cleanup(repo_key, &wt_name) {
         process::warn(&format!(
             "Failed to remove task editor state for {repo_key} {branch}: {err}"
         ));
@@ -91,9 +139,7 @@ fn check_dirty_worktree(force: bool, worktree: &std::path::Path) -> Result<()> {
     }
     let status = status_porcelain(worktree)?;
     if is_status_dirty(&status) {
-        return Err(Error::failed(
-            "Worktree has uncommitted changes. Use --force if you really want to remove it.",
-        ));
+        return Err(Error::DirtyWorktree);
     }
     Ok(())
 }
@@ -115,7 +161,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = env::temp_dir().join(format!("task-rs-finish-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -127,7 +173,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -150,7 +196,7 @@ mod tests {
         #[test]
         fn stale_when_directory_does_not_exist() {
             let path = env::temp_dir().join("task-rs-finish-nonexistent");
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             assert_eq!(classify_worktree_state(&path), WorktreeState::Stale);
         }
     }
@@ -240,7 +286,7 @@ mod tests {
         impl TempDir {
             fn new(name: &str) -> Self {
                 let path = env::temp_dir().join(format!("task-rs-finish-state-{name}"));
-                let _ = fs::remove_dir_all(&path);
+                _ = fs::remove_dir_all(&path);
                 fs::create_dir_all(&path).expect("create temp dir");
                 Self(path)
             }
@@ -248,7 +294,7 @@ mod tests {
 
         impl Drop for TempDir {
             fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
+                _ = fs::remove_dir_all(&self.0);
             }
         }
 
@@ -264,6 +310,72 @@ mod tests {
                 WorktreeState::Live,
                 ".git file should count as live worktree"
             );
+        }
+    }
+
+    mod resolve_explicit_repo_branch {
+        use super::{super::resolve_explicit_repo_branch_target, *};
+        use crate::runtime::{BranchName, RepoKey, environment::RuntimeEnvironment};
+
+        fn environment_for(dir: &TempDir) -> RuntimeEnvironment {
+            fs::create_dir_all(dir.path().join("repos")).unwrap();
+            fs::create_dir_all(dir.path().join("wt")).unwrap();
+            fs::create_dir_all(dir.path().join("detached")).unwrap();
+            RuntimeEnvironment::from_paths(
+                dir.path().join("repos"),
+                dir.path().join("wt"),
+                dir.path().join("detached"),
+            )
+        }
+
+        #[test]
+        fn returns_target_when_dot_git_missing() {
+            let dir = TempDir::new("explicit-stale");
+            let context = environment_for(&dir);
+            fs::create_dir_all(dir.path().join("wt/github.com/me/app/feature-x")).unwrap();
+
+            let target =
+                resolve_explicit_repo_branch_target(&context, "github.com/me/app", "feature-x")
+                    .unwrap();
+
+            assert_eq!(
+                target,
+                Some((
+                    RepoKey::new("github.com/me/app"),
+                    BranchName::new("feature-x")
+                ))
+            );
+        }
+
+        #[test]
+        fn returns_target_when_dot_git_exists() {
+            let dir = TempDir::new("explicit-live");
+            let context = environment_for(&dir);
+            fs::create_dir_all(dir.path().join("wt/github.com/me/app/feature-y/.git")).unwrap();
+
+            let target =
+                resolve_explicit_repo_branch_target(&context, "github.com/me/app", "feature-y")
+                    .unwrap();
+
+            assert_eq!(
+                target,
+                Some((
+                    RepoKey::new("github.com/me/app"),
+                    BranchName::new("feature-y")
+                ))
+            );
+        }
+
+        #[test]
+        fn returns_none_when_worktree_path_is_absent() {
+            let dir = TempDir::new("explicit-absent");
+            let context = environment_for(&dir);
+
+            let target =
+                resolve_explicit_repo_branch_target(&context, "github.com/me/app", "feature-z")
+                    .unwrap();
+
+            assert_eq!(target, None);
         }
     }
 }

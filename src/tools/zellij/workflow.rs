@@ -23,6 +23,8 @@ use crate::{
     },
 };
 
+const ZELLIJ_ENV: &str = "ZELLIJ";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParkResult {
     Parked,
@@ -42,29 +44,21 @@ enum TeardownAction {
 }
 
 /// Teardown always attempts to close Codium windows, independent of the
-/// currently-configured editor. A task may have been opened under VSCodium
+/// currently-configured editor. A task may have been opened under `VSCodium`
 /// and parked/finished after the config was switched to Helix (or vice
 /// versa); gating Codium cleanup on the current [`EditorKind`] would leak
 /// Codium windows and processes across config changes. `close_windows` is
 /// a no-op when no matching Codium processes are running, so calling it
 /// unconditionally is cheap in the Helix-only case.
-fn park_teardown_actions(has_zellij_session: bool) -> Vec<TeardownAction> {
+fn teardown_actions(should_kill_session: bool) -> Vec<TeardownAction> {
     let mut actions = vec![TeardownAction::CloseCodium];
-    if has_zellij_session {
+    if should_kill_session {
         actions.push(TeardownAction::KillSession);
     }
     actions
 }
 
-fn finish_teardown_actions(zellij_available: bool) -> Vec<TeardownAction> {
-    let mut actions = vec![TeardownAction::CloseCodium];
-    if zellij_available {
-        actions.push(TeardownAction::KillSession);
-    }
-    actions
-}
-
-/// Ensures VSCodium trusted roots are seeded and codium is running for the given task.
+/// Ensures `VSCodium` trusted roots are seeded and codium is running for the given task.
 ///
 /// Trusted roots are always seeded unconditionally so that config changes take
 /// effect on the next codium restart, even when codium is already running.
@@ -97,7 +91,7 @@ fn zellij_env_indicates_inside(zellij_var: Option<&str>) -> bool {
 /// Returns `true` when the process is already running inside a Zellij
 /// session (i.e. the `ZELLIJ` environment variable is set and non-empty).
 fn is_inside_zellij() -> bool {
-    zellij_env_indicates_inside(std::env::var("ZELLIJ").ok().as_deref())
+    zellij_env_indicates_inside(std::env::var(ZELLIJ_ENV).ok().as_deref())
 }
 
 /// Absolute path to the currently-running binary, used to spawn `task
@@ -255,10 +249,10 @@ pub fn park(repo_key: &str, worktree_name: &str, path: &Path) -> Result<ParkResu
     let has_zellij_session = is_available() && has_session(&session);
     let mut result = ParkResult::AlreadyParked;
 
-    for action in park_teardown_actions(has_zellij_session) {
+    for action in teardown_actions(has_zellij_session) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = close_windows(repo_key, worktree_name);
+                drop(close_windows(repo_key, worktree_name));
             }
             TeardownAction::KillSession => {
                 kill_session(&session, Some(path))?;
@@ -274,10 +268,10 @@ pub fn finish_session(repo_key: &str, worktree_name: &str, cwd: &Path) -> Result
     let zellij_available = is_available();
     let session = session_name(repo_key, worktree_name);
 
-    for action in finish_teardown_actions(zellij_available) {
+    for action in teardown_actions(zellij_available) {
         match action {
             TeardownAction::CloseCodium => {
-                let _ = close_windows(repo_key, worktree_name);
+                drop(close_windows(repo_key, worktree_name));
             }
             TeardownAction::KillSession => {
                 // Kill (best-effort) and then delete the saved session
@@ -285,9 +279,9 @@ pub fn finish_session(repo_key: &str, worktree_name: &str, cwd: &Path) -> Result
                 // resurrectable Zellij session. `status_quiet` swallows
                 // stderr so "session not found" doesn't bubble up to
                 // the user when the session is already gone.
-                let _ = kill_session_quietly(&session, Some(cwd));
-                let _ = delete_session_quietly(&session, Some(cwd));
-                let _ = remove_layout_file(&session);
+                drop(kill_session_quietly(&session, Some(cwd)));
+                drop(delete_session_quietly(&session, Some(cwd)));
+                drop(remove_layout_file(&session));
             }
         }
     }
@@ -318,8 +312,7 @@ fn remove_layout_file(session: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TeardownAction, finish_teardown_actions, is_inside_zellij, park_teardown_actions,
-        zellij_env_indicates_inside,
+        TeardownAction, ZELLIJ_ENV, is_inside_zellij, teardown_actions, zellij_env_indicates_inside,
     };
 
     mod park_teardown {
@@ -327,7 +320,7 @@ mod tests {
 
         #[test]
         fn closes_codium_before_zellij_when_session_exists() {
-            let actions = park_teardown_actions(true);
+            let actions = teardown_actions(true);
             assert_eq!(
                 actions,
                 vec![TeardownAction::CloseCodium, TeardownAction::KillSession]
@@ -336,7 +329,7 @@ mod tests {
 
         #[test]
         fn only_closes_codium_without_zellij_session() {
-            let actions = park_teardown_actions(false);
+            let actions = teardown_actions(false);
             assert_eq!(actions, vec![TeardownAction::CloseCodium]);
         }
 
@@ -346,7 +339,7 @@ mod tests {
             // Codium cleanup regardless of session state so a task
             // opened under VSCodium and later parked after switching
             // editors does not leak its Codium window.
-            let actions = park_teardown_actions(false);
+            let actions = teardown_actions(false);
             assert!(
                 actions.contains(&TeardownAction::CloseCodium),
                 "park must always attempt to close Codium: {actions:?}"
@@ -359,7 +352,7 @@ mod tests {
 
         #[test]
         fn always_attempts_kill_when_zellij_available() {
-            let actions = finish_teardown_actions(true);
+            let actions = teardown_actions(true);
             assert_eq!(
                 actions,
                 vec![TeardownAction::CloseCodium, TeardownAction::KillSession]
@@ -368,7 +361,7 @@ mod tests {
 
         #[test]
         fn only_closes_codium_when_zellij_unavailable() {
-            let actions = finish_teardown_actions(false);
+            let actions = teardown_actions(false);
             assert_eq!(actions, vec![TeardownAction::CloseCodium]);
         }
 
@@ -376,7 +369,7 @@ mod tests {
         fn always_attempts_close_codium_even_when_zellij_unavailable() {
             // Same cross-config invariant as park: finish must attempt
             // Codium cleanup regardless of the currently-configured editor.
-            let actions = finish_teardown_actions(false);
+            let actions = teardown_actions(false);
             assert!(
                 actions.contains(&TeardownAction::CloseCodium),
                 "finish must always attempt to close Codium: {actions:?}"
@@ -391,7 +384,7 @@ mod tests {
         fn consistent_with_current_environment() {
             // Verify that `is_inside_zellij` agrees with the extracted pure
             // function when both inspect the same env snapshot.
-            let expected = zellij_env_indicates_inside(std::env::var("ZELLIJ").ok().as_deref());
+            let expected = zellij_env_indicates_inside(std::env::var(ZELLIJ_ENV).ok().as_deref());
             assert_eq!(is_inside_zellij(), expected);
         }
 

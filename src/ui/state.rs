@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use ratatui::layout::Rect;
+use ratatui::{layout::Rect, prelude::Position};
 
 use crate::{
     runtime::{BranchName, RepoKey, task_rows::TaskRow},
@@ -21,14 +21,41 @@ pub(super) enum ViewMode {
     Repos,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MoveDirection {
+    Up,
+    Down,
+}
+
+impl MoveDirection {
+    fn apply(self, selected: usize, rows: usize, len: usize) -> usize {
+        match self {
+            Self::Up => selected.saturating_sub(rows),
+            Self::Down => selected.saturating_add(rows).min(len.saturating_sub(1)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MouseHit {
+    Task { filtered_index: usize },
+    Repo { filtered_index: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MouseHitTarget {
+    area: Rect,
+    hit: MouseHit,
+}
+
 /// User preference for the right-hand sidebar (actions + activity panels).
 ///
-/// Mirrors OpenCode's `"auto" | "hide"` signal: `Auto` lets the sidebar
+/// Mirrors `OpenCode`'s `"auto" | "hide"` signal: `Auto` lets the sidebar
 /// appear when the terminal is wide enough, `Hide` suppresses it. A
 /// separate explicit-open flag on `UiState` can force the sidebar on
 /// even in narrow terminals.
 ///
-/// Threshold matches OpenCode: `width > 120`.
+/// Threshold matches `OpenCode`: `width > 120`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SidebarMode {
     Auto,
@@ -36,14 +63,17 @@ pub(super) enum SidebarMode {
 }
 
 /// Width threshold (exclusive) above which the sidebar auto-shows in
-/// `SidebarMode::Auto`. Matches OpenCode's `wide = width > 120`.
+/// `SidebarMode::Auto`. Matches `OpenCode`'s `wide = width > 120`.
 pub(super) const SIDEBAR_AUTO_WIDTH_THRESHOLD: u16 = 120;
 
 /// Fixed width of the right-hand sidebar when visible. Matches
-/// OpenCode, which reserves 42 columns for its sidebar independent of
+/// `OpenCode`, which reserves 42 columns for its sidebar independent of
 /// terminal width (so the main content always grows/shrinks with the
 /// window instead of the sidebar).
 pub(super) const SIDEBAR_WIDTH: u16 = 42;
+
+pub(super) const TASK_CARD_HEIGHT: usize = 4;
+const TASK_CARD_HEIGHT_U16: u16 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RepoRow {
@@ -70,8 +100,8 @@ pub(super) enum LoadPhase {
 }
 
 impl LoadPhase {
-    pub(super) fn is_loading(&self) -> bool {
-        matches!(self, LoadPhase::Loading { .. })
+    pub(super) const fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading { .. })
     }
 }
 
@@ -118,7 +148,7 @@ pub(super) enum LoadMsg {
         repo: RepoKey,
         err: String,
     },
-    /// Periodic refresh of OpenCode session states for every tracked task
+    /// Periodic refresh of `OpenCode` session states for every tracked task
     /// row. Sent by [`crate::ui::loader::spawn_opencode_refresh`] on a short
     /// cadence while the Tasks view is visible.
     ///
@@ -150,7 +180,7 @@ impl LoadMsg {
     /// Generation stamp used by the UI to ignore messages from a
     /// superseded loader. `OpenCodeTick` has no generation because it
     /// is safe to apply regardless (see the variant docs).
-    pub(super) fn generation(&self) -> Option<u64> {
+    pub(super) const fn generation(&self) -> Option<u64> {
         match self {
             Self::ScanStarted { generation, .. }
             | Self::TaskRowsForRepo { generation, .. }
@@ -181,9 +211,12 @@ pub(super) struct UiState {
     pub(super) repo_filtered_indices: Vec<usize>,
     pub(super) repo_selected: usize,
     pub(super) filter_text: String,
+    pub(super) filter_cursor: usize,
     pub(super) task_repo_scope: Option<String>,
     pub(super) create_branch: String,
+    pub(super) create_cursor: usize,
     pub(super) clone_input: String,
+    pub(super) clone_cursor: usize,
     pub(super) activity_lines: Vec<String>,
     pub(super) view: ViewMode,
     pub(super) mode: InputMode,
@@ -212,6 +245,7 @@ pub(super) struct UiState {
     /// current load started. Mirrors `pending_repo_selection` for the tasks
     /// view.
     pub(super) pending_task_selection: Option<(RepoKey, BranchName)>,
+    pub(super) pending_force_finish: Option<(RepoKey, BranchName)>,
     /// Sidebar preference. `Auto` shows the sidebar when the terminal is
     /// wide (width > 120); `Hide` suppresses it. Toggled manually with
     /// `b` in Normal mode.
@@ -224,6 +258,7 @@ pub(super) struct UiState {
     /// by the `ToggleSidebar` intent handler to decide which direction
     /// the toggle should flip without re-querying the terminal.
     pub(super) last_frame_width: u16,
+    mouse_hit_targets: Vec<MouseHitTarget>,
 }
 
 impl UiState {
@@ -241,13 +276,16 @@ impl UiState {
             repo_filtered_indices: Vec::new(),
             repo_selected: 0,
             filter_text: String::new(),
+            filter_cursor: 0,
             task_repo_scope,
             create_branch: String::new(),
+            create_cursor: 0,
             clone_input: String::new(),
+            clone_cursor: 0,
             activity_lines: Vec::new(),
             view: ViewMode::Tasks,
             mode: InputMode::Normal,
-            message: "Ready".to_string(),
+            message: "Ready".to_owned(),
             show_help: false,
             help_area: None,
             visible_rows: 20,
@@ -258,9 +296,11 @@ impl UiState {
             skipped_repos_count: 0,
             pending_repo_selection: None,
             pending_task_selection: None,
+            pending_force_finish: None,
             sidebar_mode: SidebarMode::Auto,
             sidebar_open: false,
             last_frame_width: 0,
+            mouse_hit_targets: Vec::new(),
         };
         state.apply_filters();
         state
@@ -269,11 +309,11 @@ impl UiState {
     /// Whether the right-hand sidebar should be rendered at the given
     /// terminal width.
     ///
-    /// Mirrors OpenCode's visibility rule:
+    /// Mirrors `OpenCode`'s visibility rule:
     /// - explicit-open flag wins;
     /// - otherwise `Auto` + wide terminal shows the sidebar;
     /// - `Hide` always suppresses it (unless explicitly opened).
-    pub(super) fn sidebar_visible(&self, width: u16) -> bool {
+    pub(super) const fn sidebar_visible(&self, width: u16) -> bool {
         if self.sidebar_open {
             return true;
         }
@@ -288,7 +328,7 @@ impl UiState {
     ///   user toggles back.
     /// - Currently hidden → transition to `Auto` and force
     ///   explicit-open so the sidebar appears even on narrow terminals.
-    pub(super) fn toggle_sidebar(&mut self, width: u16) {
+    pub(super) const fn toggle_sidebar(&mut self, width: u16) {
         if self.sidebar_visible(width) {
             self.sidebar_mode = SidebarMode::Hide;
             self.sidebar_open = false;
@@ -311,8 +351,12 @@ impl UiState {
             done: 0,
             total: None,
         };
-        state.message = "Loading…".to_string();
+        state.set_message("Loading…");
         state
+    }
+
+    pub(super) fn set_message(&mut self, message: &str) {
+        message.clone_into(&mut self.message);
     }
 
     /// Apply a message from the background loader, advancing progress and
@@ -353,7 +397,7 @@ impl UiState {
             }
             LoadMsg::TaskRepoDone { .. } => {
                 if let LoadPhase::Loading { done, .. } = &mut self.task_load {
-                    *done += 1;
+                    *done = (*done).saturating_add(1);
                 }
             }
             LoadMsg::TasksComplete { .. } => {
@@ -366,7 +410,7 @@ impl UiState {
             LoadMsg::RepoRow { row, .. } => {
                 self.insert_repo_row_sorted(row);
                 if let LoadPhase::Loading { done, .. } = &mut self.repo_load {
-                    *done += 1;
+                    *done = (*done).saturating_add(1);
                 }
             }
             LoadMsg::RepoRowsDone { .. } => {
@@ -377,7 +421,7 @@ impl UiState {
                 self.pending_repo_selection = None;
             }
             LoadMsg::RepoError { repo, err, .. } => {
-                self.skipped_repos_count += 1;
+                self.skipped_repos_count = self.skipped_repos_count.saturating_add(1);
                 self.append_activity_lines(vec![format!("{repo}: {err}")]);
             }
             LoadMsg::OpenCodeTick { states, .. } => {
@@ -389,7 +433,7 @@ impl UiState {
         }
     }
 
-    /// Write fresh OpenCode states into the current `task_rows`, matched
+    /// Write fresh `OpenCode` states into the current `task_rows`, matched
     /// by worktree path. Unknown paths are silently ignored so
     /// out-of-band refreshes can race with a full reload without
     /// corrupting state.
@@ -441,6 +485,7 @@ impl UiState {
         self.pending_task_selection = self
             .selected_task_row()
             .map(|row| (row.repo.clone(), row.branch.clone()));
+        self.pending_force_finish = None;
 
         self.load_generation = self.load_generation.wrapping_add(1);
         self.task_rows.clear();
@@ -523,11 +568,13 @@ impl UiState {
     /// later rows may shift its sort position). Outside a pending load
     /// we preserve the live selection. An initial load with no pending
     /// identity keeps the cursor at the top.
-    pub(super) fn insert_repo_row_sorted(&mut self, row: RepoRow) {
-        let live_identity = self.selected_repo_row().map(|row| row.repo.clone());
+    pub(super) fn insert_repo_row_sorted(&mut self, new_row: RepoRow) {
+        let live_identity = self
+            .selected_repo_row()
+            .map(|selected_row| selected_row.repo.clone());
         let pending_identity = self.pending_repo_selection.clone();
 
-        self.repo_rows.push(row);
+        self.repo_rows.push(new_row);
         self.repo_rows.sort_by(|left, right| {
             right
                 .open_tasks
@@ -569,7 +616,7 @@ impl UiState {
         let tokens: Vec<String> = self
             .filter_text
             .split_whitespace()
-            .map(|t| t.to_lowercase())
+            .map(str::to_lowercase)
             .collect();
         self.task_filtered_indices = self
             .task_rows
@@ -607,6 +654,27 @@ impl UiState {
         self.task_rows.get(index)
     }
 
+    pub(super) fn set_pending_force_finish_to_selected_task(&mut self) -> bool {
+        let Some(row) = self.selected_task_row() else {
+            self.pending_force_finish = None;
+            return false;
+        };
+        self.pending_force_finish = Some((row.repo.clone(), row.branch.clone()));
+        true
+    }
+
+    pub(super) fn clear_pending_force_finish(&mut self) {
+        self.pending_force_finish = None;
+    }
+
+    pub(super) fn pending_force_finish_matches_selected_task(&self) -> bool {
+        let Some((repo, branch)) = &self.pending_force_finish else {
+            return false;
+        };
+        self.selected_task_row()
+            .is_some_and(|row| &row.repo == repo && &row.branch == branch)
+    }
+
     pub(super) fn selected_repo_row(&self) -> Option<&RepoRow> {
         let index = *self.repo_filtered_indices.get(self.repo_selected)?;
         self.repo_rows.get(index)
@@ -616,7 +684,7 @@ impl UiState {
         let tokens: Vec<String> = self
             .filter_text
             .split_whitespace()
-            .map(|token| token.to_lowercase())
+            .map(str::to_lowercase)
             .collect();
         self.repo_filtered_indices = self
             .repo_rows
@@ -638,33 +706,35 @@ impl UiState {
         }
     }
 
-    pub(super) fn move_next(&mut self) {
+    pub(super) const fn move_next(&mut self) {
         match self.view {
             ViewMode::Tasks => {
                 if self.task_filtered_indices.is_empty() {
                     return;
                 }
-                self.task_selected = (self.task_selected + 1) % self.task_filtered_indices.len();
+                self.task_selected =
+                    next_wrapping_index(self.task_selected, self.task_filtered_indices.len());
             }
             ViewMode::Repos => {
                 if self.repo_filtered_indices.is_empty() {
                     return;
                 }
-                self.repo_selected = (self.repo_selected + 1) % self.repo_filtered_indices.len();
+                self.repo_selected =
+                    next_wrapping_index(self.repo_selected, self.repo_filtered_indices.len());
             }
         }
     }
 
-    pub(super) fn move_prev(&mut self) {
+    pub(super) const fn move_prev(&mut self) {
         match self.view {
             ViewMode::Tasks => {
                 if self.task_filtered_indices.is_empty() {
                     return;
                 }
                 self.task_selected = if self.task_selected == 0 {
-                    self.task_filtered_indices.len() - 1
+                    self.task_filtered_indices.len().saturating_sub(1)
                 } else {
-                    self.task_selected - 1
+                    self.task_selected.saturating_sub(1)
                 };
             }
             ViewMode::Repos => {
@@ -672,26 +742,39 @@ impl UiState {
                     return;
                 }
                 self.repo_selected = if self.repo_selected == 0 {
-                    self.repo_filtered_indices.len() - 1
+                    self.repo_filtered_indices.len().saturating_sub(1)
                 } else {
-                    self.repo_selected - 1
+                    self.repo_selected.saturating_sub(1)
                 };
             }
         }
     }
 
     pub(super) fn move_page_down(&mut self) {
-        let (selected, len) = match self.view {
-            ViewMode::Tasks => (&mut self.task_selected, self.task_filtered_indices.len()),
-            ViewMode::Repos => (&mut self.repo_selected, self.repo_filtered_indices.len()),
-        };
-        if len == 0 {
-            return;
-        }
-        *selected = (*selected + self.visible_rows).min(len - 1);
+        self.move_down_by(self.visible_rows);
     }
 
     pub(super) fn move_page_up(&mut self) {
+        self.move_up_by(self.visible_rows);
+    }
+
+    pub(super) fn move_half_page_down(&mut self) {
+        self.move_down_by((self.visible_rows / 2).max(1));
+    }
+
+    pub(super) fn move_half_page_up(&mut self) {
+        self.move_up_by((self.visible_rows / 2).max(1));
+    }
+
+    fn move_down_by(&mut self, rows: usize) {
+        self.move_by(rows, MoveDirection::Down);
+    }
+
+    fn move_up_by(&mut self, rows: usize) {
+        self.move_by(rows, MoveDirection::Up);
+    }
+
+    fn move_by(&mut self, rows: usize, direction: MoveDirection) {
         let (selected, len) = match self.view {
             ViewMode::Tasks => (&mut self.task_selected, self.task_filtered_indices.len()),
             ViewMode::Repos => (&mut self.repo_selected, self.repo_filtered_indices.len()),
@@ -699,17 +782,17 @@ impl UiState {
         if len == 0 {
             return;
         }
-        *selected = selected.saturating_sub(self.visible_rows);
+        *selected = direction.apply(*selected, rows, len);
     }
 
-    pub(super) fn move_first(&mut self) {
+    pub(super) const fn move_first(&mut self) {
         match self.view {
             ViewMode::Tasks => self.task_selected = 0,
             ViewMode::Repos => self.repo_selected = 0,
         }
     }
 
-    pub(super) fn move_last(&mut self) {
+    pub(super) const fn move_last(&mut self) {
         let (selected, len) = match self.view {
             ViewMode::Tasks => (&mut self.task_selected, self.task_filtered_indices.len()),
             ViewMode::Repos => (&mut self.repo_selected, self.repo_filtered_indices.len()),
@@ -717,8 +800,99 @@ impl UiState {
         *selected = len.saturating_sub(1);
     }
 
-    pub(super) fn set_visible_rows(&mut self, rows: usize) {
+    pub(super) const fn set_visible_rows(&mut self, rows: usize) {
         self.visible_rows = rows;
+    }
+
+    pub(super) fn clear_mouse_hit_targets(&mut self) {
+        self.mouse_hit_targets.clear();
+    }
+
+    pub(super) fn register_task_mouse_hit_targets(
+        &mut self,
+        area: Rect,
+        first_visible_index: usize,
+    ) {
+        let visible_rows = usize::from(area.height) / TASK_CARD_HEIGHT;
+        for display_index in 0..visible_rows {
+            let filtered_index = first_visible_index.saturating_add(display_index);
+            if filtered_index >= self.task_filtered_indices.len() {
+                break;
+            }
+            let Ok(display_row) = u16::try_from(display_index) else {
+                break;
+            };
+            let y = area
+                .y
+                .saturating_add(display_row.saturating_mul(TASK_CARD_HEIGHT_U16));
+            if y >= area.y.saturating_add(area.height) {
+                break;
+            }
+            self.mouse_hit_targets.push(MouseHitTarget {
+                area: Rect {
+                    x: area.x,
+                    y,
+                    width: area.width,
+                    height: TASK_CARD_HEIGHT_U16
+                        .min(area.y.saturating_add(area.height).saturating_sub(y)),
+                },
+                hit: MouseHit::Task { filtered_index },
+            });
+        }
+    }
+
+    pub(super) fn register_repo_mouse_hit_targets(
+        &mut self,
+        area: Rect,
+        first_visible_index: usize,
+    ) {
+        let visible_rows = usize::from(area.height.saturating_sub(1));
+        for display_index in 0..visible_rows {
+            let filtered_index = first_visible_index.saturating_add(display_index);
+            if filtered_index >= self.repo_filtered_indices.len() {
+                break;
+            }
+            let Ok(display_row) = u16::try_from(display_index) else {
+                break;
+            };
+            self.mouse_hit_targets.push(MouseHitTarget {
+                area: Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(1).saturating_add(display_row),
+                    width: area.width,
+                    height: 1,
+                },
+                hit: MouseHit::Repo { filtered_index },
+            });
+        }
+    }
+
+    pub(super) fn mouse_hit(&self, column: u16, row: u16) -> Option<MouseHit> {
+        self.mouse_hit_targets
+            .iter()
+            .find(|target| target.area.contains(Position::from((column, row))))
+            .map(|target| target.hit)
+    }
+
+    #[cfg(test)]
+    pub(super) fn push_mouse_hit_target_for_test(&mut self, area: Rect, hit: MouseHit) {
+        self.mouse_hit_targets.push(MouseHitTarget { area, hit });
+    }
+
+    pub(super) const fn select_task_filtered_index(&mut self, filtered_index: usize) -> bool {
+        if filtered_index >= self.task_filtered_indices.len() {
+            return false;
+        }
+        self.task_selected = filtered_index;
+        true
+    }
+
+    pub(super) const fn select_repo_filtered_index(&mut self, filtered_index: usize) -> bool {
+        if filtered_index >= self.repo_filtered_indices.len() {
+            return false;
+        }
+        self.repo_selected = filtered_index;
+        true
     }
 
     #[cfg(test)]
@@ -733,7 +907,7 @@ impl UiState {
         self.apply_repo_filter();
     }
 
-    pub(super) fn switch_view(&mut self) {
+    pub(super) const fn switch_view(&mut self) {
         self.mode = InputMode::Normal;
         self.view = match self.view {
             ViewMode::Tasks => ViewMode::Repos,
@@ -742,18 +916,69 @@ impl UiState {
     }
 
     pub(super) fn filter_backspace(&mut self) {
-        self.filter_text.pop();
+        let cursor = clamp_to_char_boundary(&self.filter_text, self.filter_cursor);
+        self.filter_cursor = remove_before_cursor(&mut self.filter_text, cursor);
         self.apply_filters();
     }
 
     pub(super) fn filter_clear(&mut self) {
         self.filter_text.clear();
+        self.filter_cursor = 0;
         self.apply_filters();
     }
 
     pub(super) fn filter_append(&mut self, ch: char) {
-        self.filter_text.push(ch);
+        let cursor = clamp_to_char_boundary(&self.filter_text, self.filter_cursor);
+        self.filter_cursor = insert_at_cursor(&mut self.filter_text, cursor, ch);
         self.apply_filters();
+    }
+
+    pub(super) fn create_backspace(&mut self) {
+        let cursor = clamp_to_char_boundary(&self.create_branch, self.create_cursor);
+        self.create_cursor = remove_before_cursor(&mut self.create_branch, cursor);
+    }
+
+    pub(super) fn create_clear(&mut self) {
+        self.create_branch.clear();
+        self.create_cursor = 0;
+    }
+
+    pub(super) fn create_append(&mut self, ch: char) {
+        let cursor = clamp_to_char_boundary(&self.create_branch, self.create_cursor);
+        self.create_cursor = insert_at_cursor(&mut self.create_branch, cursor, ch);
+    }
+
+    pub(super) fn clone_backspace(&mut self) {
+        let cursor = clamp_to_char_boundary(&self.clone_input, self.clone_cursor);
+        self.clone_cursor = remove_before_cursor(&mut self.clone_input, cursor);
+    }
+
+    pub(super) fn clone_clear(&mut self) {
+        self.clone_input.clear();
+        self.clone_cursor = 0;
+    }
+
+    pub(super) fn clone_append(&mut self, ch: char) {
+        let cursor = clamp_to_char_boundary(&self.clone_input, self.clone_cursor);
+        self.clone_cursor = insert_at_cursor(&mut self.clone_input, cursor, ch);
+    }
+
+    pub(super) const fn input_start(&mut self) {
+        match self.mode {
+            InputMode::Filter => self.filter_cursor = 0,
+            InputMode::CreateTask => self.create_cursor = 0,
+            InputMode::CloneRepo => self.clone_cursor = 0,
+            InputMode::Normal => {}
+        }
+    }
+
+    pub(super) const fn input_end(&mut self) {
+        match self.mode {
+            InputMode::Filter => self.filter_cursor = self.filter_text.len(),
+            InputMode::CreateTask => self.create_cursor = self.create_branch.len(),
+            InputMode::CloneRepo => self.clone_cursor = self.clone_input.len(),
+            InputMode::Normal => {}
+        }
     }
 
     pub(super) fn select_repo_for_tasks(&mut self, repo: String) {
@@ -770,24 +995,58 @@ impl UiState {
     }
 
     pub(super) fn append_activity_lines(&mut self, lines: Vec<String>) {
+        const MAX_ACTIVITY_LINES: usize = 8;
+
         if lines.is_empty() {
             return;
         }
 
         self.activity_lines.extend(lines);
-        const MAX_ACTIVITY_LINES: usize = 8;
         if self.activity_lines.len() > MAX_ACTIVITY_LINES {
-            let extra = self.activity_lines.len() - MAX_ACTIVITY_LINES;
+            let extra = self.activity_lines.len().saturating_sub(MAX_ACTIVITY_LINES);
             self.activity_lines.drain(0..extra);
         }
     }
+}
+
+const fn next_wrapping_index(selected: usize, len: usize) -> usize {
+    let next = selected.saturating_add(1);
+    if next >= len { 0 } else { next }
+}
+
+pub(super) fn clamp_to_char_boundary(text: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(text.len());
+    while cursor > 0 && !text.is_char_boundary(cursor) {
+        cursor = cursor.saturating_sub(1);
+    }
+    cursor
+}
+
+fn insert_at_cursor(text: &mut String, cursor: usize, ch: char) -> usize {
+    let cursor = clamp_to_char_boundary(text, cursor);
+    text.insert(cursor, ch);
+    cursor.saturating_add(ch.len_utf8())
+}
+
+fn remove_before_cursor(text: &mut String, cursor: usize) -> usize {
+    let cursor = clamp_to_char_boundary(text, cursor);
+    if cursor == 0 {
+        return 0;
+    }
+
+    let previous = text
+        .get(..cursor)
+        .and_then(|prefix| prefix.char_indices().last().map(|(index, _)| index))
+        .unwrap_or_default();
+    text.drain(previous..cursor);
+    previous
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{RepoRow, TaskCardDetails, UiState};
+    use super::{MouseHit, RepoRow, TaskCardDetails, UiState};
     use crate::runtime::task_rows::{TaskRow, TaskStatus};
 
     fn repo_row(repo: &str, open_tasks: usize, parked_tasks: usize) -> RepoRow {
@@ -809,7 +1068,7 @@ mod tests {
             status: TaskStatus::Open,
             repo: RepoKey::new("github.com/acme/app"),
             branch: BranchName::new("main"),
-            worktree_name: "main".to_string(),
+            worktree_name: "main".to_owned(),
             path: PathBuf::from("/tmp/dev/wt/github.com/acme/app/main"),
             opencode: OpenCodeState::None,
         }
@@ -824,7 +1083,7 @@ mod tests {
             status: TaskStatus::Open,
             repo: RepoKey::new(repo),
             branch: BranchName::new("main"),
-            worktree_name: "main".to_string(),
+            worktree_name: "main".to_owned(),
             path: PathBuf::from(format!("/tmp/dev/wt/{repo}/main")),
             opencode: OpenCodeState::None,
         }
@@ -844,7 +1103,7 @@ mod tests {
                 None,
             );
 
-            state.filter_text = "app".to_string();
+            state.filter_text = "app".to_owned();
             state.apply_repo_filter();
 
             assert_eq!(state.repo_filtered_indices, vec![0]);
@@ -867,7 +1126,7 @@ mod tests {
             );
 
             state.repo_selected = 2;
-            state.filter_text = "ops".to_string();
+            state.filter_text = "ops".to_owned();
             state.apply_repo_filter();
 
             assert_eq!(state.repo_filtered_indices, vec![1]);
@@ -889,7 +1148,7 @@ mod tests {
                 None,
             );
 
-            state.filter_text = "gith tsa go".to_string();
+            state.filter_text = "gith tsa go".to_owned();
             state.apply_repo_filter();
 
             assert_eq!(state.repo_filtered_indices, vec![0]);
@@ -910,7 +1169,7 @@ mod tests {
                 None,
             );
 
-            state.filter_text = "gitlab".to_string();
+            state.filter_text = "gitlab".to_owned();
             state.apply_repo_filter();
 
             assert_eq!(state.repo_filtered_indices, vec![1]);
@@ -938,7 +1197,7 @@ mod tests {
                 None,
             );
 
-            state.filter_text = "app".to_string();
+            state.filter_text = "app".to_owned();
             state.apply_filters();
 
             assert_eq!(state.task_filtered_indices, vec![0]);
@@ -955,6 +1214,7 @@ mod tests {
                 vec![],
                 None,
             );
+            state.mode = super::super::InputMode::Filter;
             state.filter_append('o');
             state.filter_append('p');
             state.filter_append('s');
@@ -972,15 +1232,16 @@ mod tests {
                 vec![],
                 None,
             );
-            state.filter_text = "ops".to_string();
+            state.mode = super::super::InputMode::Filter;
+            state.filter_text = "ops".to_owned();
+            state.input_end();
             state.apply_filters();
             assert_eq!(state.task_filtered_indices.len(), 1);
 
-            state.filter_backspace(); // "op"
-            state.filter_backspace(); // "o"
-            state.filter_backspace(); // ""
+            state.filter_backspace();
+            state.filter_backspace();
+            state.filter_backspace();
             assert_eq!(state.filter_text, "");
-            // Empty filter → all rows visible
             assert_eq!(state.task_filtered_indices.len(), 2);
         }
 
@@ -994,13 +1255,118 @@ mod tests {
                 vec![],
                 None,
             );
-            state.filter_text = "app".to_string();
+            state.filter_text = "app".to_owned();
             state.apply_filters();
             assert_eq!(state.task_filtered_indices.len(), 1);
 
             state.filter_clear();
             assert_eq!(state.filter_text, "");
             assert_eq!(state.task_filtered_indices.len(), 2);
+        }
+
+        #[test]
+        fn append_inserts_at_filter_cursor() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.mode = super::super::InputMode::Filter;
+            state.filter_text = "aé".to_owned();
+            state.input_start();
+
+            state.filter_append('x');
+
+            assert_eq!(state.filter_text, "xaé");
+            assert_eq!(state.filter_cursor, 1);
+        }
+
+        #[test]
+        fn backspace_removes_character_before_filter_cursor() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.mode = super::super::InputMode::Filter;
+            state.filter_text = "aéb".to_owned();
+            state.filter_cursor = "aé".len();
+
+            state.filter_backspace();
+
+            assert_eq!(state.filter_text, "ab");
+            assert_eq!(state.filter_cursor, 1);
+        }
+
+        #[test]
+        fn start_end_and_clear_update_filter_cursor() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.mode = super::super::InputMode::Filter;
+            state.filter_text = "abc".to_owned();
+
+            state.input_end();
+            assert_eq!(state.filter_cursor, 3);
+            state.input_start();
+            assert_eq!(state.filter_cursor, 0);
+            state.filter_clear();
+            assert_eq!(state.filter_cursor, 0);
+        }
+
+        #[test]
+        fn filter_text_seeded_at_end_edits_from_end() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.mode = super::super::InputMode::Filter;
+            state.filter_text = "ab".to_owned();
+            state.input_end();
+
+            state.filter_append('c');
+            state.filter_backspace();
+
+            assert_eq!(state.filter_text, "ab");
+            assert_eq!(state.filter_cursor, 2);
+        }
+    }
+
+    mod create_and_clone_input_text {
+        use super::*;
+
+        #[test]
+        fn create_append_backspace_and_start_end_are_cursor_aware() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.mode = super::super::InputMode::CreateTask;
+            state.create_branch = "ab".to_owned();
+            state.input_start();
+
+            state.create_append('x');
+            state.input_end();
+            state.create_backspace();
+
+            assert_eq!(state.create_branch, "xa");
+            assert_eq!(state.create_cursor, 2);
+        }
+
+        #[test]
+        fn clone_append_backspace_and_start_end_are_cursor_aware() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.mode = super::super::InputMode::CloneRepo;
+            state.clone_input = "ab".to_owned();
+            state.input_start();
+
+            state.clone_append('x');
+            state.input_end();
+            state.clone_backspace();
+
+            assert_eq!(state.clone_input, "xa");
+            assert_eq!(state.clone_cursor, 2);
+        }
+
+        #[test]
+        fn create_and_clone_clear_reset_cursors() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.create_branch = "branch".to_owned();
+            state.create_cursor = state.create_branch.len();
+            state.clone_input = "repo".to_owned();
+            state.clone_cursor = state.clone_input.len();
+
+            state.create_clear();
+            state.clone_clear();
+
+            assert!(state.create_branch.is_empty());
+            assert_eq!(state.create_cursor, 0);
+            assert!(state.clone_input.is_empty());
+            assert_eq!(state.clone_cursor, 0);
         }
     }
 
@@ -1033,7 +1399,7 @@ mod tests {
                 None,
             );
             state.task_selected = 1;
-            state.move_next(); // wraps back to 0
+            state.move_next();
             assert_eq!(state.task_selected, 0);
         }
 
@@ -1062,14 +1428,14 @@ mod tests {
                 vec![],
                 None,
             );
-            state.move_prev(); // wraps from 0 to last item
+            state.move_prev();
             assert_eq!(state.task_selected, 1);
         }
 
         #[test]
         fn move_next_does_nothing_on_empty_list() {
             let mut state = UiState::new(vec![], vec![], None);
-            state.move_next(); // must not panic
+            state.move_next();
             assert_eq!(state.task_selected, 0);
         }
     }
@@ -1106,7 +1472,7 @@ mod tests {
         fn set_task_rows_replaces_rows_and_reapplies_filter() {
             let mut state =
                 UiState::new(vec![task_row_for_repo("github.com/acme/app")], vec![], None);
-            state.filter_text = "ops".to_string();
+            state.filter_text = "ops".to_owned();
             state.apply_filters();
             assert_eq!(state.task_filtered_indices.len(), 0);
 
@@ -1114,14 +1480,13 @@ mod tests {
                 task_row_for_repo("github.com/acme/ops"),
                 task_row_for_repo("github.com/acme/app"),
             ]);
-            // "ops" filter now matches one of the two new rows
             assert_eq!(state.task_filtered_indices.len(), 1);
         }
 
         #[test]
         fn set_repo_rows_replaces_repo_rows_and_reapplies_filter() {
             let mut state = UiState::new(vec![], vec![repo_row("github.com/acme/app", 1, 0)], None);
-            state.filter_text = "ops".to_string();
+            state.filter_text = "ops".to_owned();
             state.apply_repo_filter();
             assert_eq!(state.repo_filtered_indices.len(), 0);
 
@@ -1157,7 +1522,7 @@ mod tests {
             );
             assert_eq!(
                 state.selected_task_row().map(|r| r.repo.to_string()),
-                Some("github.com/acme/a".to_string())
+                Some("github.com/acme/a".to_owned())
             );
         }
 
@@ -1187,10 +1552,10 @@ mod tests {
             let mut state = UiState::new(vec![], vec![], None);
             state.view = ViewMode::Repos;
             state.mode = InputMode::Filter;
-            state.select_repo_for_tasks("github.com/acme/app".to_string());
+            state.select_repo_for_tasks("github.com/acme/app".to_owned());
             assert_eq!(
                 state.task_repo_scope,
-                Some("github.com/acme/app".to_string())
+                Some("github.com/acme/app".to_owned())
             );
             assert_eq!(state.view, ViewMode::Tasks);
             assert_eq!(state.mode, InputMode::Normal);
@@ -1211,7 +1576,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
-                worktree_name: branch.to_string(),
+                worktree_name: branch.to_owned(),
                 path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
                 opencode: OpenCodeState::None,
             }
@@ -1225,7 +1590,7 @@ mod tests {
                     task_row("github.com/org/b", "feat-2"),
                 ],
                 vec![],
-                Some("github.com/org/a".to_string()),
+                Some("github.com/org/a".to_owned()),
             );
             state.task_selected = 1;
 
@@ -1267,7 +1632,7 @@ mod tests {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/acme/app"),
                         branch: BranchName::new("feature-x"),
-                        worktree_name: "feature-x".to_string(),
+                        worktree_name: "feature-x".to_owned(),
                         path: PathBuf::from("/tmp/a"),
                         opencode: OpenCodeState::None,
                     },
@@ -1275,7 +1640,7 @@ mod tests {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/acme/app"),
                         branch: BranchName::new("main"),
-                        worktree_name: "main".to_string(),
+                        worktree_name: "main".to_owned(),
                         path: PathBuf::from("/tmp/b"),
                         opencode: OpenCodeState::None,
                     },
@@ -1283,7 +1648,7 @@ mod tests {
                 vec![],
                 None,
             );
-            state.filter_text = "feature".to_string();
+            state.filter_text = "feature".to_owned();
             state.apply_task_filter();
             assert_eq!(state.task_filtered_indices, vec![0]);
         }
@@ -1303,7 +1668,7 @@ mod tests {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/acme/app"),
                         branch: BranchName::new("main"),
-                        worktree_name: "main".to_string(),
+                        worktree_name: "main".to_owned(),
                         path: PathBuf::from("/projects/special/path"),
                         opencode: OpenCodeState::None,
                     },
@@ -1311,7 +1676,7 @@ mod tests {
                         status: TaskStatus::Open,
                         repo: RepoKey::new("github.com/acme/app"),
                         branch: BranchName::new("main"),
-                        worktree_name: "main".to_string(),
+                        worktree_name: "main".to_owned(),
                         path: PathBuf::from("/other/path"),
                         opencode: OpenCodeState::None,
                     },
@@ -1319,7 +1684,7 @@ mod tests {
                 vec![],
                 None,
             );
-            state.filter_text = "special".to_string();
+            state.filter_text = "special".to_owned();
             state.apply_task_filter();
             assert_eq!(state.task_filtered_indices, vec![0]);
         }
@@ -1333,7 +1698,7 @@ mod tests {
                 vec![],
                 None,
             );
-            state.filter_text = "compact cards".to_string();
+            state.filter_text = "compact cards".to_owned();
 
             state.apply_task_filter();
             assert!(state.task_filtered_indices.is_empty());
@@ -1341,7 +1706,7 @@ mod tests {
             state.apply_task_card_details(&[(
                 path,
                 TaskCardDetails {
-                    session_title: Some("Ship compact task cards".to_string()),
+                    session_title: Some("Ship compact task cards".to_owned()),
                     ..TaskCardDetails::default()
                 },
             )]);
@@ -1375,7 +1740,7 @@ mod tests {
                 vec![],
                 None,
             );
-            state.filter_text = "acme".to_string();
+            state.filter_text = "acme".to_owned();
             state.apply_task_filter();
             assert_eq!(state.task_filtered_indices, vec![0]);
         }
@@ -1414,7 +1779,7 @@ mod tests {
             );
             state.view = ViewMode::Repos;
             state.repo_selected = 1;
-            state.move_next(); // wraps back to 0
+            state.move_next();
             assert_eq!(state.repo_selected, 0);
         }
 
@@ -1447,7 +1812,7 @@ mod tests {
                 None,
             );
             state.view = ViewMode::Repos;
-            state.move_prev(); // wraps from 0 to last item
+            state.move_prev();
             assert_eq!(state.repo_selected, 1);
         }
 
@@ -1456,7 +1821,7 @@ mod tests {
             use super::super::ViewMode;
             let mut state = UiState::new(vec![], vec![], None);
             state.view = ViewMode::Repos;
-            state.move_next(); // must not panic
+            state.move_next();
             assert_eq!(state.repo_selected, 0);
         }
     }
@@ -1486,10 +1851,10 @@ mod tests {
 
         #[test]
         fn task_repo_scope_is_stored() {
-            let state = UiState::new(vec![], vec![], Some("github.com/acme/app".to_string()));
+            let state = UiState::new(vec![], vec![], Some("github.com/acme/app".to_owned()));
             assert_eq!(
                 state.task_repo_scope,
-                Some("github.com/acme/app".to_string())
+                Some("github.com/acme/app".to_owned())
             );
         }
 
@@ -1508,6 +1873,125 @@ mod tests {
             let mut state = UiState::new(vec![], vec![], None);
             state.set_visible_rows(42);
             assert_eq!(state.visible_rows, 42);
+        }
+    }
+
+    mod mouse_hit_targets {
+        use ratatui::layout::Rect;
+
+        use super::*;
+
+        #[test]
+        fn task_hit_test_returns_filtered_index_from_rendered_card() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/a"),
+                    task_row_for_repo("github.com/acme/b"),
+                    task_row_for_repo("github.com/acme/c"),
+                ],
+                vec![],
+                None,
+            );
+
+            state.register_task_mouse_hit_targets(Rect::new(10, 5, 80, 8), 1);
+
+            assert_eq!(
+                state.mouse_hit(12, 5),
+                Some(MouseHit::Task { filtered_index: 1 })
+            );
+            assert_eq!(
+                state.mouse_hit(12, 9),
+                Some(MouseHit::Task { filtered_index: 2 })
+            );
+        }
+
+        #[test]
+        fn repo_hit_test_skips_header_and_returns_filtered_index() {
+            let mut state = UiState::new(
+                vec![],
+                vec![
+                    repo_row("github.com/acme/a", 1, 0),
+                    repo_row("github.com/acme/b", 1, 0),
+                    repo_row("github.com/acme/c", 1, 0),
+                ],
+                None,
+            );
+
+            state.register_repo_mouse_hit_targets(Rect::new(2, 3, 40, 4), 0);
+
+            assert_eq!(state.mouse_hit(3, 3), None);
+            assert_eq!(
+                state.mouse_hit(3, 4),
+                Some(MouseHit::Repo { filtered_index: 0 })
+            );
+            assert_eq!(
+                state.mouse_hit(3, 5),
+                Some(MouseHit::Repo { filtered_index: 1 })
+            );
+            assert_eq!(
+                state.mouse_hit(3, 6),
+                Some(MouseHit::Repo { filtered_index: 2 })
+            );
+        }
+
+        #[test]
+        fn repo_hit_test_uses_scroll_offset_for_bottom_visible_row() {
+            let mut state = UiState::new(
+                vec![],
+                vec![
+                    repo_row("github.com/acme/a", 1, 0),
+                    repo_row("github.com/acme/b", 1, 0),
+                    repo_row("github.com/acme/c", 1, 0),
+                    repo_row("github.com/acme/d", 1, 0),
+                    repo_row("github.com/acme/e", 1, 0),
+                ],
+                None,
+            );
+
+            state.register_repo_mouse_hit_targets(Rect::new(2, 10, 40, 4), 2);
+
+            assert_eq!(state.mouse_hit(3, 10), None);
+            assert_eq!(
+                state.mouse_hit(3, 11),
+                Some(MouseHit::Repo { filtered_index: 2 })
+            );
+            assert_eq!(
+                state.mouse_hit(3, 13),
+                Some(MouseHit::Repo { filtered_index: 4 })
+            );
+        }
+
+        #[test]
+        fn clear_mouse_hit_targets_removes_stale_rows() {
+            let mut state = UiState::new(vec![sample_task_row()], vec![], None);
+            state.register_task_mouse_hit_targets(Rect::new(0, 0, 40, 4), 0);
+            assert!(state.mouse_hit(1, 1).is_some());
+
+            state.clear_mouse_hit_targets();
+
+            assert_eq!(state.mouse_hit(1, 1), None);
+        }
+
+        #[test]
+        fn selecting_filtered_indices_updates_current_row() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/a"),
+                    task_row_for_repo("github.com/acme/b"),
+                ],
+                vec![
+                    repo_row("github.com/acme/a", 1, 0),
+                    repo_row("github.com/acme/b", 1, 0),
+                ],
+                None,
+            );
+
+            assert!(state.select_task_filtered_index(1));
+            assert_eq!(state.task_selected, 1);
+            assert!(state.select_repo_filtered_index(1));
+            assert_eq!(state.repo_selected, 1);
+            assert!(!state.select_task_filtered_index(99));
+            assert_eq!(state.task_selected, 1);
         }
     }
 
@@ -1598,8 +2082,8 @@ mod tests {
         fn toggle_round_trip_returns_to_visible_state() {
             let mut state = UiState::new(vec![], vec![], None);
             assert!(state.sidebar_visible(200));
-            state.toggle_sidebar(200); // hide
-            state.toggle_sidebar(200); // back to visible
+            state.toggle_sidebar(200);
+            state.toggle_sidebar(200);
             assert!(state.sidebar_visible(200));
         }
     }
@@ -1719,6 +2203,49 @@ mod tests {
             state.move_page_up();
             assert_eq!(state.repo_selected, 0);
         }
+
+        #[test]
+        fn half_page_down_advances_by_half_visible_rows() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 10;
+
+            state.move_half_page_down();
+
+            assert_eq!(state.task_selected, 5);
+        }
+
+        #[test]
+        fn half_page_up_clamps_at_zero() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 10;
+            state.task_selected = 3;
+
+            state.move_half_page_up();
+
+            assert_eq!(state.task_selected, 0);
+        }
+
+        #[test]
+        fn half_page_uses_one_row_minimum() {
+            let mut state = UiState::new(many_task_rows(30), vec![], None);
+            state.visible_rows = 0;
+
+            state.move_half_page_down();
+
+            assert_eq!(state.task_selected, 1);
+        }
+
+        #[test]
+        fn half_page_down_advances_repo_selection() {
+            use super::super::ViewMode;
+            let mut state = UiState::new(vec![], many_repo_rows(30), None);
+            state.view = ViewMode::Repos;
+            state.visible_rows = 8;
+
+            state.move_half_page_down();
+
+            assert_eq!(state.repo_selected, 4);
+        }
     }
 
     mod first_last_navigation {
@@ -1809,7 +2336,7 @@ mod tests {
         #[test]
         fn empty_input_is_noop() {
             let mut state = UiState::new(vec![], vec![], None);
-            state.activity_lines = vec!["existing".to_string()];
+            state.activity_lines = vec!["existing".to_owned()];
             state.append_activity_lines(vec![]);
             assert_eq!(state.activity_lines, vec!["existing"]);
         }
@@ -1817,7 +2344,7 @@ mod tests {
         #[test]
         fn appends_lines() {
             let mut state = UiState::new(vec![], vec![], None);
-            state.append_activity_lines(vec!["line-1".to_string(), "line-2".to_string()]);
+            state.append_activity_lines(vec!["line-1".to_owned(), "line-2".to_owned()]);
             assert_eq!(state.activity_lines, vec!["line-1", "line-2"]);
         }
 
@@ -1892,7 +2419,7 @@ mod tests {
             );
 
             state.task_selected = 2;
-            state.filter_text = "ops".to_string();
+            state.filter_text = "ops".to_owned();
             state.apply_task_filter();
 
             assert_eq!(state.task_filtered_indices, vec![1]);
@@ -1908,7 +2435,7 @@ mod tests {
             let mut state =
                 UiState::new(vec![task_row_for_repo("github.com/acme/app")], vec![], None);
             assert!(state.filter_text.is_empty());
-            state.filter_backspace(); // must not panic
+            state.filter_backspace();
             assert!(state.filter_text.is_empty());
             assert_eq!(state.task_filtered_indices.len(), 1);
         }
@@ -1923,7 +2450,7 @@ mod tests {
                 ],
                 None,
             );
-            state.filter_text = "   ".to_string();
+            state.filter_text = "   ".to_owned();
             state.apply_repo_filter();
 
             assert_eq!(state.repo_filtered_indices.len(), 2);
@@ -1943,7 +2470,7 @@ mod tests {
                 vec![],
                 None,
             );
-            state.filter_text = "acme app".to_string();
+            state.filter_text = "acme app".to_owned();
             state.apply_task_filter();
 
             // Only the row containing both "acme" AND "app" matches
@@ -1960,7 +2487,7 @@ mod tests {
                 vec![],
                 None,
             );
-            state.filter_text = "   ".to_string();
+            state.filter_text = "   ".to_owned();
             state.apply_task_filter();
 
             assert_eq!(state.task_filtered_indices.len(), 2);
@@ -2127,7 +2654,7 @@ mod tests {
             state.apply_load_msg(LoadMsg::RepoError {
                 generation: 0,
                 repo: RepoKey::new("github.com/acme/broken"),
-                err: "git failed".to_string(),
+                err: "git failed".to_owned(),
             });
             assert_eq!(state.skipped_repos_count, 1);
             assert!(
@@ -2187,7 +2714,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
-                worktree_name: branch.to_string(),
+                worktree_name: branch.to_owned(),
                 path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
                 opencode: OpenCodeState::None,
             }
@@ -2210,8 +2737,8 @@ mod tests {
             let mut state = UiState::new_empty_loading(None);
             let generation = state.begin_load();
 
-            // "c" arrives first, then "a", then "b". Sort is by open desc,
-            // then repo asc. All have open=1, so sort is purely alphabetical.
+            // Repos arrive in c/a/b order. Sort is by open desc, then repo asc.
+            // All have open=1, so sort is purely alphabetical.
             state.apply_load_msg(LoadMsg::RepoRow {
                 generation,
                 row: detached_repo_row("github.com/org/c", 1),
@@ -2246,7 +2773,7 @@ mod tests {
                 ],
                 None,
             );
-            state.repo_selected = 1; // "b"
+            state.repo_selected = 1;
             assert_eq!(
                 state.selected_repo_row().map(|r| r.repo.as_str()),
                 Some("github.com/org/b"),
@@ -2289,11 +2816,11 @@ mod tests {
                 ],
                 None,
             );
-            state.repo_selected = 1; // "b"
+            state.repo_selected = 1;
 
             let generation = state.begin_load();
 
-            // "b" no longer exists.
+            // The previously selected repo no longer exists.
             state.apply_load_msg(LoadMsg::RepoRow {
                 generation,
                 row: detached_repo_row("github.com/org/a", 3),
@@ -2324,7 +2851,7 @@ mod tests {
                 vec![],
                 None,
             );
-            state.task_selected = 1; // org/b feat-2
+            state.task_selected = 1;
 
             let generation = state.begin_load();
 
@@ -2345,9 +2872,9 @@ mod tests {
             });
             state.apply_load_msg(LoadMsg::TasksComplete { generation });
 
-            let selected = state.selected_task_row().expect("selection exists");
-            assert_eq!(selected.repo.as_str(), "github.com/org/b");
-            assert_eq!(selected.branch.as_str(), "feat-2");
+            let selected_after_repo_b = state.selected_task_row().expect("selection exists");
+            assert_eq!(selected_after_repo_b.repo.as_str(), "github.com/org/b");
+            assert_eq!(selected_after_repo_b.branch.as_str(), "feat-2");
             assert!(state.pending_task_selection.is_none());
         }
 
@@ -2390,7 +2917,7 @@ mod tests {
                 ],
                 None,
             );
-            state.repo_selected = 1; // "b"
+            state.repo_selected = 1;
 
             let generation = state.begin_load();
             assert!(state.pending_repo_selection.is_some());
@@ -2422,11 +2949,11 @@ mod tests {
                 ],
                 None,
             );
-            state.repo_selected = 1; // "b"
+            state.repo_selected = 1;
 
             let generation = state.begin_load();
 
-            // "c" arrives before the pending row.
+            // Another repo arrives before the pending row.
             state.apply_load_msg(LoadMsg::RepoRow {
                 generation,
                 row: detached_repo_row("github.com/org/c", 1),
@@ -2444,8 +2971,8 @@ mod tests {
             // Pending stays set so later rows keep re-anchoring.
             assert!(state.pending_repo_selection.is_some());
 
-            // "a" then "d" arrive later in the same load; cursor must
-            // stay on "b" instead of snapping to index 0.
+            // More repos arrive later in the same load; cursor must stay on
+            // the pending row instead of snapping to index 0.
             state.apply_load_msg(LoadMsg::RepoRow {
                 generation,
                 row: detached_repo_row("github.com/org/a", 1),
@@ -2484,7 +3011,7 @@ mod tests {
                 vec![],
                 None,
             );
-            state.task_selected = 1; // "b/feat-2"
+            state.task_selected = 1;
 
             let generation = state.begin_load();
 
@@ -2508,9 +3035,9 @@ mod tests {
                 repo: RepoKey::new("github.com/org/a"),
                 rows: vec![task_row("github.com/org/a", "feat-1")],
             });
-            let selected = state.selected_task_row().expect("selection exists");
+            let selected_after_repo_a = state.selected_task_row().expect("selection exists");
             assert_eq!(
-                selected.repo.as_str(),
+                selected_after_repo_a.repo.as_str(),
                 "github.com/org/b",
                 "cursor must stay on pending task after another row arrives",
             );
@@ -2522,9 +3049,9 @@ mod tests {
             });
             state.apply_load_msg(LoadMsg::TasksComplete { generation });
 
-            let selected = state.selected_task_row().expect("selection exists");
+            let selected_after_complete = state.selected_task_row().expect("selection exists");
             assert_eq!(
-                selected.repo.as_str(),
+                selected_after_complete.repo.as_str(),
                 "github.com/org/b",
                 "cursor must remain on pending task at end of load",
             );
@@ -2544,7 +3071,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
-                worktree_name: branch.to_string(),
+                worktree_name: branch.to_owned(),
                 path: PathBuf::from(path),
                 opencode: OpenCodeState::None,
             }
@@ -2554,11 +3081,11 @@ mod tests {
         fn load_msg_generation_returns_none_for_tick() {
             // Ticks are path-keyed and safe to apply regardless of
             // generation, so they report no generation at all.
-            let msg = LoadMsg::OpenCodeTick { states: vec![] };
-            assert_eq!(msg.generation(), None);
+            let opencode_tick = LoadMsg::OpenCodeTick { states: vec![] };
+            assert_eq!(opencode_tick.generation(), None);
 
-            let msg = LoadMsg::TaskCardDetailsTick { details: vec![] };
-            assert_eq!(msg.generation(), None);
+            let card_details_tick = LoadMsg::TaskCardDetailsTick { details: vec![] };
+            assert_eq!(card_details_tick.generation(), None);
         }
 
         #[test]
@@ -2677,7 +3204,7 @@ mod tests {
                         deleted_lines: 3,
                         changed_files: 2,
                     },
-                    session_title: Some("Ship cards".to_string()),
+                    session_title: Some("Ship cards".to_owned()),
                     last_activity_ms: Some(1_234),
                 },
             )]);
@@ -2706,7 +3233,7 @@ mod tests {
             state.apply_task_card_details(&[(
                 path,
                 TaskCardDetails {
-                    session_title: Some("Ship cards".to_string()),
+                    session_title: Some("Ship cards".to_owned()),
                     ..TaskCardDetails::default()
                 },
             )]);

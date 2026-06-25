@@ -47,7 +47,7 @@ pub struct TaskResolver {
 
 impl TaskResolver {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         layout: WorkspacePaths,
         codium_trusted_roots: Vec<PathBuf>,
         editor: EditorKind,
@@ -62,7 +62,7 @@ impl TaskResolver {
     }
 
     #[must_use]
-    pub fn layout(&self) -> &WorkspacePaths {
+    pub const fn layout(&self) -> &WorkspacePaths {
         &self.layout
     }
 
@@ -73,7 +73,7 @@ impl TaskResolver {
     }
 
     #[must_use]
-    pub fn editor(&self) -> EditorKind {
+    pub const fn editor(&self) -> EditorKind {
         self.editor
     }
 
@@ -120,7 +120,7 @@ impl TaskResolver {
         }
 
         let keys = self.available_repo_keys()?;
-        let key_strs: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        let key_strs: Vec<String> = keys.iter().map(std::string::ToString::to_string).collect();
         match resolve_repo_query(&normalized, &key_strs) {
             ResolveResult::Resolved(key) => Ok(RepoKey::new(key)),
             ResolveResult::Ambiguous(choices) => {
@@ -150,7 +150,7 @@ impl TaskResolver {
 
         // Try partial/suffix matching against already-cloned repos.
         let keys = self.available_repo_keys()?;
-        let key_strs: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        let key_strs: Vec<String> = keys.iter().map(std::string::ToString::to_string).collect();
         match resolve_repo_query(&normalized, &key_strs) {
             ResolveResult::Resolved(key) => {
                 let resolved = RepoKey::new(&key);
@@ -225,8 +225,7 @@ impl TaskResolver {
         no_open: bool,
     ) -> Result<()> {
         if !interactive || no_open {
-            println!("{}", path.display());
-            return Ok(());
+            return process::write_stdout_line(path.display());
         }
 
         let wt_name = worktrees::worktree_name(self.layout.wt_dir(), repo_key, path);
@@ -241,8 +240,7 @@ impl TaskResolver {
             return Ok(());
         }
 
-        println!("{}", path.display());
-        Ok(())
+        process::write_stdout_line(path.display())
     }
 
     pub fn repo_task_rows(
@@ -314,30 +312,31 @@ impl TaskResolver {
             return choose_task_interactive(query, &matches, self.interactive);
         }
 
-        let mut matches: Vec<&TaskRow> =
+        let mut branch_matches: Vec<&TaskRow> =
             tasks.iter().filter(|r| r.branch.contains(query)).collect();
-        matches.sort_by_key(sort_key);
-        if let [row] = matches.as_slice() {
+        branch_matches.sort_by_key(sort_key);
+        if let [row] = branch_matches.as_slice() {
             return Ok((row.repo.clone(), row.branch.clone()));
         }
-        if !matches.is_empty() {
-            return choose_task_interactive(query, &matches, self.interactive);
+        if !branch_matches.is_empty() {
+            return choose_task_interactive(query, &branch_matches, self.interactive);
         }
 
-        let mut matches: Vec<&TaskRow> = tasks.iter().filter(|r| r.repo.contains(query)).collect();
-        matches.sort_by_key(sort_key);
+        let mut repo_matches: Vec<&TaskRow> =
+            tasks.iter().filter(|r| r.repo.contains(query)).collect();
+        repo_matches.sort_by_key(sort_key);
 
-        if matches.is_empty() {
+        if repo_matches.is_empty() {
             return Err(Error::not_found(format!("No task matched '{query}'.")));
         }
-        if let [row] = matches.as_slice() {
+        if let [row] = repo_matches.as_slice() {
             return Ok((row.repo.clone(), row.branch.clone()));
         }
 
-        choose_task_interactive(query, &matches, self.interactive)
+        choose_task_interactive(query, &repo_matches, self.interactive)
     }
 
-    pub fn print_task_rows_table(&self, rows: &[TaskRow]) {
+    pub fn print_task_rows_table(&self, rows: &[TaskRow]) -> Result<()> {
         let mut table = Table::new();
         table
             .set_content_arrangement(ContentArrangement::Dynamic)
@@ -357,7 +356,7 @@ impl TaskResolver {
             ]);
         }
 
-        println!("{table}");
+        process::write_stdout_line(table)
     }
 
     /// Snapshot of currently-running multiplexer sessions, by name.
@@ -413,8 +412,8 @@ impl TaskResolver {
         }
 
         let (current_repo, current_branch, _) = self.current_task_info()?;
-        let repo = repo_arg.map(RepoKey::new).unwrap_or(current_repo);
-        let branch = branch_arg.map(BranchName::new).unwrap_or(current_branch);
+        let repo = repo_arg.map_or(current_repo, RepoKey::new);
+        let branch = branch_arg.map_or(current_branch, BranchName::new);
         Ok((repo, branch))
     }
 
@@ -445,7 +444,7 @@ fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut gitdirs = Vec::new();
 
     while let Some(current) = stack.pop() {
-        for entry in fs::read_dir(&current)?.filter_map(|e| e.ok()) {
+        for entry in fs::read_dir(&current)?.filter_map(std::result::Result::ok) {
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
@@ -454,7 +453,11 @@ fn collect_gitdirs(root: &Path) -> Result<Vec<PathBuf>> {
             }
             let path = entry.path();
             let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
-            if name.ends_with(".git") && name != ".git" {
+            if std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("git"))
+                && name != ".git"
+            {
                 gitdirs.push(path);
             } else {
                 stack.push(path);
@@ -536,7 +539,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = env::temp_dir().join(format!("task-rs-tasks-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -548,7 +551,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -715,8 +718,8 @@ mod tests {
             let repos = resolver.available_repos().expect("available_repos");
             let keys: Vec<String> = repos.iter().map(|(k, _)| k.to_string()).collect();
             assert_eq!(keys.len(), 2);
-            assert!(keys.contains(&"github.com/me/app".to_string()));
-            assert!(keys.contains(&"github.com/me/lib".to_string()));
+            assert!(keys.contains(&"github.com/me/app".to_owned()));
+            assert!(keys.contains(&"github.com/me/lib".to_owned()));
         }
 
         #[test]
@@ -1077,7 +1080,7 @@ mod tests {
             init_bare_repo(&repos_dir.join("github.com/me/app.git"));
             let resolver = resolver_for(&repos_dir, &wt_dir);
 
-            let args = vec!["github.com/me/app".to_string(), "feature-x".to_string()];
+            let args = vec!["github.com/me/app".to_owned(), "feature-x".to_owned()];
             let (repo, branch) = resolver
                 .resolve_task_from_args(&args, "usage: task rebase <repo> <branch>")
                 .expect("two args");
@@ -1094,10 +1097,10 @@ mod tests {
             let resolver = resolver_for(&repos_dir, &wt_dir);
 
             let args = vec![
-                "a".to_string(),
-                "b".to_string(),
-                "c".to_string(),
-                "d".to_string(),
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+                "d".to_owned(),
             ];
             let err = resolver
                 .resolve_task_from_args(&args, "too many")

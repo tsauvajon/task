@@ -60,7 +60,7 @@ impl From<String> for BranchName {
 
 impl From<&str> for BranchName {
     fn from(s: &str) -> Self {
-        Self(s.to_string())
+        Self(s.to_owned())
     }
 }
 
@@ -72,7 +72,7 @@ impl From<BranchName> for String {
 
 impl From<BranchName> for PathBuf {
     fn from(b: BranchName) -> Self {
-        PathBuf::from(b.0)
+        Self::from(b.0)
     }
 }
 
@@ -93,8 +93,8 @@ mod tests {
 
         #[test]
         fn from_str_ref_and_from_string_agree() {
-            let from_str: BranchName = "feat/login".into();
-            let from_string: BranchName = "feat/login".to_string().into();
+            let from_str = BranchName::from("feat/login");
+            let from_string = BranchName::from("feat/login".to_owned());
             assert_eq!(from_str, from_string);
         }
     }
@@ -144,14 +144,14 @@ mod tests {
         #[test]
         fn into_string_round_trips() {
             let b = BranchName::new("bump-deps");
-            let s: String = b.into();
+            let s = String::from(b);
             assert_eq!(s, "bump-deps");
         }
 
         #[test]
         fn into_path_buf_converts_correctly() {
             let b = BranchName::new("feat/login");
-            let p: PathBuf = b.into();
+            let p = PathBuf::from(b);
             assert_eq!(p, PathBuf::from("feat/login"));
         }
     }
