@@ -2,7 +2,7 @@
 //! `real_cases` integration suite.
 //!
 //! Every helper matches the classifier-visible fields of the real
-//! OpenCode schema. Anything not classifier-visible is intentionally
+//! `OpenCode` schema. Anything not classifier-visible is intentionally
 //! omitted so the fixtures stay small and evolve alongside the rules
 //! that inspect them.
 
@@ -101,9 +101,11 @@ pub(super) fn insert_message(
     created: i64,
     data: serde_json::Value,
 ) {
+    let data_json = data.to_string();
+    drop(data);
     conn.execute(
         "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?3, ?4)",
-        rusqlite::params![format!("msg_{created}_{session_id}"), session_id, created, data.to_string()],
+        rusqlite::params![format!("msg_{created}_{session_id}"), session_id, created, data_json],
     )
     .unwrap();
 }
@@ -138,7 +140,7 @@ pub(super) fn insert_tool_part(
 
 pub(super) fn temp(tag: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!("task-rs-opencode-status-{tag}"));
-    let _ = fs::remove_dir_all(&base);
+    _ = fs::remove_dir_all(&base);
     fs::create_dir_all(&base).unwrap();
     base
 }
@@ -169,7 +171,11 @@ pub(super) fn snapshot_with_proc_starts(
         .enumerate()
         .map(|(idx, (cwd, start_ms))| {
             let canon = std::fs::canonicalize(&cwd).unwrap_or(cwd);
-            (canon, idx as u32, start_ms)
+            (
+                canon,
+                u32::try_from(idx).expect("test process index fits u32"),
+                start_ms,
+            )
         })
         .collect();
     OpenCodeSnapshot::new_for_test(LiveOpencodeProcesses::from_entries(entries), dbs, now_ms)

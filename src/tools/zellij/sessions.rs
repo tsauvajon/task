@@ -41,7 +41,7 @@ fn parse_sessions(output: &str) -> HashSet<String> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .filter(|line| !line.contains("EXITED"))
-        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .filter_map(|line| line.split_whitespace().next().map(str::to_owned))
         .collect()
 }
 

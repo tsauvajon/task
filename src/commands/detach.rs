@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use clap::Subcommand;
 use rayon::prelude::*;
@@ -61,11 +61,34 @@ pub fn run(env: &RuntimeEnvironment, command: DetachCommand) -> Result<()> {
     }
 }
 
-pub(crate) fn add(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
+struct DetachedWorktreePaths {
+    repo_key: RepoKey,
+    gitdir: PathBuf,
+    path: PathBuf,
+}
+
+fn resolve_detached_worktree(
+    env: &RuntimeEnvironment,
+    repo_arg: &str,
+) -> Result<DetachedWorktreePaths> {
     let layout = env.layout();
     let repo_key = env.tasks().resolve_existing_repo_key(repo_arg)?;
     let gitdir = layout.repo_gitdir_path(&repo_key);
     let path = layout.detached_path(&repo_key);
+
+    Ok(DetachedWorktreePaths {
+        repo_key,
+        gitdir,
+        path,
+    })
+}
+
+pub(crate) fn add(env: &RuntimeEnvironment, repo_arg: &str) -> Result<()> {
+    let DetachedWorktreePaths {
+        repo_key,
+        gitdir,
+        path,
+    } = resolve_detached_worktree(env, repo_arg)?;
     let pinned_branch = find_detached_entry(env.detached_entries(), repo_key.as_ref())?
         .map(|entry| entry.branch.clone());
 
@@ -143,10 +166,10 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
         .iter()
         .map(|p| {
             let key = repo_key_from_detached_path(detached_dir, p);
-            AsRef::<str>::as_ref(&key).to_string()
+            AsRef::<str>::as_ref(&key).to_owned()
         })
         .collect();
-    let reporter = ProgressReporter::new("Updating", labels);
+    let reporter = ProgressReporter::new("Updating", &labels);
     let detached_entries = env.detached_entries();
 
     // Fan out per-repo work across rayon workers. Each closure buffers its
@@ -186,14 +209,14 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
         })
         .collect();
 
-    reporter.finish();
+    reporter.finish()?;
 
     let mut errors: Vec<String> = Vec::new();
     for (path, lines, result) in results {
         if let Err(err) = result {
             // Only surface buffered output for failures — successful
             // workers stay quiet so the progress block is the whole UX.
-            print_failure_block(&path, lines);
+            print_failure_block(&path, lines)?;
             errors.push(format!("{}: {err}", path.display()));
         }
     }
@@ -211,19 +234,21 @@ pub(crate) fn update_all(env: &RuntimeEnvironment) -> Result<()> {
 /// Render a `──── <label> ────` header followed by the worker's
 /// captured output. Keeps failure post-mortems grouped per-repo so
 /// concurrent workers' logs don't interleave.
-fn print_failure_block(path: &std::path::Path, lines: Vec<process::CapturedLine>) {
+fn print_failure_block(path: &std::path::Path, lines: Vec<process::CapturedLine>) -> Result<()> {
     if lines.is_empty() {
-        return;
+        return Ok(());
     }
-    eprintln!("──── {} ────", path.display());
-    process::flush_captured_lines(lines);
+    process::write_stderr_line(format_args!("──── {} ────", path.display()))?;
+    process::try_flush_captured_lines(lines)?;
+    Ok(())
 }
 
 pub(crate) fn remove(env: &RuntimeEnvironment, repo_arg: &str, force: bool) -> Result<()> {
-    let layout = env.layout();
-    let repo_key = env.tasks().resolve_existing_repo_key(repo_arg)?;
-    let gitdir = layout.repo_gitdir_path(&repo_key);
-    let path = layout.detached_path(&repo_key);
+    let DetachedWorktreePaths {
+        repo_key,
+        gitdir,
+        path,
+    } = resolve_detached_worktree(env, repo_arg)?;
 
     if !path.exists() {
         return Err(Error::failed(format!(
@@ -235,17 +260,14 @@ pub(crate) fn remove(env: &RuntimeEnvironment, repo_arg: &str, force: bool) -> R
     crate::tools::git::worktrees::remove(&gitdir, &path, force)?;
 
     // Clean up empty parent directories up to (but not including) detached_dir.
-    let detached_dir = layout.detached_dir();
+    let detached_dir = env.layout().detached_dir();
     let mut dir = path.parent();
     while let Some(parent) = dir {
         if parent == detached_dir {
             break;
         }
-        if fs::read_dir(parent)
-            .map(|mut d| d.next().is_none())
-            .unwrap_or(false)
-        {
-            let _ = fs::remove_dir(parent);
+        if fs::read_dir(parent).is_ok_and(|mut d| d.next().is_none()) {
+            drop(fs::remove_dir(parent));
         }
         dir = parent.parent();
     }
@@ -260,15 +282,15 @@ pub(crate) fn list(env: &RuntimeEnvironment) -> Result<()> {
     collect_detached_worktrees(detached_dir, &mut worktrees)?;
 
     if worktrees.is_empty() {
-        println!("No detached worktrees.");
+        process::write_stdout_line("No detached worktrees.")?;
         return Ok(());
     }
 
     for path in &worktrees {
         // Best-effort HEAD SHA — don't fail the list if git fails.
-        let head = read_head_sha(path).unwrap_or_else(|| "unknown".to_string());
+        let head = read_head_sha(path).unwrap_or_else(|| "unknown".to_owned());
         let repo_key = repo_key_from_detached_path(detached_dir, path);
-        println!("{repo_key}  {head}  {}", path.display());
+        process::write_stdout_line(format_args!("{repo_key}  {head}  {}", path.display()))?;
     }
 
     Ok(())
@@ -365,11 +387,10 @@ fn read_head_sha(path: &std::path::Path) -> Option<String> {
         ])
         .output()
         .ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 pub(crate) fn repo_key_from_detached_path(
@@ -398,7 +419,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = std::env::temp_dir().join(format!("task-rs-detach-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -410,7 +431,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -457,7 +478,7 @@ mod tests {
         #[test]
         fn returns_empty_for_missing_dir() {
             let path = Path::new("/tmp/task-rs-detach-nonexistent-99999");
-            let _ = fs::remove_dir_all(path);
+            _ = fs::remove_dir_all(path);
             let mut out = Vec::new();
             collect_detached_worktrees(path, &mut out).unwrap();
             assert!(out.is_empty());
@@ -546,7 +567,7 @@ mod tests {
     }
 
     /// Run a git command, isolated from the user's global config, panicking
-    /// on failure. Used by the parallel update_all fixtures below.
+    /// on failure. Used by the parallel `update_all` fixtures below.
     fn git(args: &[&str], cwd: &Path) {
         let status = std::process::Command::new("git")
             .args(args)
@@ -584,9 +605,9 @@ mod tests {
     fn seed_feat_branch_workspace(base: &Path, repo_key: &str) -> FeatBranchWorkspace {
         let remote = base.join(format!("remote-{}.git", repo_key.replace('/', "-")));
         let seed = base.join(format!("seed-{}", repo_key.replace('/', "-")));
-        let bare = base.join("repos").join(format!("{repo_key}.git"));
+        let bare_repo_path = base.join("repos").join(format!("{repo_key}.git"));
         fs::create_dir_all(&seed).unwrap();
-        fs::create_dir_all(bare.parent().unwrap()).unwrap();
+        fs::create_dir_all(bare_repo_path.parent().unwrap()).unwrap();
 
         git(&["init", "--bare", remote.to_str().unwrap()], base);
         git(&["init", "-b", "main"], &seed);
@@ -609,10 +630,10 @@ mod tests {
         git(&["push", "-u", "origin", "feat"], &seed);
 
         // Bare repo pointing at the same origin.
-        git(&["init", "--bare", bare.to_str().unwrap()], base);
+        git(&["init", "--bare", bare_repo_path.to_str().unwrap()], base);
         git(
             &["remote", "add", "origin", remote.to_str().unwrap()],
-            &bare,
+            &bare_repo_path,
         );
         git(
             &[
@@ -620,10 +641,13 @@ mod tests {
                 "remote.origin.fetch",
                 "+refs/heads/*:refs/remotes/origin/*",
             ],
-            &bare,
+            &bare_repo_path,
         );
-        git(&["fetch", "origin"], &bare);
-        FeatBranchWorkspace { bare, seed }
+        git(&["fetch", "origin"], &bare_repo_path);
+        FeatBranchWorkspace {
+            bare: bare_repo_path,
+            seed,
+        }
     }
 
     /// Run a git command and capture stdout. Panics on failure.
@@ -636,7 +660,7 @@ mod tests {
             .output()
             .expect("git must be available");
         assert!(output.status.success(), "git {args:?} failed");
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
     /// Create a minimal remote + clone-style detached worktree at the
@@ -748,18 +772,18 @@ mod tests {
             fs::create_dir_all(base.join("wt")).unwrap();
             fs::create_dir_all(base.join("detached")).unwrap();
 
-            let bare = seed_bare_repo_with_feat_branch(base, "github.com/org/forked");
+            let bare_repo_path = seed_bare_repo_with_feat_branch(base, "github.com/org/forked");
             let env =
                 make_env(base).with_detached_entries(vec![crate::runtime::config::DetachedEntry {
-                    repo: "github.com/org/forked".to_string(),
-                    branch: "feat".to_string(),
+                    repo: "github.com/org/forked".to_owned(),
+                    branch: "feat".to_owned(),
                 }]);
 
             add(&env, "github.com/org/forked").expect("add should succeed");
 
             let detached = base.join("detached/github.com/org/forked");
             let head = git_stdout(&["rev-parse", "HEAD"], &detached);
-            let origin_feat = git_stdout(&["rev-parse", "origin/feat"], &bare);
+            let origin_feat = git_stdout(&["rev-parse", "origin/feat"], &bare_repo_path);
             assert_eq!(head, origin_feat, "detached HEAD should match origin/feat");
         }
 
@@ -772,14 +796,14 @@ mod tests {
             fs::create_dir_all(base.join("wt")).unwrap();
             fs::create_dir_all(base.join("detached")).unwrap();
 
-            let bare = seed_bare_repo_with_feat_branch(base, "github.com/org/app");
+            let bare_repo_path = seed_bare_repo_with_feat_branch(base, "github.com/org/app");
             let env = make_env(base);
 
             add(&env, "github.com/org/app").expect("add should succeed");
 
             let detached = base.join("detached/github.com/org/app");
             let head = git_stdout(&["rev-parse", "HEAD"], &detached);
-            let origin_main = git_stdout(&["rev-parse", "origin/main"], &bare);
+            let origin_main = git_stdout(&["rev-parse", "origin/main"], &bare_repo_path);
             assert_eq!(head, origin_main, "detached HEAD should match origin/main");
         }
 
@@ -797,8 +821,8 @@ mod tests {
             let _bare = seed_bare_repo_with_feat_branch(base, "github.com/org/broken");
             let env =
                 make_env(base).with_detached_entries(vec![crate::runtime::config::DetachedEntry {
-                    repo: "github.com/org/broken".to_string(),
-                    branch: "does-not-exist".to_string(),
+                    repo: "github.com/org/broken".to_owned(),
+                    branch: "does-not-exist".to_owned(),
                 }]);
 
             let err = add(&env, "github.com/org/broken").unwrap_err();
@@ -947,7 +971,7 @@ mod tests {
 
             // Seed remote + bare repo with main + feat branches.
             let workspace = seed_feat_branch_workspace(base, repo_key);
-            let bare = &workspace.bare;
+            let bare_repo_path = &workspace.bare;
             let seed = &workspace.seed;
             let detached = base.join(format!("detached/{repo_key}"));
             fs::create_dir_all(detached.parent().unwrap()).unwrap();
@@ -957,7 +981,7 @@ mod tests {
             git(
                 &[
                     "--git-dir",
-                    bare.to_str().unwrap(),
+                    bare_repo_path.to_str().unwrap(),
                     "worktree",
                     "add",
                     "--detach",
@@ -972,8 +996,8 @@ mod tests {
             let detached_dir = base.join("detached");
             let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir)
                 .with_detached_entries(vec![crate::runtime::config::DetachedEntry {
-                    repo: repo_key.to_string(),
-                    branch: "feat".to_string(),
+                    repo: repo_key.to_owned(),
+                    branch: "feat".to_owned(),
                 }]);
 
             // Advance origin/feat so the reset is observable.
@@ -1048,8 +1072,8 @@ mod tests {
             let detached_dir = base.join("detached");
             let env = RuntimeEnvironment::from_paths(&repos_dir, &wt_dir, &detached_dir)
                 .with_detached_entries(vec![crate::runtime::config::DetachedEntry {
-                    repo: pinned_key.to_string(),
-                    branch: "feat".to_string(),
+                    repo: pinned_key.to_owned(),
+                    branch: "feat".to_owned(),
                 }]);
 
             update_all(&env).expect("update_all should succeed");
@@ -1153,9 +1177,7 @@ mod tests {
             // the dir-pruning: verify the intermediate dirs are empty.
             let org_dir = detached_dir.join("github.com/org");
             assert!(
-                fs::read_dir(&org_dir)
-                    .map(|mut d| d.next().is_none())
-                    .unwrap_or(false),
+                fs::read_dir(&org_dir).is_ok_and(|mut d| d.next().is_none()),
                 "org dir should be empty after worktree removal"
             );
         }
@@ -1168,12 +1190,12 @@ mod tests {
         fn entries() -> Vec<DetachedEntry> {
             vec![
                 DetachedEntry {
-                    repo: "github.com/mattwparas/helix".to_string(),
-                    branch: "steel-event-system".to_string(),
+                    repo: "github.com/mattwparas/helix".to_owned(),
+                    branch: "steel-event-system".to_owned(),
                 },
                 DetachedEntry {
-                    repo: "github.com/org/fork".to_string(),
-                    branch: "custom".to_string(),
+                    repo: "github.com/org/fork".to_owned(),
+                    branch: "custom".to_owned(),
                 },
             ]
         }
@@ -1207,12 +1229,12 @@ mod tests {
         fn errors_when_ambiguous_short_name() {
             let entries = vec![
                 DetachedEntry {
-                    repo: "github.com/a/app".to_string(),
-                    branch: "x".to_string(),
+                    repo: "github.com/a/app".to_owned(),
+                    branch: "x".to_owned(),
                 },
                 DetachedEntry {
-                    repo: "github.com/b/app".to_string(),
-                    branch: "y".to_string(),
+                    repo: "github.com/b/app".to_owned(),
+                    branch: "y".to_owned(),
                 },
             ];
             let err = find_detached_entry(&entries, "app").unwrap_err();

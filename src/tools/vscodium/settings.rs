@@ -2,17 +2,17 @@ use std::{fs, path::Path};
 
 use crate::error::Result;
 
-/// Seeds default VSCodium settings into a fresh user-data-dir profile.
+/// Seeds default `VSCodium` settings into a fresh user-data-dir profile.
 ///
 /// Skips writing if `User/settings.json` already exists, so that user
-/// customizations made through the VSCodium UI are preserved on subsequent
+/// customizations made through the `VSCodium` UI are preserved on subsequent
 /// `task open` / `task start` calls.
 ///
 /// The defaults disable automatic updates and telemetry because task-managed
-/// VSCodium instances are installed through nix — self-updates would conflict
+/// `VSCodium` instances are installed through nix — self-updates would conflict
 /// with the nix store (which is read-only) and produce confusing error dialogs
 /// on every launch.
-pub fn seed_default_settings(user_data_dir: &Path) -> Result<()> {
+pub(super) fn seed_default_settings(user_data_dir: &Path) -> Result<()> {
     let settings_path = user_data_dir.join("User/settings.json");
     if settings_path.exists() {
         return Ok(());
@@ -44,7 +44,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = std::env::temp_dir().join(format!("task-vscodium-settings-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -56,7 +56,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 

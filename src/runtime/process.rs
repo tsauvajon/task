@@ -1,7 +1,8 @@
 use std::{
     cell::RefCell,
     ffi::OsStr,
-    io::{BufRead, BufReader, Read},
+    fmt,
+    io::{self, BufRead, BufReader, Read, Write},
     path::Path,
     process::{Command, Stdio},
     sync::{Arc, Mutex, OnceLock},
@@ -32,10 +33,10 @@ pub enum CapturedLine {
 }
 
 impl CapturedLine {
-    pub fn flush(&self) {
+    pub fn flush(&self) -> Result<()> {
         match self {
-            Self::Stdout(line) => println!("{line}"),
-            Self::Stderr(line) => eprintln!("{line}"),
+            Self::Stdout(line) => write_stdout_line(line),
+            Self::Stderr(line) => write_stderr_line(line),
         }
     }
 
@@ -72,6 +73,7 @@ thread_local! {
 ///
 /// Sequential code that never constructs an `OutputScope` is completely
 /// unaffected.
+#[derive(Debug)]
 pub struct OutputScope {
     sink: Sink,
     previous: Option<Sink>,
@@ -81,7 +83,7 @@ impl OutputScope {
     #[must_use]
     pub fn new() -> Self {
         let sink: Sink = Arc::new(Mutex::new(Vec::new()));
-        let previous = OUTPUT_SINK.with(|slot| slot.replace(Some(sink.clone())));
+        let previous = OUTPUT_SINK.with(|slot| slot.replace(Some(Arc::clone(&sink))));
         Self { sink, previous }
     }
 
@@ -89,8 +91,13 @@ impl OutputScope {
     #[must_use]
     pub fn into_lines(self) -> Vec<CapturedLine> {
         let scope = std::mem::ManuallyDrop::new(self);
-        let lines = std::mem::take(&mut *scope.sink.lock().unwrap_or_else(|e| e.into_inner()));
-        OUTPUT_SINK.with(|slot| *slot.borrow_mut() = scope.previous.clone());
+        let lines = std::mem::take(
+            &mut *scope
+                .sink
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        OUTPUT_SINK.with(|slot| (*slot.borrow_mut()).clone_from(&scope.previous));
         lines
     }
 }
@@ -123,7 +130,34 @@ fn push_to_sink(line: CapturedLine) -> bool {
 /// Flush previously-captured lines to stdout/stderr in arrival order.
 pub fn flush_captured_lines(lines: Vec<CapturedLine>) {
     for line in lines {
-        line.flush();
+        match line.flush() {
+            Ok(()) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+pub fn try_flush_captured_lines(lines: Vec<CapturedLine>) -> Result<()> {
+    for line in lines {
+        line.flush()?;
+    }
+    Ok(())
+}
+
+pub fn write_stdout_line(message: impl fmt::Display) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{message}").map_err(Error::from)
+}
+
+pub fn write_stderr_line(message: impl fmt::Display) -> Result<()> {
+    let mut stderr = io::stderr().lock();
+    writeln!(stderr, "{message}").map_err(Error::from)
+}
+
+fn ignore_output_result(result: Result<()>) {
+    match result {
+        Ok(()) => {}
+        Err(_err) => {}
     }
 }
 
@@ -174,7 +208,7 @@ impl ExternalTool {
     }
 
     #[must_use]
-    pub fn install_hint(self) -> InstallHint {
+    pub const fn install_hint(self) -> InstallHint {
         match self {
             Self::Git => InstallHint::NixPackage("nixpkgs#git"),
             Self::Zellij => InstallHint::NixPackage("nixpkgs#zellij"),
@@ -193,12 +227,12 @@ impl ExternalTool {
     /// there's no allocation and no second source of truth.
     #[must_use]
     pub fn binary_name(self) -> &'static str {
-        self.into()
+        <&'static str>::from(self)
     }
 
     /// All external tools, in a stable order suitable for doctor output.
     #[must_use]
-    pub fn all() -> &'static [ExternalTool] {
+    pub const fn all() -> &'static [Self] {
         &[
             Self::Nix,
             Self::Git,
@@ -224,8 +258,8 @@ impl CommandPlan {
     #[must_use]
     pub fn from_program(program: &str, args: &[&str]) -> Self {
         Self {
-            program: program.to_string(),
-            args: args.iter().map(|&a| a.to_string()).collect(),
+            program: program.to_owned(),
+            args: args.iter().map(|&a| a.to_owned()).collect(),
         }
     }
 
@@ -233,7 +267,7 @@ impl CommandPlan {
     #[must_use]
     pub fn for_tool(tool: ExternalTool, tool_args: Vec<String>) -> Self {
         Self {
-            program: tool.binary_name().to_string(),
+            program: tool.binary_name().to_owned(),
             args: tool_args,
         }
     }
@@ -299,7 +333,7 @@ pub fn run_capture(
     }
     let output = cmd.output().map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         let msg = if stderr.is_empty() {
             format!("command failed with status {}", output.status)
         } else {
@@ -307,7 +341,7 @@ pub fn run_capture(
         };
         return Err(Error::failed(msg));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 pub fn run_status(program: impl AsRef<OsStr>, args: &[&str], cwd: Option<&Path>) -> Result<()> {
@@ -356,7 +390,7 @@ pub fn run_status_quiet(
         return Ok(());
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     let msg = if stderr.is_empty() {
         format!("command failed with status {}", output.status)
     } else {
@@ -401,10 +435,10 @@ fn run_status_into_sink(
     // Drainers must finish before we return so the caller sees the full
     // output block in-order.
     if let Some(h) = stdout_handle {
-        let _ = h.join();
+        drop(h.join());
     }
     if let Some(h) = stderr_handle {
-        let _ = h.join();
+        drop(h.join());
     }
 
     if status.success() {
@@ -449,7 +483,7 @@ pub fn log(message: &str) {
     if capture_log_line(&format!("==> {message}")) {
         return;
     }
-    println!("{styled}");
+    ignore_output_result(write_stdout_line(&styled));
 }
 
 pub fn warn(message: &str) {
@@ -460,7 +494,7 @@ pub fn warn(message: &str) {
     if capture_log_line(&format!("warning: {message}")) {
         return;
     }
-    eprintln!("{styled}");
+    ignore_output_result(write_stderr_line(&styled));
 }
 
 pub fn enable_log_capture() {
@@ -489,7 +523,7 @@ fn capture_log_line(line: &str) -> bool {
     if let Ok(mut capture) = log_capture().lock()
         && capture.enabled
     {
-        capture.lines.push(line.to_string());
+        capture.lines.push(line.to_owned());
         return true;
     }
     false
@@ -579,7 +613,7 @@ mod tests {
         fn for_tool_resolves_to_binary_name_on_path() {
             let plan = CommandPlan::for_tool(
                 ExternalTool::Git,
-                vec!["status".to_string(), "--short".to_string()],
+                vec!["status".to_owned(), "--short".to_owned()],
             );
             assert_eq!(plan.program(), "git");
             assert_eq!(plan.args(), vec!["status", "--short"]);

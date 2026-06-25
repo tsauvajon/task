@@ -35,6 +35,9 @@ pub enum Error {
     /// A command or operation failed with a descriptive message.
     #[error("{0}")]
     Failed(String),
+
+    #[error("Worktree has uncommitted changes. Use --force if you really want to remove it.")]
+    DirtyWorktree,
 }
 
 impl Error {
@@ -96,6 +99,20 @@ mod tests {
             let err = Error::Cancelled;
             assert_eq!(err.to_string(), "Selection cancelled");
         }
+
+        #[test]
+        fn dirty_worktree_mentions_uncommitted_changes_and_force() {
+            let msg = Error::DirtyWorktree.to_string();
+
+            assert!(
+                msg.contains("uncommitted changes"),
+                "message should mention uncommitted changes: {msg}"
+            );
+            assert!(
+                msg.contains("--force"),
+                "message should mention --force: {msg}"
+            );
+        }
     }
 
     mod from_conversions {
@@ -104,7 +121,7 @@ mod tests {
         #[test]
         fn from_io_error_preserves_message() {
             let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-            let err: Error = io_err.into();
+            let err = Error::from(io_err);
             assert!(err.to_string().contains("file not found"));
             assert!(matches!(err, Error::Io(_)));
         }
@@ -112,7 +129,7 @@ mod tests {
         #[test]
         fn from_json_error_is_json_variant() {
             let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
-            let err: Error = json_err.into();
+            let err = Error::from(json_err);
             assert!(matches!(err, Error::Json(_)));
         }
     }
@@ -138,11 +155,11 @@ mod tests {
 
         #[test]
         fn uses_tool_specific_nix_package() {
-            let err = Error::tool_missing(ExternalTool::Zellij);
-            assert!(err.to_string().contains("nixpkgs#zellij"));
+            let zellij_err = Error::tool_missing(ExternalTool::Zellij);
+            assert!(zellij_err.to_string().contains("nixpkgs#zellij"));
 
-            let err = Error::tool_missing(ExternalTool::Opencode);
-            assert!(err.to_string().contains("nixpkgs#opencode"));
+            let opencode_err = Error::tool_missing(ExternalTool::Opencode);
+            assert!(opencode_err.to_string().contains("nixpkgs#opencode"));
         }
 
         #[test]

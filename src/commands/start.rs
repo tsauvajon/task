@@ -26,9 +26,7 @@ pub fn run(
     let gitdir = context.layout().repo_gitdir_path(&repo_key);
     fetch_origin_refs(&gitdir)?;
 
-    let base_ref = base_ref
-        .map(str::to_string)
-        .unwrap_or_else(|| detect_default_base(&gitdir));
+    let base_ref = base_ref.map_or_else(|| detect_default_base(&gitdir), str::to_owned);
 
     let branch_name = BranchName::new(branch);
     let worktree = context.layout().worktree_path(&repo_key, &branch_name);
@@ -136,23 +134,23 @@ enum BranchStrategy {
 fn resolve_branch_strategy(
     branch: &str,
     base_ref: &str,
-    ref_exists_fn: impl Fn(&str) -> bool,
-    rev_exists_fn: impl Fn(&str) -> bool,
+    git_ref_exists: impl Fn(&str) -> bool,
+    git_revision_exists: impl Fn(&str) -> bool,
 ) -> Result<BranchStrategy> {
-    if ref_exists_fn(&format!("refs/heads/{branch}")) {
+    if git_ref_exists(&format!("refs/heads/{branch}")) {
         return Ok(BranchStrategy::ExistingLocal);
     }
 
-    if ref_exists_fn(&format!("refs/remotes/origin/{branch}")) {
+    if git_ref_exists(&format!("refs/remotes/origin/{branch}")) {
         return Ok(BranchStrategy::TrackRemote);
     }
 
-    if !rev_exists_fn(base_ref) {
+    if !git_revision_exists(base_ref) {
         return Err(Error::not_found(format!("Base ref not found: {base_ref}")));
     }
 
     Ok(BranchStrategy::CreateFromBase {
-        base: base_ref.to_string(),
+        base: base_ref.to_owned(),
     })
 }
 
@@ -170,7 +168,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = env::temp_dir().join(format!("task-rs-start-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -182,7 +180,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -206,7 +204,7 @@ mod tests {
             .output()
             .expect("git must be available");
         assert!(output.status.success(), "git {args:?} failed");
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
     mod classify_worktree_path_tests {
@@ -234,7 +232,7 @@ mod tests {
         #[test]
         fn new_when_path_missing() {
             let path = env::temp_dir().join("task-rs-start-missing");
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             assert_eq!(classify_worktree_path(&path), WorktreePathState::New);
         }
     }
@@ -273,7 +271,7 @@ mod tests {
             assert_eq!(
                 result,
                 BranchStrategy::CreateFromBase {
-                    base: "origin/main".to_string()
+                    base: "origin/main".to_owned()
                 }
             );
         }
@@ -306,7 +304,7 @@ mod tests {
             assert_eq!(
                 result,
                 BranchStrategy::CreateFromBase {
-                    base: "origin/develop".to_string()
+                    base: "origin/develop".to_owned()
                 }
             );
         }
@@ -318,8 +316,7 @@ mod tests {
             let err = result.unwrap_err();
             assert!(
                 err.to_string().contains("origin/nonexistent"),
-                "error should name the missing base: {}",
-                err
+                "error should name the missing base: {err}"
             );
         }
 

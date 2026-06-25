@@ -47,7 +47,7 @@ pub fn list_registered_worktrees(gitdir: &Path) -> Vec<PathBuf> {
     };
 
     entries
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .filter_map(|entry| read_worktree_root(&entry.path()))
         .filter(|root| root.exists())
         .collect()
@@ -147,14 +147,14 @@ pub struct WorktreeDiff {
 
 impl WorktreeDiff {
     #[must_use]
-    pub fn is_clean(self) -> bool {
+    pub const fn is_clean(self) -> bool {
         self.changed_files == 0
     }
 
     #[must_use]
     pub fn label(self) -> String {
         if self.is_clean() {
-            return "clean".to_string();
+            return "clean".to_owned();
         }
 
         if self.added_lines == 0 && self.deleted_lines == 0 {
@@ -209,9 +209,13 @@ fn add_numstat_line(line: &str, diff: &mut WorktreeDiff) {
         return;
     };
 
-    diff.added_lines += added.parse::<usize>().unwrap_or(0);
-    diff.deleted_lines += deleted.parse::<usize>().unwrap_or(0);
-    diff.changed_files += 1;
+    diff.added_lines = diff
+        .added_lines
+        .saturating_add(added.parse::<usize>().unwrap_or(0));
+    diff.deleted_lines = diff
+        .deleted_lines
+        .saturating_add(deleted.parse::<usize>().unwrap_or(0));
+    diff.changed_files = diff.changed_files.saturating_add(1);
 }
 
 pub fn rebase(worktree: &Path, base_ref: &str) -> Result<()> {
@@ -257,7 +261,7 @@ pub fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
             }
             builder.path = Some(PathBuf::from(path));
         } else if let Some(branch_ref) = line.strip_prefix("branch ") {
-            builder.branch_ref = Some(branch_ref.to_string());
+            builder.branch_ref = Some(branch_ref.to_owned());
         } else if line == "bare" {
             builder.is_bare = true;
         } else if line.is_empty()
@@ -315,11 +319,11 @@ pub fn worktree_name(wt_dir: &Path, repo_key: &str, worktree_path: &Path) -> Str
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
         })
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 /// Create a detached worktree at `path` pinned to `base_ref` (e.g. `origin/HEAD`).
-/// Equivalent to: git --git-dir <gitdir> worktree add --detach <path> <base_ref>
+/// Equivalent to: git --git-dir <gitdir> worktree add --detach <path> <`base_ref`>
 pub fn add_detached(gitdir: &Path, path: &Path, base_ref: &str) -> Result<()> {
     let path_str = path.to_string_lossy();
     GitDir::new(gitdir).status(&["worktree", "add", "--detach", path_str.as_ref(), base_ref])
@@ -392,11 +396,11 @@ fn resolve_detached_base_ref(path: &Path, pinned_branch: Option<&str>) -> Result
 
     for fallback in ["origin/main", "origin/master"] {
         if rev_exists_in_worktree(path, fallback) {
-            return Ok(fallback.to_string());
+            return Ok(fallback.to_owned());
         }
     }
 
-    Ok("HEAD".to_string())
+    Ok("HEAD".to_owned())
 }
 
 fn remote_default_branch(path: &Path) -> Option<String> {
@@ -435,42 +439,25 @@ fn symbolic_origin_head(path: &Path) -> Option<String> {
     if value.is_empty() {
         None
     } else {
-        Some(value.to_string())
+        Some(value.to_owned())
     }
 }
 
 fn rev_exists_in_worktree(path: &Path, revision: &str) -> bool {
-    let path_str = path.to_string_lossy();
     let value = format!("{revision}^{{commit}}");
-    status(
-        &[
-            "-C",
-            path_str.as_ref(),
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &value,
-        ],
-        None,
-    )
-    .is_ok()
+    exists_in_worktree(path, &["rev-parse", "--verify", "--quiet", &value])
 }
 
 fn local_branch_exists_in_worktree(path: &Path, branch: &str) -> bool {
-    let path_str = path.to_string_lossy();
     let branch_ref = format!("refs/heads/{branch}");
-    status(
-        &[
-            "-C",
-            path_str.as_ref(),
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &branch_ref,
-        ],
-        None,
-    )
-    .is_ok()
+    exists_in_worktree(path, &["show-ref", "--verify", "--quiet", &branch_ref])
+}
+
+fn exists_in_worktree(path: &Path, args: &[&str]) -> bool {
+    let path_str = path.to_string_lossy();
+    let mut full_args = vec!["-C", path_str.as_ref()];
+    full_args.extend_from_slice(args);
+    status(&full_args, None).is_ok()
 }
 
 fn checkout_branch(path: &Path, branch: &str) -> Result<()> {
@@ -493,7 +480,7 @@ pub fn branch_from_ref(branch_ref: Option<&str>) -> Option<String> {
         branch_ref
             .strip_prefix("refs/heads/")
             .unwrap_or(branch_ref)
-            .to_string(),
+            .to_owned(),
     )
 }
 
@@ -516,7 +503,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = std::env::temp_dir().join(format!("task-rs-worktrees-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -528,7 +515,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -557,7 +544,7 @@ mod tests {
             .output()
             .expect("git must be available");
         assert!(output.status.success(), "git {args:?} failed");
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
     fn create_bare_repo_with_origin(name: &str) -> (TempDir, PathBuf, PathBuf) {
@@ -626,8 +613,8 @@ branch refs/heads/rewrite-in-rust\n\n";
             assert_eq!(
                 entries[1],
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust".into(),
-                    branch_ref: Some("refs/heads/rewrite-in-rust".to_string()),
+                    path: PathBuf::from("/tmp/dev/wt/github.com/tsauvajon/task/rewrite-in-rust"),
+                    branch_ref: Some("refs/heads/rewrite-in-rust".to_owned()),
                     is_bare: false,
                 }
             );
@@ -645,8 +632,8 @@ branch refs/heads/bump";
             assert_eq!(
                 entries[0],
                 WorktreeEntry {
-                    path: "/tmp/dev/wt/github.com/tsauvajon/task/bump".into(),
-                    branch_ref: Some("refs/heads/bump".to_string()),
+                    path: PathBuf::from("/tmp/dev/wt/github.com/tsauvajon/task/bump"),
+                    branch_ref: Some("refs/heads/bump".to_owned()),
                     is_bare: false,
                 }
             );
@@ -698,7 +685,7 @@ branch refs/heads/main\n\
         fn strips_heads_prefix() {
             assert_eq!(
                 branch_from_ref(Some("refs/heads/rewrite-in-rust")),
-                Some("rewrite-in-rust".to_string())
+                Some("rewrite-in-rust".to_owned())
             );
         }
 
@@ -710,7 +697,7 @@ branch refs/heads/main\n\
         #[test]
         fn returns_raw_ref_when_no_prefix() {
             // A ref that does NOT start with "refs/heads/" is returned as-is.
-            assert_eq!(branch_from_ref(Some("HEAD")), Some("HEAD".to_string()));
+            assert_eq!(branch_from_ref(Some("HEAD")), Some("HEAD".to_owned()));
         }
     }
 
@@ -763,7 +750,7 @@ branch refs/heads/main\n\
                 "github.com/tsauvajon/task",
                 Path::new("/tmp/custom/wt/github.com/tsauvajon/task/feat/rewrite/rust"),
             );
-            assert_eq!(branch, Some("feat/rewrite/rust".to_string()));
+            assert_eq!(branch, Some("feat/rewrite/rust".to_owned()));
         }
 
         #[test]
@@ -773,7 +760,7 @@ branch refs/heads/main\n\
                 "github.com/acme/repo",
                 Path::new("/tmp/wt/github.com/acme/repo/main"),
             );
-            assert_eq!(branch, Some("main".to_string()));
+            assert_eq!(branch, Some("main".to_owned()));
         }
 
         #[test]
@@ -1077,8 +1064,8 @@ branch refs/heads/main\n\
             );
         }
 
-        /// On macOS `/var` is a symlink to `/private/var`. When wt_dir uses
-        /// the symlink form and worktree_path uses the canonical form (or
+        /// On macOS `/var` is a symlink to `/private/var`. When `wt_dir` uses
+        /// the symlink form and `worktree_path` uses the canonical form (or
         /// vice versa), the raw `strip_prefix` fails. Canonicalization inside
         /// `worktree_name` must handle this so nested branches like
         /// `feat/login` don't collapse to just `login`.
@@ -1096,17 +1083,17 @@ branch refs/heads/main\n\
             std::os::unix::fs::symlink(&real_wt, &link_wt).unwrap();
 
             // wt_dir uses the symlink, worktree_path uses the real path.
-            let result = worktree_name(&link_wt, "org/repo", &repo_tree);
+            let symlink_result = worktree_name(&link_wt, "org/repo", &repo_tree);
             assert_eq!(
-                result, "feat/login",
+                symlink_result, "feat/login",
                 "should resolve through symlink and preserve nested path"
             );
 
             // Reverse: wt_dir is real, worktree_path uses symlink.
             let link_path = link_wt.join("org/repo/feat/login");
-            let result = worktree_name(&real_wt, "org/repo", &link_path);
+            let real_path_result = worktree_name(&real_wt, "org/repo", &link_path);
             assert_eq!(
-                result, "feat/login",
+                real_path_result, "feat/login",
                 "should resolve through symlink in the other direction too"
             );
         }
@@ -1239,8 +1226,8 @@ branch refs/heads/main\n\
             // End-to-end: create a bare repo, add a worktree via git, and
             // verify our FS-based reader returns the same path that
             // `git worktree list --porcelain` reports.
-            let (_dir, _source, bare) = create_bare_repo_with_origin("fs-vs-git-agreement");
-            let wt_path = _dir.path().join("wt/feature");
+            let (dir, _source, bare) = create_bare_repo_with_origin("fs-vs-git-agreement");
+            let wt_path = dir.path().join("wt/feature");
             add_from_base(&bare, &wt_path, "feature", "origin/main")
                 .expect("create worktree from base");
 

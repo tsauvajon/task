@@ -65,7 +65,7 @@ impl From<String> for RepoKey {
 
 impl From<&str> for RepoKey {
     fn from(s: &str) -> Self {
-        Self(s.to_string())
+        Self(s.to_owned())
     }
 }
 
@@ -77,7 +77,7 @@ impl From<RepoKey> for String {
 
 impl From<RepoKey> for PathBuf {
     fn from(k: RepoKey) -> Self {
-        PathBuf::from(k.0)
+        Self::from(k.0)
     }
 }
 
@@ -98,8 +98,8 @@ mod tests {
 
         #[test]
         fn from_str_ref_and_from_string_agree() {
-            let from_str: RepoKey = "github.com/owner/repo".into();
-            let from_string: RepoKey = "github.com/owner/repo".to_string().into();
+            let from_str = RepoKey::from("github.com/owner/repo");
+            let from_string = RepoKey::from("github.com/owner/repo".to_owned());
             assert_eq!(from_str, from_string);
         }
     }
@@ -149,14 +149,14 @@ mod tests {
         #[test]
         fn into_string_round_trips() {
             let k = RepoKey::new("github.com/owner/repo");
-            let s: String = k.into();
+            let s = String::from(k);
             assert_eq!(s, "github.com/owner/repo");
         }
 
         #[test]
         fn into_path_buf_converts_correctly() {
             let k = RepoKey::new("github.com/owner/repo");
-            let p: PathBuf = k.into();
+            let p = PathBuf::from(k);
             assert_eq!(p, PathBuf::from("github.com/owner/repo"));
         }
     }

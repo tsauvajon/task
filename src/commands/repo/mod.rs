@@ -1,10 +1,10 @@
-mod clone;
-
 use crate::{
     commands::{RepoCommand, prune},
     error::Result,
     runtime::{environment::RuntimeEnvironment, process},
 };
+
+mod clone;
 
 pub fn run(context: &RuntimeEnvironment, command: RepoCommand) -> Result<()> {
     match command {
@@ -27,7 +27,7 @@ fn list(context: &RuntimeEnvironment) -> Result<()> {
     }
 
     for repo_key in repo_keys {
-        println!("{repo_key}");
+        process::write_stdout_line(repo_key)?;
     }
 
     Ok(())
@@ -44,7 +44,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = env::temp_dir().join(format!("task-rs-repo-list-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
         }
@@ -56,7 +56,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            _ = fs::remove_dir_all(&self.0);
         }
     }
 

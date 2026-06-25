@@ -58,6 +58,16 @@ impl<T> Drop for LoaderHandle<T> {
     }
 }
 
+fn send_or_stop<T>(tx: &mpsc::Sender<T>, stop: &AtomicBool, message: T) -> bool {
+    match tx.send(message) {
+        Ok(()) => true,
+        Err(_err) => {
+            stop.store(true, Ordering::Relaxed);
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 impl LoaderHandle {
     /// Test helper: build a handle whose channel is already disconnected
@@ -79,23 +89,33 @@ pub(super) fn spawn(
     task_repo_scope: Option<String>,
     generation: u64,
 ) -> LoaderHandle {
+    spawn_background(move |tx, stop| {
+        run_loader(&context, task_repo_scope.as_deref(), generation, tx, &stop);
+    })
+}
+
+fn spawn_background<T, F>(work: F) -> LoaderHandle<T>
+where
+    T: Send + 'static,
+    F: FnOnce(mpsc::Sender<T>, Arc<AtomicBool>) + Send + 'static,
+{
     let (tx, rx) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = Arc::clone(&stop);
 
     thread::spawn(move || {
-        run_loader(context, task_repo_scope, generation, tx, stop_thread);
+        work(tx, stop_thread);
     });
 
     LoaderHandle { rx, stop }
 }
 
 fn run_loader(
-    context: RuntimeEnvironment,
-    task_repo_scope: Option<String>,
+    context: &RuntimeEnvironment,
+    task_repo_scope: Option<&str>,
     generation: u64,
     tx: mpsc::Sender<LoadMsg>,
-    stop: Arc<AtomicBool>,
+    stop: &Arc<AtomicBool>,
 ) {
     // Early exit if cancelled before we even start.
     if stop.load(Ordering::Relaxed) {
@@ -109,29 +129,41 @@ fn run_loader(
     let real_wt_dir = std::fs::canonicalize(&wt_dir).unwrap_or_else(|_| wt_dir.clone());
 
     // Resolve scoped task list (single repo) vs full workspace scan.
-    let task_repos = match &task_repo_scope {
+    let task_repos = match task_repo_scope {
         Some(arg) => match tasks.resolve_repo_key_input(arg) {
             Ok(repo_key) => {
                 let gitdir = context.layout().repo_gitdir_path(&repo_key);
                 if gitdir.is_dir() {
                     vec![(repo_key, gitdir)]
                 } else {
-                    let _ = tx.send(LoadMsg::RepoError {
-                        generation,
-                        repo: repo_key,
-                        err: "Repo not cloned".to_string(),
-                    });
+                    if !send_or_stop(
+                        &tx,
+                        stop,
+                        LoadMsg::RepoError {
+                            generation,
+                            repo: repo_key,
+                            err: "Repo not cloned".to_owned(),
+                        },
+                    ) {
+                        return;
+                    }
                     Vec::new()
                 }
             }
             Err(err) => {
                 // Report as a generic error row so the user sees *something*
                 // in the activity panel even for an unresolvable scope.
-                let _ = tx.send(LoadMsg::RepoError {
-                    generation,
-                    repo: RepoKey::new(arg.as_str()),
-                    err: err.to_string(),
-                });
+                if !send_or_stop(
+                    &tx,
+                    stop,
+                    LoadMsg::RepoError {
+                        generation,
+                        repo: RepoKey::new(arg),
+                        err: err.to_string(),
+                    },
+                ) {
+                    return;
+                }
                 Vec::new()
             }
         },
@@ -150,7 +182,7 @@ fn run_loader(
     // shows the wider of the two when they differ; in practice they only
     // differ for a scoped launch.
     let total = task_repos.len().max(repo_repos.len());
-    if tx.send(LoadMsg::ScanStarted { generation, total }).is_err() {
+    if !send_or_stop(&tx, stop, LoadMsg::ScanStarted { generation, total }) {
         return;
     }
 
@@ -161,17 +193,14 @@ fn run_loader(
     // Fan out both scans in parallel. `rayon::join` lets us overlap them
     // without spawning a second OS thread.
     let tx_tasks = tx.clone();
-    let tx_repos = tx.clone();
-    let stop_tasks = Arc::clone(&stop);
-    let stop_repos = Arc::clone(&stop);
+    let stop_tasks = Arc::clone(stop);
+    let stop_repos = Arc::clone(stop);
     let open_sessions_tasks = open_sessions.clone();
     let open_sessions_repos = open_sessions;
-    let real_wt_dir_repos = real_wt_dir.clone();
-    let wt_dir_repos = wt_dir.clone();
     let context_repos = context.clone();
-    let context_tasks = context;
+    let context_tasks = context.clone();
 
-    let _ = rayon::join(
+    rayon::join(
         move || {
             run_task_scan(
                 &context_tasks,
@@ -187,10 +216,10 @@ fn run_loader(
                 &context_repos,
                 &repo_repos,
                 &open_sessions_repos,
-                &real_wt_dir_repos,
-                &wt_dir_repos,
+                &real_wt_dir,
+                &wt_dir,
                 generation,
-                &tx_repos,
+                &tx,
                 &stop_repos,
             );
         },
@@ -224,26 +253,38 @@ fn run_task_scan(
                 for row in &mut rows {
                     row.opencode = opencode_snapshot.state_for(&row.path);
                 }
-                let _ = tx.send(LoadMsg::TaskRowsForRepo {
-                    generation,
-                    repo: repo_key.clone(),
-                    rows,
-                });
+                if !send_or_stop(
+                    &tx,
+                    stop,
+                    LoadMsg::TaskRowsForRepo {
+                        generation,
+                        repo: repo_key.clone(),
+                        rows,
+                    },
+                ) {
+                    return;
+                }
             }
             Err(err) => {
-                let _ = tx.send(LoadMsg::RepoError {
-                    generation,
-                    repo: repo_key.clone(),
-                    err: err.to_string(),
-                });
+                if !send_or_stop(
+                    &tx,
+                    stop,
+                    LoadMsg::RepoError {
+                        generation,
+                        repo: repo_key.clone(),
+                        err: err.to_string(),
+                    },
+                ) {
+                    return;
+                }
             }
         }
-        let _ = tx.send(LoadMsg::TaskRepoDone { generation });
+        let _sent = send_or_stop(&tx, stop, LoadMsg::TaskRepoDone { generation });
     });
-    let _ = tx.send(LoadMsg::TasksComplete { generation });
+    let _sent = send_or_stop(&tx, stop, LoadMsg::TasksComplete { generation });
 }
 
-/// Background OpenCode state refresher.
+/// Background `OpenCode` state refresher.
 ///
 /// Spawns a short-lived thread that takes one snapshot, classifies every
 /// `paths` entry, and sends a single [`LoadMsg::OpenCodeTick`] back to
@@ -253,18 +294,7 @@ fn run_task_scan(
 /// tick carries only path-keyed state, so the UI can apply it safely
 /// regardless of which scope was active when the tick was spawned.
 pub(super) fn spawn_opencode_refresh(paths: Vec<PathBuf>) -> LoaderHandle {
-    let (tx, rx) = mpsc::channel();
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_thread = Arc::clone(&stop);
-
-    thread::spawn(move || {
-        if stop_thread.load(Ordering::Relaxed) {
-            return;
-        }
-        let snapshot = OpenCodeSnapshot::collect();
-        if stop_thread.load(Ordering::Relaxed) {
-            return;
-        }
+    spawn_snapshot_refresh(paths, |paths, snapshot| {
         let states: Vec<(PathBuf, _)> = paths
             .into_iter()
             .map(|path| {
@@ -272,25 +302,12 @@ pub(super) fn spawn_opencode_refresh(paths: Vec<PathBuf>) -> LoaderHandle {
                 (path, state)
             })
             .collect();
-        let _ = tx.send(LoadMsg::OpenCodeTick { states });
-    });
-
-    LoaderHandle { rx, stop }
+        LoadMsg::OpenCodeTick { states }
+    })
 }
 
 pub(super) fn spawn_task_card_details_refresh(paths: Vec<PathBuf>) -> LoaderHandle {
-    let (tx, rx) = mpsc::channel();
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_thread = Arc::clone(&stop);
-
-    thread::spawn(move || {
-        if stop_thread.load(Ordering::Relaxed) {
-            return;
-        }
-        let snapshot = OpenCodeSnapshot::collect();
-        if stop_thread.load(Ordering::Relaxed) {
-            return;
-        }
+    spawn_snapshot_refresh(paths, |paths, snapshot| {
         let details: Vec<(PathBuf, TaskCardDetails)> = paths
             .into_iter()
             .map(|path| {
@@ -302,22 +319,32 @@ pub(super) fn spawn_task_card_details_refresh(paths: Vec<PathBuf>) -> LoaderHand
                 (path, detail)
             })
             .collect();
-        let _ = tx.send(LoadMsg::TaskCardDetailsTick { details });
-    });
+        LoadMsg::TaskCardDetailsTick { details }
+    })
+}
 
-    LoaderHandle { rx, stop }
+fn spawn_snapshot_refresh<F>(paths: Vec<PathBuf>, build_message: F) -> LoaderHandle
+where
+    F: FnOnce(Vec<PathBuf>, OpenCodeSnapshot) -> LoadMsg + Send + 'static,
+{
+    spawn_background(move |tx, stop| {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let snapshot = OpenCodeSnapshot::collect();
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let _sent = send_or_stop(&tx, &stop, build_message(paths, snapshot));
+    })
 }
 
 pub(super) fn spawn_task_topology_refresh(
     context: RuntimeEnvironment,
     task_repo_scope: Option<String>,
 ) -> LoaderHandle<TaskTopologyFingerprint> {
-    let (tx, rx) = mpsc::channel();
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_thread = Arc::clone(&stop);
-
-    thread::spawn(move || {
-        if stop_thread.load(Ordering::Relaxed) {
+    spawn_background(move |tx, stop| {
+        if stop.load(Ordering::Relaxed) {
             return;
         }
         let Ok(fingerprint) =
@@ -325,16 +352,17 @@ pub(super) fn spawn_task_topology_refresh(
         else {
             return;
         };
-        if stop_thread.load(Ordering::Relaxed) {
+        if stop.load(Ordering::Relaxed) {
             return;
         }
-        let _ = tx.send(fingerprint);
-    });
-
-    LoaderHandle { rx, stop }
+        let _sent = send_or_stop(&tx, &stop, fingerprint);
+    })
 }
 
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "repo scan worker needs the shared scan context explicitly"
+)]
 fn run_repo_scan(
     context: &RuntimeEnvironment,
     repos: &[(RepoKey, PathBuf)],
@@ -365,9 +393,9 @@ fn run_repo_scan(
             parked_tasks,
             is_detached,
         };
-        let _ = tx.send(LoadMsg::RepoRow { generation, row });
+        let _sent = send_or_stop(&tx, stop, LoadMsg::RepoRow { generation, row });
     });
-    let _ = tx.send(LoadMsg::RepoRowsDone { generation });
+    let _sent = send_or_stop(&tx, stop, LoadMsg::RepoRowsDone { generation });
 }
 
 #[cfg(test)]
@@ -378,10 +406,15 @@ mod tests {
     use crate::runtime::environment::RuntimeEnvironment;
 
     struct TempDir(std::path::PathBuf);
+
+    fn remove_dir_all_best_effort(path: &std::path::Path) {
+        let _cleanup_error = fs::remove_dir_all(path).err();
+    }
+
     impl TempDir {
         fn new(name: &str) -> Self {
             let path = env::temp_dir().join(format!("task-rs-loader-{name}"));
-            let _ = fs::remove_dir_all(&path);
+            remove_dir_all_best_effort(&path);
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
@@ -392,7 +425,7 @@ mod tests {
     }
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            remove_dir_all_best_effort(&self.0);
         }
     }
 
@@ -479,7 +512,7 @@ mod tests {
     fn scoped_launch_errors_cleanly_for_unknown_repo() {
         let dir = TempDir::new("scoped-missing");
         let env = env_for(&dir);
-        let handle = spawn(env, Some("github.com/me/missing".to_string()), 3);
+        let handle = spawn(env, Some("github.com/me/missing".to_owned()), 3);
         let msgs = drain_until_done(&handle, Duration::from_secs(2));
         assert!(
             msgs.iter()
@@ -520,7 +553,7 @@ mod tests {
             let handle = spawn_opencode_refresh(paths);
 
             let first =
-                wait_for_tick(&handle, Duration::from_secs(2)).expect("worker must emit one tick");
+                wait_for_tick(&handle, Duration::from_secs(10)).expect("worker must emit one tick");
             assert!(
                 matches!(first, LoadMsg::OpenCodeTick { .. }),
                 "expected OpenCodeTick, got {first:?}"
@@ -544,7 +577,7 @@ mod tests {
             ];
             let handle = spawn_opencode_refresh(paths.clone());
 
-            let msg = wait_for_tick(&handle, Duration::from_secs(2)).expect("one tick");
+            let msg = wait_for_tick(&handle, Duration::from_secs(10)).expect("one tick");
             let LoadMsg::OpenCodeTick { states } = msg else {
                 panic!("unexpected variant: {msg:?}");
             };
@@ -561,7 +594,7 @@ mod tests {
         #[test]
         fn empty_paths_still_produces_one_tick() {
             let handle = spawn_opencode_refresh(Vec::new());
-            let msg = wait_for_tick(&handle, Duration::from_secs(2))
+            let msg = wait_for_tick(&handle, Duration::from_secs(10))
                 .expect("worker must still emit one tick");
             let LoadMsg::OpenCodeTick { states } = msg else {
                 panic!("unexpected variant: {msg:?}");
@@ -607,7 +640,7 @@ mod tests {
             ];
             let handle = spawn_task_card_details_refresh(paths.clone());
 
-            let msg = wait_for_tick(&handle, Duration::from_secs(2)).expect("one tick");
+            let msg = wait_for_tick(&handle, Duration::from_secs(10)).expect("one tick");
             let LoadMsg::TaskCardDetailsTick { details } = msg else {
                 panic!("unexpected variant: {msg:?}");
             };

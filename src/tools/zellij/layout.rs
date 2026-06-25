@@ -58,9 +58,9 @@ pub(super) fn status_pane_size_percent(terminal_width: u16) -> u16 {
 /// What goes in the primary pane when a session is freshly created.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SessionStartup {
-    /// OpenCode is not on PATH — the primary pane just spawns a shell.
+    /// `OpenCode` is not on PATH — the primary pane just spawns a shell.
     ShellOnly,
-    /// OpenCode is available — the primary pane runs the resolved command.
+    /// `OpenCode` is available — the primary pane runs the resolved command.
     WithOpencode(CommandPlan),
 }
 
@@ -93,7 +93,7 @@ pub(super) struct LayoutInput<'a> {
 /// `zellij action switch-session --layout <file> <session>` from inside
 /// an existing Zellij session).
 ///
-/// ## VSCodium layout
+/// ## `VSCodium` layout
 /// ```text
 /// +---------+----------+
 /// |         | opencode |
@@ -117,10 +117,12 @@ pub(super) fn render_layout(input: &LayoutInput<'_>) -> String {
 
     let mut out = String::new();
     out.push_str("layout {\n");
-    out.push_str(&format!("    cwd {path_str}\n"));
-    out.push_str(&format!(
-        "    tab name={session_str} split_direction=\"vertical\" {{\n"
-    ));
+    out.push_str("    cwd ");
+    out.push_str(&path_str);
+    out.push('\n');
+    out.push_str("    tab name=");
+    out.push_str(&session_str);
+    out.push_str(" split_direction=\"vertical\" {\n");
 
     if let Some(task_binary) = input.task_binary {
         render_status_pane(&mut out, task_binary, input.terminal_width);
@@ -140,8 +142,12 @@ pub(super) fn render_layout(input: &LayoutInput<'_>) -> String {
 fn render_status_pane(out: &mut String, task_binary: &Path, terminal_width: Option<u16>) {
     let binary = kdl_string(&task_binary.to_string_lossy());
     let percent = terminal_width.map_or(STATUS_PANE_DEFAULT_PERCENT, status_pane_size_percent);
-    out.push_str(&format!("        pane size=\"{percent}%\" {{\n"));
-    out.push_str(&format!("            command {binary}\n"));
+    out.push_str("        pane size=\"");
+    out.push_str(&percent.to_string());
+    out.push_str("%\" {\n");
+    out.push_str("            command ");
+    out.push_str(&binary);
+    out.push('\n');
     out.push_str("            args \"ui\"\n");
     out.push_str("        }\n");
 }
@@ -156,7 +162,9 @@ fn render_primary_column(out: &mut String, startup: &SessionStartup) {
         SessionStartup::WithOpencode(plan) => {
             let program = kdl_string(plan.program());
             out.push_str("            pane focus=true {\n");
-            out.push_str(&format!("                command {program}\n"));
+            out.push_str("                command ");
+            out.push_str(&program);
+            out.push('\n');
             if !plan.args().is_empty() {
                 out.push_str("                args");
                 for arg in plan.args() {
@@ -175,7 +183,9 @@ fn render_primary_column(out: &mut String, startup: &SessionStartup) {
 fn render_helix_pane(out: &mut String) {
     let binary = kdl_string(ExternalTool::Helix.binary_name());
     out.push_str("        pane {\n");
-    out.push_str(&format!("            command {binary}\n"));
+    out.push_str("            command ");
+    out.push_str(&binary);
+    out.push('\n');
     out.push_str("            args \".\"\n");
     out.push_str("        }\n");
 }
@@ -185,7 +195,7 @@ fn render_helix_pane(out: &mut String) {
 /// already surrounded by double quotes, ready to drop into a KDL
 /// node argument position.
 fn kdl_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+    let mut out = String::with_capacity(s.len().saturating_add(2));
     out.push('"');
     for c in s.chars() {
         match c {
@@ -226,7 +236,7 @@ mod tests {
     fn opencode_startup_with_args() -> SessionStartup {
         SessionStartup::WithOpencode(CommandPlan::for_tool(
             ExternalTool::Opencode,
-            vec!["--session".to_string(), "ses_123".to_string()],
+            vec!["--session".to_owned(), "ses_123".to_owned()],
         ))
     }
 

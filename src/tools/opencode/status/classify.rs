@@ -1,4 +1,4 @@
-//! Classification of a single OpenCode session into an [`OpenCodeState`].
+//! Classification of a single `OpenCode` session into an [`OpenCodeState`].
 //!
 //! The entry point is [`classify_with_conn`]. It inspects the running
 //! tool parts first, then falls back to the latest message's role and
@@ -11,7 +11,7 @@ use strum::Display;
 
 use super::{activity::latest_session_activity, message::latest_message};
 
-/// Rolled-up state of every OpenCode session associated with a worktree
+/// Rolled-up state of every `OpenCode` session associated with a worktree
 /// directory. Variant names match the labels rendered in the TUI so
 /// that code, tests, and UI all read the same vocabulary.
 ///
@@ -160,7 +160,7 @@ struct RunningToolPart {
     /// conservative elapsed-time rule.
     tool: String,
     /// `state.metadata.sessionId`. Present for `task` parts once the
-    /// subagent has been spawned and OpenCode has recorded the child
+    /// subagent has been spawned and `OpenCode` has recorded the child
     /// session id on the part. Absent for non-subagent tools and for
     /// the narrow window before the child id is written.
     child_session_id: Option<String>,
@@ -171,9 +171,9 @@ struct RunningToolPart {
 ///
 /// Filters and orders entirely in SQL via `json_extract` so a session
 /// with many recently-completed tools cannot hide an older still-running
-/// tool. OpenCode runs tool calls in parallel, so a long-stuck `bash`
+/// tool. `OpenCode` runs tool calls in parallel, so a long-stuck `bash`
 /// invocation can easily coexist with many freshly-completed tools in
-/// the same session — a "top N by time_updated" shortcut would let the
+/// the same session — a "top N by `time_updated`" shortcut would let the
 /// stuck tool fall out of the window entirely and mis-classify the
 /// session as `Idle`.
 fn running_tool_parts(conn: &Connection, session_id: &str) -> Vec<RunningToolPart> {
@@ -236,18 +236,24 @@ fn classify_running_parts(
 /// no messages or parts at all. Both cases are transient windows
 /// where the parent's `state.time.start` is the best signal we have.
 fn classify_running_part(conn: &Connection, part: &RunningToolPart, now_ms: i64) -> OpenCodeState {
-    if part.tool == "task"
-        && let Some(child) = part.child_session_id.as_deref()
-        && let Some(last_activity) = latest_session_activity(conn, child)
-    {
-        return if now_ms.saturating_sub(last_activity) > STUCK_THRESHOLD_MS {
-            OpenCodeState::Hung
-        } else {
-            OpenCodeState::Busy
-        };
+    if let Some(last_activity) = latest_subagent_activity(conn, part) {
+        return state_from_last_activity(now_ms, last_activity);
     }
 
-    if now_ms.saturating_sub(part.start_ms) > STUCK_THRESHOLD_MS {
+    state_from_last_activity(now_ms, part.start_ms)
+}
+
+fn latest_subagent_activity(conn: &Connection, part: &RunningToolPart) -> Option<i64> {
+    if part.tool != "task" {
+        return None;
+    }
+
+    let child = part.child_session_id.as_deref()?;
+    latest_session_activity(conn, child)
+}
+
+const fn state_from_last_activity(now_ms: i64, last_activity_ms: i64) -> OpenCodeState {
+    if now_ms.saturating_sub(last_activity_ms) > STUCK_THRESHOLD_MS {
         OpenCodeState::Hung
     } else {
         OpenCodeState::Busy
@@ -314,6 +320,7 @@ mod tests {
         /// The generic `insert_tool_part` helper hardcodes
         /// `tool: "bash"` which is fine for elapsed-time tests but
         /// not for subagent metadata tests.
+        #[derive(Clone, Copy)]
         struct CustomToolPart<'a> {
             id: &'a str,
             session_id: &'a str,
@@ -360,7 +367,7 @@ mod tests {
 
             assert!(super::super::running_tool_parts(&conn, "s1").is_empty());
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -375,7 +382,7 @@ mod tests {
             assert_eq!(parts[0].tool, "bash");
             assert!(parts[0].child_session_id.is_none());
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// A `task` tool part carries `state.metadata.sessionId`
@@ -404,7 +411,7 @@ mod tests {
             assert_eq!(parts[0].tool, "task");
             assert_eq!(parts[0].child_session_id.as_deref(), Some("ses_child_01"));
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// `metadata.sessionId` can be missing briefly before the
@@ -432,7 +439,7 @@ mod tests {
             assert_eq!(parts[0].tool, "task");
             assert!(parts[0].child_session_id.is_none());
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Regression for the "many recent completed tools hide an
@@ -458,7 +465,7 @@ mod tests {
             assert_eq!(parts.len(), 1);
             assert_eq!(parts[0].start_ms, 5);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -474,7 +481,7 @@ mod tests {
             let starts: Vec<i64> = parts.iter().map(|p| p.start_ms).collect();
             assert_eq!(starts, vec![100, 200, 300]);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -505,7 +512,7 @@ mod tests {
 
             assert!(super::super::running_tool_parts(&conn, "s1").is_empty());
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -522,7 +529,7 @@ mod tests {
             assert_eq!(s2.len(), 1);
             assert_eq!(s2[0].start_ms, 7);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
     mod classify_running_parts {
@@ -531,8 +538,8 @@ mod tests {
         fn part(tool: &str, start_ms: i64, child: Option<&str>) -> RunningToolPart {
             RunningToolPart {
                 start_ms,
-                tool: tool.to_string(),
-                child_session_id: child.map(str::to_string),
+                tool: tool.to_owned(),
+                child_session_id: child.map(str::to_owned),
             }
         }
 
@@ -608,8 +615,8 @@ mod tests {
         fn task_part(start_ms: i64, child: Option<&str>) -> RunningToolPart {
             RunningToolPart {
                 start_ms,
-                tool: "task".to_string(),
-                child_session_id: child.map(str::to_string),
+                tool: "task".to_owned(),
+                child_session_id: child.map(str::to_owned),
             }
         }
 
@@ -636,7 +643,7 @@ mod tests {
                 OpenCodeState::Busy,
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Child has been silent longer than the threshold → `Hung`,
@@ -661,7 +668,7 @@ mod tests {
                 OpenCodeState::Hung,
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Task part without `metadata.sessionId` falls back to the
@@ -678,7 +685,7 @@ mod tests {
                 OpenCodeState::Busy,
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -692,7 +699,7 @@ mod tests {
                 OpenCodeState::Hung,
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Child session id is present but no such session / rows
@@ -710,13 +717,13 @@ mod tests {
                 OpenCodeState::Busy,
             );
 
-            let part = task_part(0, Some("ses_nonexistent"));
+            let old_part = task_part(0, Some("ses_nonexistent"));
             assert_eq!(
-                classify_running_part(&conn, &part, 1_000_000),
+                classify_running_part(&conn, &old_part, 1_000_000),
                 OpenCodeState::Hung,
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Covers the "child is idle but parent never reacted" failure
@@ -746,7 +753,7 @@ mod tests {
                 OpenCodeState::Hung,
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Symmetric case: child just wrapped up; parent is in its
@@ -773,7 +780,7 @@ mod tests {
                 OpenCodeState::Busy,
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         /// Non-task tool never consults the child session id even if
@@ -794,8 +801,8 @@ mod tests {
 
             let part = RunningToolPart {
                 start_ms: 999_000,
-                tool: "bash".to_string(),
-                child_session_id: Some("ses_child".to_string()),
+                tool: "bash".to_owned(),
+                child_session_id: Some("ses_child".to_owned()),
             };
             // Would classify Hung if the child were consulted; Busy
             // is correct because we must not consult it.
@@ -804,7 +811,7 @@ mod tests {
                 OpenCodeState::Busy,
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
     mod classify_with_conn_branches {
@@ -827,7 +834,7 @@ mod tests {
             // and there's no visible error, so the caller sees `Idle`.
             assert_eq!(classify_with_conn(&conn, "s1", 10_000), OpenCodeState::Idle);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -846,7 +853,7 @@ mod tests {
 
             assert_eq!(classify_with_conn(&conn, "s1", 10_000), OpenCodeState::Busy);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -868,7 +875,7 @@ mod tests {
                 OpenCodeState::Hung
             );
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -891,7 +898,7 @@ mod tests {
 
             assert_eq!(classify_with_conn(&conn, "s1", 10_000), OpenCodeState::Idle);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 }

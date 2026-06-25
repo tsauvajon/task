@@ -71,7 +71,8 @@ pub(super) fn render_status_bar(frame: &mut Frame, area: Rect, state: &UiState, 
     let msg = &state.message;
     if !msg.is_empty() {
         let left_len: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-        let pad = (area.width as usize).saturating_sub(left_len + msg.len() + 1);
+        let pad = usize::from(area.width)
+            .saturating_sub(left_len.saturating_add(msg.len()).saturating_add(1));
         if pad > 0 {
             spans.push(Span::raw(" ".repeat(pad)));
         }
@@ -92,10 +93,10 @@ fn loading_label(state: &UiState) -> Option<String> {
     let LoadPhase::Loading { done, total } = phase else {
         return None;
     };
-    let frame = SPINNER_FRAMES
-        .get((state.spinner_frame as usize) % SPINNER_FRAMES.len())
-        .copied()
-        .unwrap_or('⠋');
+    let frame_index = usize::from(state.spinner_frame)
+        .checked_rem(SPINNER_FRAMES.len())
+        .unwrap_or(0);
+    let frame = SPINNER_FRAMES.get(frame_index).copied().unwrap_or('⠋');
     let label = match state.view {
         ViewMode::Tasks => "Loading tasks",
         ViewMode::Repos => "Loading repos",

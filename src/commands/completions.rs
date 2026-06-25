@@ -6,7 +6,7 @@ use crate::{
 };
 
 /// Returns the shell completion script for the given shell.
-pub(crate) fn script_for(shell: CompletionShell) -> &'static str {
+pub(crate) const fn script_for(shell: CompletionShell) -> &'static str {
     match shell {
         CompletionShell::Bash => {
             r#"_task_complete() {
@@ -17,11 +17,11 @@ pub(crate) fn script_for(shell: CompletionShell) -> &'static str {
 complete -o nosort -F _task_complete task"#
         }
         CompletionShell::Fish => {
-            r#"function __task_complete
+            "function __task_complete
     task __complete -- (commandline -opc | string split ' ' | tail -n +2) 2>/dev/null
 end
 
-complete -c task -f -a '(__task_complete)'"#
+complete -c task -f -a '(__task_complete)'"
         }
         CompletionShell::Zsh => {
             r#"#compdef task

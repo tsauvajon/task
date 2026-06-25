@@ -1,7 +1,7 @@
 use super::{
     loader::{self, LoaderHandle},
     state::{UiAction, UiState},
-    tasks::{clone_from_input, finish_selected, park_selected, resolve_create_repo},
+    tasks::{FinishMode, clone_from_input, finish_selected, park_selected, resolve_create_repo},
 };
 use crate::{
     commands::detach as detach_cmd, error::Result, runtime::environment::RuntimeEnvironment,
@@ -19,7 +19,7 @@ pub(super) fn refresh_all(
     let new_handle = loader::spawn(context.clone(), state.task_repo_scope.clone(), generation);
     // Dropping the old handle sets its stop flag; workers exit between
     // repos without blocking this call.
-    let _ = std::mem::replace(loader, new_handle);
+    drop(std::mem::replace(loader, new_handle));
 }
 
 pub(super) fn refresh_session_state(
@@ -38,8 +38,9 @@ pub(super) fn finish_and_refresh(
     context: &RuntimeEnvironment,
     state: &mut UiState,
     loader: &mut LoaderHandle,
+    mode: FinishMode,
 ) -> Result<()> {
-    finish_selected(context, state)?;
+    finish_selected(context, state, mode)?;
     refresh_all(context, state, loader);
     Ok(())
 }
@@ -63,7 +64,7 @@ pub(super) fn create_action(context: &RuntimeEnvironment, state: &UiState) -> Re
     let repo = resolve_create_repo(context, state, state.task_repo_scope.as_deref())?;
     Ok(UiAction::Create {
         repo,
-        branch: branch.to_string(),
+        branch: branch.to_owned(),
     })
 }
 
@@ -87,7 +88,7 @@ pub(super) fn toggle_detach_and_refresh(
     loader: &mut LoaderHandle,
 ) -> Result<String> {
     let Some(row) = state.selected_repo_row().cloned() else {
-        return Ok("No repo selected".to_string());
+        return Ok("No repo selected".to_owned());
     };
 
     let repo_key_str = row.repo.to_string();
@@ -135,7 +136,7 @@ mod tests {
         fn empty_branch_returns_error() {
             let ctx = test_env();
             let mut state = empty_state();
-            state.create_branch = "".to_string();
+            state.create_branch = String::new();
             let err = create_action(&ctx, &state).expect_err("expected error for empty branch");
             assert!(
                 err.to_string().contains("empty") || err.to_string().contains("cannot"),
@@ -147,7 +148,7 @@ mod tests {
         fn whitespace_only_branch_returns_error() {
             let ctx = test_env();
             let mut state = empty_state();
-            state.create_branch = "   ".to_string();
+            state.create_branch = "   ".to_owned();
             let err =
                 create_action(&ctx, &state).expect_err("expected error for whitespace-only branch");
             assert!(
@@ -170,12 +171,12 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/acme/app"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: "main".to_owned(),
                 path: PathBuf::from("/tmp/a"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             };
             let mut state = UiState::new(vec![row], vec![], None);
-            state.create_branch = "my-new-feature".to_string();
+            state.create_branch = "my-new-feature".to_owned();
 
             let action = create_action(&ctx, &state).expect("create_action should succeed");
             match action {
@@ -183,7 +184,7 @@ mod tests {
                     assert_eq!(repo, "github.com/acme/app");
                     assert_eq!(branch, "my-new-feature");
                 }
-                other => panic!("expected Create action, got {:?}", other),
+                other => panic!("expected Create action, got {other:?}"),
             }
         }
 
@@ -201,19 +202,19 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/acme/app"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: "main".to_owned(),
                 path: PathBuf::from("/tmp/a"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             };
             let mut state = UiState::new(vec![row], vec![], None);
-            state.create_branch = "  trimmed-branch  ".to_string();
+            state.create_branch = "  trimmed-branch  ".to_owned();
 
             let action = create_action(&ctx, &state).expect("create_action should succeed");
             match action {
                 UiAction::Create { branch, .. } => {
                     assert_eq!(branch, "trimmed-branch");
                 }
-                other => panic!("expected Create action, got {:?}", other),
+                other => panic!("expected Create action, got {other:?}"),
             }
         }
     }

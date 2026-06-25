@@ -17,7 +17,8 @@ pub(super) fn scrollbar_geometry(
     if track_len == 0 || item_count == 0 {
         return (0, 0);
     }
-    let thumb_len = (visible_rows * track_len)
+    let thumb_len = visible_rows
+        .saturating_mul(track_len)
         .div_ceil(item_count)
         .max(1)
         .min(track_len);
@@ -25,7 +26,10 @@ pub(super) fn scrollbar_geometry(
     let thumb_start = if item_count <= 1 {
         0
     } else {
-        selected * max_offset / (item_count - 1)
+        selected
+            .saturating_mul(max_offset)
+            .checked_div(item_count.saturating_sub(1))
+            .unwrap_or(0)
     };
     (thumb_start, thumb_len)
 }
@@ -39,22 +43,28 @@ pub(super) fn render_scrollbar(
     visible_rows: usize,
     theme: &Theme,
 ) {
-    let track_len = sb_area.height as usize;
+    let track_len = usize::from(sb_area.height);
     let (thumb_start, thumb_len) =
         scrollbar_geometry(selected, item_count, visible_rows, track_len);
-    if thumb_len == 0 {
+    if thumb_len == 0 || sb_area.width == 0 {
         return;
     }
-    let col = sb_area.x + sb_area.width - 1;
+    let col = sb_area.x.saturating_add(sb_area.width.saturating_sub(1));
     let buf = frame.buffer_mut();
-    for row in 0..track_len {
-        let in_thumb = row >= thumb_start && row < thumb_start + thumb_len;
+    for row_offset in 0..sb_area.height {
+        let row = usize::from(row_offset);
+        let in_thumb = row >= thumb_start && row < thumb_start.saturating_add(thumb_len);
         let (sym, color) = if in_thumb {
             ("┃", theme.scrollbar_thumb)
         } else {
             ("│", theme.scrollbar_track)
         };
-        buf.set_string(col, sb_area.y + row as u16, sym, Style::default().fg(color));
+        buf.set_string(
+            col,
+            sb_area.y.saturating_add(row_offset),
+            sym,
+            Style::default().fg(color),
+        );
     }
 }
 

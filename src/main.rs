@@ -8,7 +8,9 @@ fn main() -> ExitCode {
     match commands::run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("error: {err}");
+            if task::runtime::process::write_stderr_line(format_args!("error: {err}")).is_err() {
+                return ExitCode::FAILURE;
+            }
             ExitCode::FAILURE
         }
     }

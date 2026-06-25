@@ -21,6 +21,7 @@ use crate::{
 };
 
 const CARD_HEIGHT: usize = 4;
+const CARD_HEIGHT_U16: u16 = 4;
 
 pub(in crate::ui::render) fn render_tasks(
     frame: &mut Frame,
@@ -66,13 +67,17 @@ pub(in crate::ui::render) fn render_tasks(
 
     let visible_cards = visible_cards(area.height);
     state.set_visible_rows(visible_cards.max(1));
+    state.register_task_mouse_hit_targets(area, list_state.offset());
 
     if visible_cards > 0 && row_count > visible_cards {
+        let scrollbar_height = u16::try_from(visible_cards)
+            .unwrap_or(u16::MAX)
+            .saturating_mul(CARD_HEIGHT_U16);
         let sb_area = Rect {
-            x: area.x + area.width.saturating_sub(1),
+            x: area.x.saturating_add(area.width.saturating_sub(1)),
             y: area.y,
             width: 1,
-            height: (visible_cards as u16) * (CARD_HEIGHT as u16),
+            height: scrollbar_height,
         };
         render_scrollbar(
             frame,
@@ -122,7 +127,7 @@ fn task_card(
     let title = details
         .session_title
         .clone()
-        .unwrap_or_else(|| "No session title".to_string());
+        .unwrap_or_else(|| "No session title".to_owned());
     let branch_line = branch_line(BranchLineArgs {
         side_style,
         icon: agent_icon(row.opencode),
@@ -193,7 +198,9 @@ fn branch_line(args: BranchLineArgs<'_>) -> Vec<Span<'static>> {
     let inner_width = usize::from(args.width).saturating_sub(2);
     let left_width = spans_width(&spans);
     let label_width = label.chars().count();
-    let gap = inner_width.saturating_sub(left_width + label_width).max(1);
+    let gap = inner_width
+        .saturating_sub(left_width.saturating_add(label_width))
+        .max(1);
     spans.push(Span::raw(" ".repeat(gap)));
     spans.push(Span::styled(label, args.theme.muted_style()));
     spans
@@ -225,7 +232,9 @@ fn repo_line(args: RepoLineArgs<'_>) -> Vec<Span<'static>> {
     let inner_width = usize::from(args.width).saturating_sub(2);
     let left_width = spans_width(&spans);
     let diff_width = spans_width(&diff);
-    let gap = inner_width.saturating_sub(left_width + diff_width).max(1);
+    let gap = inner_width
+        .saturating_sub(left_width.saturating_add(diff_width))
+        .max(1);
     spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(diff);
     spans
@@ -309,7 +318,7 @@ fn visible_cards(height: u16) -> usize {
 
 fn display_branch(row: &TaskRow, width: u16) -> String {
     if width < 44 {
-        short_last_segment(row.branch.as_str()).to_string()
+        short_last_segment(row.branch.as_str()).to_owned()
     } else {
         row.branch.to_string()
     }
@@ -318,12 +327,12 @@ fn display_branch(row: &TaskRow, width: u16) -> String {
 fn display_repo(row: &TaskRow, scoped: bool, width: u16) -> String {
     if scoped {
         if width < 44 {
-            return short_last_segment(&row.path.to_string_lossy()).to_string();
+            return short_last_segment(&row.path.to_string_lossy()).to_owned();
         }
         return row.path.display().to_string();
     }
     if width < 64 {
-        short_last_segment(row.repo.as_str()).to_string()
+        short_last_segment(row.repo.as_str()).to_owned()
     } else {
         row.repo.to_string()
     }
@@ -334,7 +343,7 @@ fn is_inactive(row: &TaskRow) -> bool {
         && matches!(row.opencode, OpenCodeState::None | OpenCodeState::Gone)
 }
 
-fn agent_icon(state: OpenCodeState) -> &'static str {
+const fn agent_icon(state: OpenCodeState) -> &'static str {
     match state {
         OpenCodeState::None => "○",
         OpenCodeState::Gone => "◌",
@@ -344,7 +353,7 @@ fn agent_icon(state: OpenCodeState) -> &'static str {
     }
 }
 
-fn agent_color(state: OpenCodeState, theme: &Theme) -> ratatui::style::Color {
+const fn agent_color(state: OpenCodeState, theme: &Theme) -> ratatui::style::Color {
     match state {
         OpenCodeState::None | OpenCodeState::Gone => theme.muted,
         OpenCodeState::Idle => theme.warning,
@@ -371,7 +380,7 @@ mod tests {
         },
         tools::{git::worktrees::WorktreeDiff, opencode::status::OpenCodeState},
         ui::{
-            state::{TaskCardDetails, UiState},
+            state::{MouseHit, TaskCardDetails, UiState},
             theme::Theme,
         },
     };
@@ -381,7 +390,7 @@ mod tests {
             status,
             repo: RepoKey::new(repo),
             branch: BranchName::new(branch),
-            worktree_name: branch.to_string(),
+            worktree_name: branch.to_owned(),
             path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
             opencode,
         }
@@ -404,9 +413,47 @@ mod tests {
                 for x in 0..width {
                     line.push_str(buffer[(x, y)].symbol());
                 }
-                line.trim_end().to_string()
+                line.trim_end().to_owned()
             })
             .collect()
+    }
+
+    #[test]
+    fn task_hit_targets_follow_rendered_scroll_offset() {
+        let rows = vec![
+            task_row(
+                "github.com/acme/app",
+                "one",
+                TaskStatus::Open,
+                OpenCodeState::Idle,
+            ),
+            task_row(
+                "github.com/acme/app",
+                "two",
+                TaskStatus::Open,
+                OpenCodeState::Idle,
+            ),
+            task_row(
+                "github.com/acme/app",
+                "three",
+                TaskStatus::Open,
+                OpenCodeState::Idle,
+            ),
+        ];
+        let mut state = UiState::new(rows, vec![], None);
+        state.task_selected = 2;
+
+        let _lines = render_to_lines(&mut state, 50, 8);
+
+        assert_eq!(
+            state.mouse_hit(1, 0),
+            Some(MouseHit::Task { filtered_index: 1 })
+        );
+        assert_eq!(
+            state.mouse_hit(1, 4),
+            Some(MouseHit::Task { filtered_index: 2 })
+        );
+        assert_eq!(state.mouse_hit(1, 8), None);
     }
 
     #[test]
@@ -544,7 +591,7 @@ mod tests {
                     deleted_lines: 23,
                     changed_files: 3,
                 },
-                session_title: Some("Improve compact TUI".to_string()),
+                session_title: Some(String::from("Improve compact TUI")),
                 last_activity_ms: None,
             },
         )]);
@@ -681,7 +728,7 @@ mod tests {
         let mut state = UiState::new(
             vec![row],
             vec![],
-            Some("github.com/thomas.sauvajon/goto".to_string()),
+            Some(String::from("github.com/thomas.sauvajon/goto")),
         );
 
         let lines = render_to_lines(&mut state, 35, 8);

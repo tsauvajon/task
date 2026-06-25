@@ -10,6 +10,8 @@ pub(super) enum UiIntent {
     MovePrev,
     PageDown,
     PageUp,
+    HalfPageDown,
+    HalfPageUp,
     MoveFirst,
     MoveLast,
     ToggleHelp,
@@ -23,10 +25,14 @@ pub(super) enum UiIntent {
     ToggleDetach,
     ToggleSidebar,
     ClearScope,
+    ClickTaskRow(usize),
+    ClickRepoRow(usize),
     FilterCancel,
     FilterApply,
     FilterBackspace,
     FilterClear,
+    InputStart,
+    InputEnd,
     FilterAppend(char),
     CreateCancel,
     CreateSubmit,
@@ -38,6 +44,7 @@ pub(super) enum UiIntent {
     CloneBackspace,
     CloneClear,
     CloneAppend(char),
+    UnboundKey,
     Noop,
 }
 
@@ -57,8 +64,12 @@ pub(super) fn from_key(mode: InputMode, key: KeyEvent) -> UiIntent {
     }
 }
 
-fn from_key_normal(key: KeyEvent) -> UiIntent {
+const fn from_key_normal(key: KeyEvent) -> UiIntent {
     match key.code {
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            UiIntent::HalfPageDown
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::HalfPageUp,
         KeyCode::Char('q') => UiIntent::Quit,
         KeyCode::Tab => UiIntent::SwitchView,
         KeyCode::Down | KeyCode::Char('j') => UiIntent::MoveNext,
@@ -94,16 +105,18 @@ fn from_key_normal(key: KeyEvent) -> UiIntent {
         | KeyCode::Menu
         | KeyCode::KeypadBegin
         | KeyCode::Media(_)
-        | KeyCode::Modifier(_) => UiIntent::Noop,
+        | KeyCode::Modifier(_) => UiIntent::UnboundKey,
     }
 }
 
-fn from_key_filter(key: KeyEvent) -> UiIntent {
+const fn from_key_filter(key: KeyEvent) -> UiIntent {
     match key.code {
         KeyCode::Tab => UiIntent::SwitchView,
         KeyCode::Esc => UiIntent::FilterCancel,
         KeyCode::Enter => UiIntent::FilterApply,
         KeyCode::Backspace => UiIntent::FilterBackspace,
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputStart,
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputEnd,
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::FilterClear
         }
@@ -132,15 +145,17 @@ fn from_key_filter(key: KeyEvent) -> UiIntent {
         | KeyCode::Menu
         | KeyCode::KeypadBegin
         | KeyCode::Media(_)
-        | KeyCode::Modifier(_) => UiIntent::Noop,
+        | KeyCode::Modifier(_) => UiIntent::UnboundKey,
     }
 }
 
-fn from_key_create(key: KeyEvent) -> UiIntent {
+const fn from_key_create(key: KeyEvent) -> UiIntent {
     match key.code {
         KeyCode::Esc => UiIntent::CreateCancel,
         KeyCode::Enter => UiIntent::CreateSubmit,
         KeyCode::Backspace => UiIntent::CreateBackspace,
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputStart,
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputEnd,
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CreateClear
         }
@@ -170,15 +185,17 @@ fn from_key_create(key: KeyEvent) -> UiIntent {
         | KeyCode::Menu
         | KeyCode::KeypadBegin
         | KeyCode::Media(_)
-        | KeyCode::Modifier(_) => UiIntent::Noop,
+        | KeyCode::Modifier(_) => UiIntent::UnboundKey,
     }
 }
 
-fn from_key_clone(key: KeyEvent) -> UiIntent {
+const fn from_key_clone(key: KeyEvent) -> UiIntent {
     match key.code {
         KeyCode::Esc => UiIntent::CloneCancel,
         KeyCode::Enter => UiIntent::CloneSubmit,
         KeyCode::Backspace => UiIntent::CloneBackspace,
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputStart,
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputEnd,
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::CloneClear,
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CloneAppend(ch)
@@ -206,7 +223,7 @@ fn from_key_clone(key: KeyEvent) -> UiIntent {
         | KeyCode::Menu
         | KeyCode::KeypadBegin
         | KeyCode::Media(_)
-        | KeyCode::Modifier(_) => UiIntent::Noop,
+        | KeyCode::Modifier(_) => UiIntent::UnboundKey,
     }
 }
 
@@ -335,6 +352,23 @@ mod tests {
         }
 
         #[test]
+        fn ctrl_u_and_ctrl_d_map_to_half_page_navigation() {
+            let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+            let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::Normal, ctrl_u), UiIntent::HalfPageUp);
+            assert_eq!(from_key(InputMode::Normal, ctrl_d), UiIntent::HalfPageDown);
+        }
+
+        #[test]
+        fn unhandled_ctrl_letter_keeps_existing_plain_key_behavior() {
+            let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+            assert_eq!(
+                from_key(InputMode::Normal, ctrl_t),
+                UiIntent::EnterCreateTaskMode
+            );
+        }
+
+        #[test]
         fn esc_maps_to_clear_scope() {
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Esc)),
@@ -346,7 +380,7 @@ mod tests {
         fn question_mark_is_noop_after_ctrl_p_migration() {
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::Char('?'))),
-                UiIntent::Noop
+                UiIntent::UnboundKey
             );
         }
 
@@ -354,7 +388,7 @@ mod tests {
         fn unrecognised_key_maps_to_noop() {
             assert_eq!(
                 from_key(InputMode::Normal, key(KeyCode::F(1))),
-                UiIntent::Noop
+                UiIntent::UnboundKey
             );
         }
     }
@@ -397,10 +431,18 @@ mod tests {
         }
 
         #[test]
+        fn ctrl_a_and_ctrl_e_move_filter_cursor() {
+            let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+            let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::Filter, ctrl_a), UiIntent::InputStart);
+            assert_eq!(from_key(InputMode::Filter, ctrl_e), UiIntent::InputEnd);
+        }
+
+        #[test]
         fn unrecognised_key_maps_to_noop() {
             assert_eq!(
                 from_key(InputMode::Filter, key(KeyCode::F(1))),
-                UiIntent::Noop
+                UiIntent::UnboundKey
             );
         }
     }
@@ -442,9 +484,14 @@ mod tests {
         }
 
         #[test]
-        fn ctrl_char_maps_to_noop_not_append() {
+        fn ctrl_a_and_ctrl_e_move_create_cursor() {
             let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
-            assert_eq!(from_key(InputMode::CreateTask, ctrl_a), UiIntent::Noop);
+            let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+            assert_eq!(
+                from_key(InputMode::CreateTask, ctrl_a),
+                UiIntent::InputStart
+            );
+            assert_eq!(from_key(InputMode::CreateTask, ctrl_e), UiIntent::InputEnd);
         }
     }
 
@@ -482,10 +529,18 @@ mod tests {
         }
 
         #[test]
+        fn ctrl_a_and_ctrl_e_move_clone_cursor() {
+            let ctrl_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+            let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::CloneRepo, ctrl_a), UiIntent::InputStart);
+            assert_eq!(from_key(InputMode::CloneRepo, ctrl_e), UiIntent::InputEnd);
+        }
+
+        #[test]
         fn unrecognised_key_maps_to_noop() {
             assert_eq!(
                 from_key(InputMode::CloneRepo, key(KeyCode::F(5))),
-                UiIntent::Noop
+                UiIntent::UnboundKey
             );
         }
     }

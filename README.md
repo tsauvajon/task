@@ -1,6 +1,6 @@
 # task
 
-`task` is a CLI for daily git-worktree workflow: start a task, switch tasks fast, run checks, and clean up finished worktrees.
+`task` is a CLI for daily git-worktree workflow: start a task, switch tasks fast, and clean up finished worktrees.
 
 ## Quick start
 
@@ -16,13 +16,13 @@ task                Open interactive TUI
 
 task repo clone     Clone a bare repo into repos dir
 task start <name>   Create/open a task worktree
-task check          Run project checks for current task
 task coverage       Run Rust test coverage (cargo-llvm-cov)
 
 task park           Park current task
 task list           Show open and parked tasks
 task open <name>    Re-open a parked task
-task finish <name>  Remove a finished task worktree
+task finish <query> [<query> ...]
+                    Remove finished task worktrees
 ```
 
 ## Editor

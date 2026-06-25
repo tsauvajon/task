@@ -4,6 +4,7 @@ use std::{
 };
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use ratatui::prelude::Position;
 
 use self::{
     effects::{
@@ -13,11 +14,14 @@ use self::{
     intent::{UiIntent, from_key},
     loader::LoaderHandle,
     render::render,
-    state::{InputMode, UiAction, UiState, ViewMode},
-    tasks::{TaskTopologyFingerprint, initial_repo_scope},
+    state::{InputMode, MouseHit, UiAction, UiState, ViewMode},
+    tasks::{FinishMode, TaskTopologyFingerprint, initial_repo_scope},
     terminal::TerminalGuard,
 };
-use crate::{error::Result, runtime::environment::RuntimeEnvironment};
+use crate::{
+    error::{Error, Result},
+    runtime::environment::RuntimeEnvironment,
+};
 
 mod effects;
 mod intent;
@@ -33,7 +37,7 @@ mod theme;
 /// messages are drained from the channel.
 const TICK: Duration = Duration::from_millis(100);
 
-/// Cadence of the background OpenCode-state refresher. Short enough to
+/// Cadence of the background `OpenCode`-state refresher. Short enough to
 /// feel live while the user reads the Tasks view.
 const OPENCODE_REFRESH_INTERVAL: Duration = Duration::from_millis(600);
 
@@ -157,68 +161,143 @@ fn run_event_loop(
         state.append_activity_lines(crate::runtime::process::take_captured_logs());
         terminal.draw(|frame| render(frame, &mut *state))?;
 
-        // Tick-based polling lets us animate the spinner and consume
-        // loader messages even when the user is idle.
-        if !event::poll(TICK)? {
-            // Advance the spinner only when a load is still in progress;
-            // keeps the UI quiet once everything is loaded.
-            if state.task_load.is_loading() || state.repo_load.is_loading() {
-                state.spinner_frame = state.spinner_frame.wrapping_add(1);
-            }
+        let Some(event) = next_terminal_event(state)? else {
             continue;
-        }
-
-        let event = event::read()?;
-
-        // While the commands overlay is open, only allow closing it or quitting.
-        if state.show_help {
-            match event {
-                Event::Key(key) => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('c')
-                    {
-                        return Ok(UiAction::Quit);
-                    }
-                    if (key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('p'))
-                        || key.code == KeyCode::Esc
-                    {
-                        state.show_help = false;
-                    }
-                }
-                Event::Mouse(mouse) => {
-                    if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-                        let outside = state
-                            .help_area
-                            .is_none_or(|a| !a.contains((mouse.column, mouse.row).into()));
-                        if outside {
-                            state.show_help = false;
-                        }
-                    }
-                }
-                Event::FocusGained | Event::FocusLost | Event::Paste(_) | Event::Resize(..) => {}
-            }
-            continue;
-        }
-
-        let intent = match event {
-            Event::Key(key) => from_key(state.mode, key),
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollDown => UiIntent::MoveNext,
-                MouseEventKind::ScrollUp => UiIntent::MovePrev,
-                MouseEventKind::Down(_)
-                | MouseEventKind::Up(_)
-                | MouseEventKind::Drag(_)
-                | MouseEventKind::Moved
-                | MouseEventKind::ScrollLeft
-                | MouseEventKind::ScrollRight => UiIntent::Noop,
-            },
-            Event::FocusGained | Event::FocusLost | Event::Paste(_) | Event::Resize(..) => {
-                UiIntent::Noop
-            }
         };
-        if let Some(action) = apply_intent(context, state, &mut loader, intent)? {
+
+        let (intent, source) = match event_action(state, &event) {
+            EventAction::Intent(intent, source) => (intent, source),
+            EventAction::Action(action) => return Ok(action),
+            EventAction::Continue => continue,
+        };
+        if let Some(action) = apply_intent_with_source(context, state, &mut loader, intent, source)
+        {
             return Ok(action);
+        }
+    }
+}
+
+enum EventAction {
+    Intent(UiIntent, IntentSource),
+    Action(UiAction),
+    Continue,
+}
+
+fn next_terminal_event(state: &mut UiState) -> Result<Option<Event>> {
+    if event::poll(TICK)? {
+        return Ok(Some(event::read()?));
+    }
+
+    advance_spinner_if_loading(state);
+    Ok(None)
+}
+
+const fn advance_spinner_if_loading(state: &mut UiState) {
+    if state.task_load.is_loading() || state.repo_load.is_loading() {
+        state.spinner_frame = state.spinner_frame.wrapping_add(1);
+    }
+}
+
+fn event_action(state: &mut UiState, event: &Event) -> EventAction {
+    if state.show_help {
+        return handle_help_event(state, event).map_or(EventAction::Continue, EventAction::Action);
+    }
+
+    let (intent, source) = intent_from_event(state, event);
+    EventAction::Intent(intent, source)
+}
+
+fn intent_from_event(state: &UiState, event: &Event) -> (UiIntent, IntentSource) {
+    match event {
+        Event::Key(key) => (from_key(state.mode, *key), IntentSource::Key),
+        Event::Mouse(mouse) => (
+            from_mouse(state, mouse.kind, mouse.column, mouse.row),
+            source_for_mouse(mouse.kind),
+        ),
+        Event::FocusGained | Event::FocusLost | Event::Paste(_) | Event::Resize(..) => {
+            (UiIntent::Noop, IntentSource::Terminal)
+        }
+    }
+}
+
+fn handle_help_event(state: &mut UiState, event: &Event) -> Option<UiAction> {
+    match event {
+        Event::Key(key) => {
+            if is_help_quit_key(key) {
+                return Some(UiAction::Quit);
+            }
+            if is_help_dismiss_key(key) {
+                state.show_help = false;
+            }
+        }
+        Event::Mouse(mouse) => {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                let outside = state
+                    .help_area
+                    .is_none_or(|area| !area.contains(Position::from((mouse.column, mouse.row))));
+                if outside {
+                    state.show_help = false;
+                }
+            }
+        }
+        Event::FocusGained | Event::FocusLost | Event::Paste(_) | Event::Resize(..) => {}
+    }
+    None
+}
+
+fn is_help_quit_key(key: &crossterm::event::KeyEvent) -> bool {
+    is_control_char(key, 'c')
+}
+
+fn is_help_dismiss_key(key: &crossterm::event::KeyEvent) -> bool {
+    if key.code == KeyCode::Esc {
+        return true;
+    }
+    is_control_char(key, 'p')
+}
+
+fn is_control_char(key: &crossterm::event::KeyEvent, ch: char) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(ch)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntentSource {
+    Key,
+    Mouse,
+    Terminal,
+}
+
+fn from_mouse(state: &UiState, kind: MouseEventKind, column: u16, row: u16) -> UiIntent {
+    match kind {
+        MouseEventKind::ScrollDown => UiIntent::MoveNext,
+        MouseEventKind::ScrollUp => UiIntent::MovePrev,
+        MouseEventKind::Down(MouseButton::Left) if state.mode == InputMode::Normal => {
+            match state.mouse_hit(column, row) {
+                Some(MouseHit::Task { filtered_index }) => UiIntent::ClickTaskRow(filtered_index),
+                Some(MouseHit::Repo { filtered_index }) => UiIntent::ClickRepoRow(filtered_index),
+                None => UiIntent::Noop,
+            }
+        }
+        MouseEventKind::Down(_)
+        | MouseEventKind::Up(_)
+        | MouseEventKind::Drag(_)
+        | MouseEventKind::Moved
+        | MouseEventKind::ScrollLeft
+        | MouseEventKind::ScrollRight => UiIntent::Noop,
+    }
+}
+
+const fn source_for_mouse(kind: MouseEventKind) -> IntentSource {
+    match kind {
+        MouseEventKind::ScrollDown
+        | MouseEventKind::ScrollUp
+        | MouseEventKind::ScrollLeft
+        | MouseEventKind::ScrollRight
+        | MouseEventKind::Down(_) => IntentSource::Mouse,
+        // Crossterm can emit these while the pointer passes over the
+        // terminal. They are terminal noise for force-finish retry purposes.
+        MouseEventKind::Up(_) | MouseEventKind::Drag(_) | MouseEventKind::Moved => {
+            IntentSource::Terminal
         }
     }
 }
@@ -229,7 +308,7 @@ fn run_event_loop(
 fn restart_loader(context: &RuntimeEnvironment, state: &mut UiState, loader: &mut LoaderHandle) {
     let generation = state.begin_load();
     let new_handle = loader::spawn(context.clone(), state.task_repo_scope.clone(), generation);
-    let _ = std::mem::replace(loader, new_handle);
+    *loader = new_handle;
 }
 
 fn drain_one_shot_loader(handle: &mut Option<LoaderHandle>, state: &mut UiState) {
@@ -294,7 +373,7 @@ fn handle_task_topology_fingerprint(
 
     if repos_changed {
         refresh_all(context, state, loader);
-        state.message = "Task list changed; refreshing…".to_string();
+        state.set_message("Task list changed; refreshing…");
     } else if sessions_changed {
         refresh_session_state(state, task_card_details_refresh);
     }
@@ -328,7 +407,7 @@ fn maybe_spawn_task_topology_refresh(
     *last_refresh = now;
 }
 
-/// Spawn a fresh OpenCode refresher when the interval has elapsed,
+/// Spawn a fresh `OpenCode` refresher when the interval has elapsed,
 /// there is no refresher already in flight, and there is at least one
 /// task row to classify. Dropping the previous handle (even if still
 /// running) sets its stop flag so we never accumulate background work.
@@ -341,22 +420,14 @@ fn maybe_spawn_opencode_refresh(
     last_refresh: &mut Instant,
     now: Instant,
 ) {
-    // A refresher is already running — let it finish before starting a
-    // new one. The channel will drain into `apply_load_msg` on the next
-    // frame.
-    if handle.is_some() {
-        return;
-    }
-    if now.saturating_duration_since(*last_refresh) < OPENCODE_REFRESH_INTERVAL {
-        return;
-    }
-    if state.task_rows.is_empty() {
-        return;
-    }
-
-    let paths: Vec<_> = state.task_rows.iter().map(|row| row.path.clone()).collect();
-    *handle = Some(loader::spawn_opencode_refresh(paths));
-    *last_refresh = now;
+    maybe_spawn_task_path_refresh(
+        state,
+        handle,
+        last_refresh,
+        now,
+        OPENCODE_REFRESH_INTERVAL,
+        loader::spawn_opencode_refresh,
+    );
 }
 
 fn maybe_spawn_task_card_details_refresh(
@@ -365,10 +436,28 @@ fn maybe_spawn_task_card_details_refresh(
     last_refresh: &mut Instant,
     now: Instant,
 ) {
+    maybe_spawn_task_path_refresh(
+        state,
+        handle,
+        last_refresh,
+        now,
+        TASK_CARD_DETAILS_REFRESH_INTERVAL,
+        loader::spawn_task_card_details_refresh,
+    );
+}
+
+fn maybe_spawn_task_path_refresh(
+    state: &UiState,
+    handle: &mut Option<LoaderHandle>,
+    last_refresh: &mut Instant,
+    now: Instant,
+    interval: Duration,
+    spawn: impl FnOnce(Vec<std::path::PathBuf>) -> LoaderHandle,
+) {
     if handle.is_some() {
         return;
     }
-    if now.saturating_duration_since(*last_refresh) < TASK_CARD_DETAILS_REFRESH_INTERVAL {
+    if now.saturating_duration_since(*last_refresh) < interval {
         return;
     }
     if state.task_rows.is_empty() {
@@ -376,275 +465,467 @@ fn maybe_spawn_task_card_details_refresh(
     }
 
     let paths: Vec<_> = state.task_rows.iter().map(|row| row.path.clone()).collect();
-    *handle = Some(loader::spawn_task_card_details_refresh(paths));
+    *handle = Some(spawn(paths));
     *last_refresh = now;
 }
 
+#[cfg(test)]
 fn apply_intent(
     context: &RuntimeEnvironment,
     state: &mut UiState,
     loader: &mut LoaderHandle,
     intent: UiIntent,
-) -> Result<Option<UiAction>> {
-    match intent {
-        UiIntent::Quit => Ok(Some(UiAction::Quit)),
-        UiIntent::SwitchView => {
-            let was_filter_mode = state.mode == InputMode::Filter;
-            state.switch_view();
-            if was_filter_mode {
-                state.mode = InputMode::Filter;
-                state.message = match state.view {
-                    ViewMode::Tasks => "Filter mode: type to refine tasks".to_string(),
-                    ViewMode::Repos => "Filter mode: type to refine repos".to_string(),
-                };
-            } else {
-                state.message = match state.view {
-                    ViewMode::Tasks => "Switched to Tasks view".to_string(),
-                    ViewMode::Repos => "Switched to Repos view".to_string(),
-                };
-            }
-            Ok(None)
-        }
-        UiIntent::MoveNext => {
-            state.move_next();
-            Ok(None)
-        }
-        UiIntent::MovePrev => {
-            state.move_prev();
-            Ok(None)
-        }
-        UiIntent::PageDown => {
-            state.move_page_down();
-            Ok(None)
-        }
-        UiIntent::PageUp => {
-            state.move_page_up();
-            Ok(None)
-        }
-        UiIntent::MoveFirst => {
-            state.move_first();
-            Ok(None)
-        }
-        UiIntent::MoveLast => {
-            state.move_last();
-            Ok(None)
-        }
-        UiIntent::ToggleHelp => {
-            state.show_help = !state.show_help;
-            Ok(None)
-        }
-        UiIntent::OpenSelected => {
-            match state.view {
-                ViewMode::Tasks => {
-                    if let Some(row) = state.selected_task_row() {
-                        return Ok(Some(UiAction::Open(row.clone())));
-                    }
-                }
-                ViewMode::Repos => {
-                    if let Some(repo) = state.selected_repo_row().map(|row| row.repo.to_string()) {
-                        state.select_repo_for_tasks(repo);
-                        restart_loader(context, state, loader);
-                        state.message = "Opened selected repository tasks".to_string();
-                    }
-                }
-            }
-            Ok(None)
-        }
-        UiIntent::EnterFilterMode => {
-            state.mode = InputMode::Filter;
-            state.message = match state.view {
-                ViewMode::Tasks => "Filter mode: type to refine tasks".to_string(),
-                ViewMode::Repos => "Filter mode: type to refine repos".to_string(),
-            };
-            Ok(None)
-        }
-        UiIntent::EnterCreateTaskMode => {
-            match state.view {
-                ViewMode::Tasks => {
-                    state.mode = InputMode::CreateTask;
-                    state.create_branch.clear();
-                    state.message = "Create mode: type branch name".to_string();
-                }
-                ViewMode::Repos => {
-                    let Some(row) = state.selected_repo_row().cloned() else {
-                        state.message = "No repo selected".to_string();
-                        return Ok(None);
-                    };
-                    let repo_key_str = row.repo.to_string();
-                    state.task_repo_scope = Some(repo_key_str.clone());
-                    restart_loader(context, state, loader);
-                    state.mode = InputMode::CreateTask;
-                    state.create_branch.clear();
-                    state.message = format!("Start task on {repo_key_str}: type branch name");
-                }
-            }
-            Ok(None)
-        }
-        UiIntent::EnterCloneMode => {
-            if state.view != ViewMode::Repos {
-                return Ok(None);
-            }
-            state.mode = InputMode::CloneRepo;
-            state.clone_input.clear();
-            state.message = "Clone mode: type '<repo-url> [repo-key]'".to_string();
-            Ok(None)
-        }
-        UiIntent::FinishSelected => {
-            if state.view != ViewMode::Tasks {
-                state.message = "Finish is only available in Tasks view".to_string();
-                return Ok(None);
-            }
-            if let Err(err) = finish_and_refresh(context, state, loader) {
-                state.message = err.to_string();
-            }
-            Ok(None)
-        }
-        UiIntent::RefreshCurrentView => {
-            refresh_all(context, state, loader);
-            state.message = match state.view {
-                ViewMode::Tasks => "Refreshing task list…".to_string(),
-                ViewMode::Repos => "Refreshing repo list…".to_string(),
-            };
-            Ok(None)
-        }
-        UiIntent::ParkSelected => {
-            if state.view != ViewMode::Tasks {
-                state.message = "Park is only available in Tasks view".to_string();
-                return Ok(None);
-            }
-            if let Err(err) = park_and_refresh(context, state, loader) {
-                state.message = err.to_string();
-            }
-            Ok(None)
-        }
-        UiIntent::ToggleDetach => {
-            if state.view != ViewMode::Repos {
-                state.message = "Detach toggle is only available in Repos view".to_string();
-                return Ok(None);
-            }
-            match toggle_detach_and_refresh(context, state, loader) {
-                Ok(msg) => state.message = msg,
-                Err(err) => state.message = err.to_string(),
-            }
-            Ok(None)
-        }
-        UiIntent::ToggleSidebar => {
-            let width = state.last_frame_width;
-            state.toggle_sidebar(width);
-            state.message = if state.sidebar_visible(width) {
-                "Sidebar shown".to_string()
-            } else {
-                "Sidebar hidden".to_string()
-            };
-            Ok(None)
-        }
+) -> Option<UiAction> {
+    apply_intent_with_source(context, state, loader, intent, IntentSource::Key)
+}
 
-        UiIntent::ClearScope => {
-            if state.task_repo_scope.is_some() {
-                state.clear_repo_scope();
-                restart_loader(context, state, loader);
-                state.message = "Returned to repos view".to_string();
+fn apply_intent_with_source(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+    intent: UiIntent,
+    source: IntentSource,
+) -> Option<UiAction> {
+    clear_pending_force_finish_for_intent(state, intent, source);
+
+    match intent {
+        UiIntent::Quit => return Some(UiAction::Quit),
+        UiIntent::SwitchView => apply_switch_view_intent(state),
+        UiIntent::MoveNext
+        | UiIntent::MovePrev
+        | UiIntent::PageDown
+        | UiIntent::PageUp
+        | UiIntent::HalfPageDown
+        | UiIntent::HalfPageUp
+        | UiIntent::MoveFirst
+        | UiIntent::MoveLast => apply_navigation_intent(state, intent),
+        UiIntent::ToggleHelp => state.show_help = !state.show_help,
+        UiIntent::OpenSelected => return activate_selected(context, state, loader),
+        UiIntent::EnterFilterMode => apply_enter_filter_mode_intent(state),
+        UiIntent::EnterCreateTaskMode => enter_create_task_mode(context, state, loader),
+        UiIntent::EnterCloneMode => apply_enter_clone_mode_intent(state),
+        UiIntent::FinishSelected => apply_finish_intent(context, state, loader),
+        UiIntent::RefreshCurrentView => apply_refresh_current_view_intent(context, state, loader),
+        UiIntent::ParkSelected => apply_park_intent(context, state, loader),
+        UiIntent::ToggleDetach => apply_toggle_detach_intent(context, state, loader),
+        UiIntent::ToggleSidebar => apply_toggle_sidebar_intent(state),
+        UiIntent::ClearScope => apply_clear_scope_intent(context, state, loader),
+        UiIntent::ClickTaskRow(filtered_index) => {
+            return apply_click_task_intent(context, state, loader, filtered_index);
+        }
+        UiIntent::ClickRepoRow(filtered_index) => {
+            return apply_click_repo_intent(context, state, loader, filtered_index);
+        }
+        UiIntent::FilterCancel => apply_filter_cancel_intent(state),
+        UiIntent::FilterApply => apply_filter_apply_intent(state),
+        UiIntent::FilterBackspace
+        | UiIntent::FilterClear
+        | UiIntent::FilterAppend(_)
+        | UiIntent::InputStart
+        | UiIntent::InputEnd => apply_text_input_intent(state, intent),
+        UiIntent::CreateCancel
+        | UiIntent::CreateSubmit
+        | UiIntent::CreateBackspace
+        | UiIntent::CreateClear
+        | UiIntent::CreateAppend(_) => return apply_create_intent(context, state, intent),
+        UiIntent::CloneCancel
+        | UiIntent::CloneSubmit
+        | UiIntent::CloneBackspace
+        | UiIntent::CloneClear
+        | UiIntent::CloneAppend(_) => apply_clone_intent(context, state, loader, intent),
+        UiIntent::UnboundKey | UiIntent::Noop => {}
+    }
+
+    None
+}
+
+fn apply_enter_filter_mode_intent(state: &mut UiState) {
+    state.mode = InputMode::Filter;
+    state.input_end();
+    state.message = filter_mode_message(state.view);
+}
+
+fn apply_enter_clone_mode_intent(state: &mut UiState) {
+    if state.view != ViewMode::Repos {
+        return;
+    }
+    state.mode = InputMode::CloneRepo;
+    state.clone_clear();
+    state.set_message("Clone mode: type '<repo-url> [repo-key]'");
+}
+
+fn apply_refresh_current_view_intent(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) {
+    refresh_all(context, state, loader);
+    state.message = refresh_message(state.view);
+}
+
+fn apply_filter_cancel_intent(state: &mut UiState) {
+    state.mode = InputMode::Normal;
+    state.set_message("Returned to normal mode");
+}
+
+fn apply_filter_apply_intent(state: &mut UiState) {
+    state.mode = InputMode::Normal;
+    state.message = filter_applied_message(state);
+}
+
+fn apply_switch_view_intent(state: &mut UiState) {
+    let was_filter_mode = state.mode == InputMode::Filter;
+    state.switch_view();
+    if was_filter_mode {
+        state.mode = InputMode::Filter;
+        state.message = filter_mode_message(state.view);
+    } else {
+        state.message = switched_view_message(state.view);
+    }
+}
+
+fn apply_navigation_intent(state: &mut UiState, intent: UiIntent) {
+    if intent == UiIntent::MoveNext {
+        state.move_next();
+    } else if intent == UiIntent::MovePrev {
+        state.move_prev();
+    } else if intent == UiIntent::PageDown {
+        state.move_page_down();
+    } else if intent == UiIntent::PageUp {
+        state.move_page_up();
+    } else if intent == UiIntent::HalfPageDown {
+        state.move_half_page_down();
+    } else if intent == UiIntent::HalfPageUp {
+        state.move_half_page_up();
+    } else if intent == UiIntent::MoveFirst {
+        state.move_first();
+    } else if intent == UiIntent::MoveLast {
+        state.move_last();
+    }
+}
+
+fn apply_park_intent(context: &RuntimeEnvironment, state: &mut UiState, loader: &mut LoaderHandle) {
+    if state.view != ViewMode::Tasks {
+        state.set_message("Park is only available in Tasks view");
+        return;
+    }
+    if let Err(err) = park_and_refresh(context, state, loader) {
+        state.message = err.to_string();
+    }
+}
+
+fn apply_toggle_detach_intent(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) {
+    if state.view != ViewMode::Repos {
+        state.set_message("Detach toggle is only available in Repos view");
+        return;
+    }
+    match toggle_detach_and_refresh(context, state, loader) {
+        Ok(msg) => state.message = msg,
+        Err(err) => state.message = err.to_string(),
+    }
+}
+
+fn apply_toggle_sidebar_intent(state: &mut UiState) {
+    let width = state.last_frame_width;
+    state.toggle_sidebar(width);
+    let message = if state.sidebar_visible(width) {
+        "Sidebar shown"
+    } else {
+        "Sidebar hidden"
+    };
+    state.set_message(message);
+}
+
+fn apply_clear_scope_intent(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) {
+    if state.task_repo_scope.is_none() {
+        return;
+    }
+    state.clear_repo_scope();
+    restart_loader(context, state, loader);
+    state.set_message("Returned to repos view");
+}
+
+fn apply_click_task_intent(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+    filtered_index: usize,
+) -> Option<UiAction> {
+    if state.view != ViewMode::Tasks {
+        return None;
+    }
+    if state.task_selected == filtered_index {
+        return activate_selected(context, state, loader);
+    }
+    state.select_task_filtered_index(filtered_index);
+    None
+}
+
+fn apply_click_repo_intent(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+    filtered_index: usize,
+) -> Option<UiAction> {
+    if state.view != ViewMode::Repos {
+        return None;
+    }
+    if state.repo_selected == filtered_index {
+        enter_create_task_mode(context, state, loader);
+        return None;
+    }
+    state.select_repo_filtered_index(filtered_index);
+    None
+}
+
+fn apply_text_input_intent(state: &mut UiState, intent: UiIntent) {
+    if intent == UiIntent::FilterBackspace {
+        state.filter_backspace();
+    } else if intent == UiIntent::FilterClear {
+        state.filter_clear();
+    } else if let UiIntent::FilterAppend(ch) = intent {
+        state.filter_append(ch);
+    } else if intent == UiIntent::InputStart {
+        state.input_start();
+    } else if intent == UiIntent::InputEnd {
+        state.input_end();
+    }
+}
+
+fn apply_create_intent(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    intent: UiIntent,
+) -> Option<UiAction> {
+    if intent == UiIntent::CreateCancel {
+        state.mode = InputMode::Normal;
+        state.set_message("Create cancelled");
+        return None;
+    }
+    if intent == UiIntent::CreateSubmit {
+        return match create_action(context, state) {
+            Ok(action) => {
+                state.create_clear();
+                Some(action)
             }
-            Ok(None)
-        }
-        UiIntent::FilterCancel => {
-            state.mode = InputMode::Normal;
-            state.message = "Returned to normal mode".to_string();
-            Ok(None)
-        }
-        UiIntent::FilterApply => {
-            state.mode = InputMode::Normal;
-            state.message = match state.view {
-                ViewMode::Tasks => {
-                    format!(
-                        "Filter applied: {} matches",
-                        state.task_filtered_indices.len()
-                    )
-                }
-                ViewMode::Repos => {
-                    format!(
-                        "Filter applied: {} matches",
-                        state.repo_filtered_indices.len()
-                    )
-                }
-            };
-            Ok(None)
-        }
-        UiIntent::FilterBackspace => {
-            state.filter_backspace();
-            Ok(None)
-        }
-        UiIntent::FilterClear => {
-            state.filter_clear();
-            Ok(None)
-        }
-        UiIntent::FilterAppend(ch) => {
-            state.filter_append(ch);
-            Ok(None)
-        }
-        UiIntent::CreateCancel => {
-            state.mode = InputMode::Normal;
-            state.message = "Create cancelled".to_string();
-            Ok(None)
-        }
-        UiIntent::CreateSubmit => match create_action(context, state) {
-            Ok(action) => Ok(Some(action)),
             Err(err) => {
                 state.message = err.to_string();
-                Ok(None)
+                None
             }
-        },
-        UiIntent::CreateBackspace => {
-            state.create_branch.pop();
-            Ok(None)
-        }
-        UiIntent::CreateClear => {
-            state.create_branch.clear();
-            Ok(None)
-        }
-        UiIntent::CreateAppend(ch) => {
-            state.create_branch.push(ch);
-            Ok(None)
-        }
-        UiIntent::CloneCancel => {
-            state.mode = InputMode::Normal;
-            state.message = "Clone cancelled".to_string();
-            Ok(None)
-        }
-        UiIntent::CloneSubmit => match clone_and_refresh(context, state, loader) {
+        };
+    }
+    if intent == UiIntent::CreateBackspace {
+        state.create_backspace();
+    } else if intent == UiIntent::CreateClear {
+        state.create_clear();
+    } else if let UiIntent::CreateAppend(ch) = intent {
+        state.create_append(ch);
+    }
+    None
+}
+
+fn apply_clone_intent(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+    intent: UiIntent,
+) {
+    if intent == UiIntent::CloneCancel {
+        state.mode = InputMode::Normal;
+        state.set_message("Clone cancelled");
+    } else if intent == UiIntent::CloneSubmit {
+        match clone_and_refresh(context, state, loader) {
             Ok(repo_key) => {
                 state.mode = InputMode::Normal;
-                state.clone_input.clear();
+                state.clone_clear();
                 state.message = format!("Cloned repo: {repo_key}");
-                Ok(None)
             }
-            Err(err) => {
-                state.message = err.to_string();
-                Ok(None)
-            }
-        },
-        UiIntent::CloneBackspace => {
-            state.clone_input.pop();
-            Ok(None)
+            Err(err) => state.message = err.to_string(),
         }
-        UiIntent::CloneClear => {
-            state.clone_input.clear();
-            Ok(None)
-        }
-        UiIntent::CloneAppend(ch) => {
-            state.clone_input.push(ch);
-            Ok(None)
-        }
-        UiIntent::Noop => Ok(None),
+    } else if intent == UiIntent::CloneBackspace {
+        state.clone_backspace();
+    } else if intent == UiIntent::CloneClear {
+        state.clone_clear();
+    } else if let UiIntent::CloneAppend(ch) = intent {
+        state.clone_append(ch);
     }
+}
+
+fn filter_mode_message(view: ViewMode) -> String {
+    match view {
+        ViewMode::Tasks => "Filter mode: type to refine tasks".to_owned(),
+        ViewMode::Repos => "Filter mode: type to refine repos".to_owned(),
+    }
+}
+
+fn switched_view_message(view: ViewMode) -> String {
+    match view {
+        ViewMode::Tasks => "Switched to Tasks view".to_owned(),
+        ViewMode::Repos => "Switched to Repos view".to_owned(),
+    }
+}
+
+fn refresh_message(view: ViewMode) -> String {
+    match view {
+        ViewMode::Tasks => "Refreshing task list…".to_owned(),
+        ViewMode::Repos => "Refreshing repo list…".to_owned(),
+    }
+}
+
+fn filter_applied_message(state: &UiState) -> String {
+    match state.view {
+        ViewMode::Tasks => format!(
+            "Filter applied: {} matches",
+            state.task_filtered_indices.len()
+        ),
+        ViewMode::Repos => format!(
+            "Filter applied: {} matches",
+            state.repo_filtered_indices.len()
+        ),
+    }
+}
+
+const fn key_intent_clears_pending_force_finish(intent: UiIntent) -> bool {
+    !matches!(intent, UiIntent::FinishSelected)
+}
+
+const PENDING_FORCE_FINISH_PROMPT: &str = "Press f again to force finish.";
+
+fn clear_pending_force_finish_for_intent(
+    state: &mut UiState,
+    intent: UiIntent,
+    source: IntentSource,
+) {
+    if source == IntentSource::Mouse {
+        clear_pending_force_finish_and_prompt(state);
+        return;
+    }
+
+    if source != IntentSource::Key || !key_intent_clears_pending_force_finish(intent) {
+        return;
+    }
+
+    clear_pending_force_finish_and_prompt(state);
+}
+
+fn clear_pending_force_finish_and_prompt(state: &mut UiState) {
+    if state.pending_force_finish.is_some() && state.message.contains(PENDING_FORCE_FINISH_PROMPT) {
+        state.set_message("Ready");
+    }
+    state.clear_pending_force_finish();
+}
+
+fn activate_selected(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) -> Option<UiAction> {
+    match state.view {
+        ViewMode::Tasks => state.selected_task_row().cloned().map(UiAction::Open),
+        ViewMode::Repos => {
+            if let Some(repo) = state.selected_repo_row().map(|row| row.repo.to_string()) {
+                state.select_repo_for_tasks(repo);
+                restart_loader(context, state, loader);
+                state.set_message("Opened selected repository tasks");
+            }
+            None
+        }
+    }
+}
+
+fn enter_create_task_mode(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) {
+    match state.view {
+        ViewMode::Tasks => {
+            state.mode = InputMode::CreateTask;
+            state.create_clear();
+            state.set_message("Create mode: type branch name");
+        }
+        ViewMode::Repos => {
+            let Some(row) = state.selected_repo_row().cloned() else {
+                state.set_message("No repo selected");
+                return;
+            };
+            let repo_key_str = row.repo.to_string();
+            state.task_repo_scope = Some(repo_key_str.clone());
+            restart_loader(context, state, loader);
+            state.mode = InputMode::CreateTask;
+            state.create_clear();
+            state.message = format!("Start task on {repo_key_str}: type branch name");
+        }
+    }
+}
+
+fn apply_finish_intent(
+    context: &RuntimeEnvironment,
+    state: &mut UiState,
+    loader: &mut LoaderHandle,
+) {
+    if state.view != ViewMode::Tasks {
+        state.clear_pending_force_finish();
+        state.set_message("Finish is only available in Tasks view");
+        return;
+    }
+
+    let mode = if state.pending_force_finish_matches_selected_task() {
+        state.clear_pending_force_finish();
+        FinishMode::Force
+    } else {
+        FinishMode::Normal
+    };
+
+    if let Err(err) = finish_and_refresh(context, state, loader, mode) {
+        handle_finish_error(state, mode, &err);
+    }
+}
+
+fn handle_finish_error(state: &mut UiState, mode: FinishMode, err: &Error) {
+    if should_prompt_force_finish(state, mode, err) {
+        state.message = format!("{PENDING_FORCE_FINISH_PROMPT} {err}");
+        return;
+    }
+
+    state.clear_pending_force_finish();
+    state.message = err.to_string();
+}
+
+fn should_prompt_force_finish(state: &mut UiState, mode: FinishMode, err: &Error) -> bool {
+    if mode != FinishMode::Normal {
+        return false;
+    }
+    if !matches!(err, Error::DirtyWorktree) {
+        return false;
+    }
+    state.set_pending_force_finish_to_selected_task()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs};
+    use std::{
+        env, fs,
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
-    use super::{apply_intent, loader::LoaderHandle, state::UiAction};
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    use super::{
+        IntentSource, apply_intent, apply_intent_with_source, from_mouse, loader::LoaderHandle,
+        source_for_mouse, state::UiAction,
+    };
     use crate::{
+        error::Error,
         runtime::environment::RuntimeEnvironment,
         ui::{
             intent::UiIntent,
@@ -668,14 +949,187 @@ mod tests {
         UiState::new(vec![], vec![], None)
     }
 
+    fn task_row(repo: &str, branch: &str) -> crate::runtime::task_rows::TaskRow {
+        use crate::{
+            runtime::{BranchName, RepoKey, task_rows::TaskStatus},
+            tools::opencode::status::OpenCodeState,
+        };
+
+        crate::runtime::task_rows::TaskRow {
+            status: TaskStatus::Open,
+            repo: RepoKey::new(repo),
+            branch: BranchName::new(branch),
+            worktree_name: branch.to_owned(),
+            path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
+            opencode: OpenCodeState::None,
+        }
+    }
+
+    fn repo_row(repo: &str) -> crate::ui::state::RepoRow {
+        crate::ui::state::RepoRow {
+            repo: crate::runtime::RepoKey::new(repo),
+            open_tasks: 1,
+            parked_tasks: 0,
+            is_detached: false,
+        }
+    }
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = env::temp_dir().join(format!("task-rs-ui-mod-{name}"));
+            _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self(path)
+        }
+
+        fn path(&self) -> &PathBuf {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn init_bare_repo(path: &std::path::Path) {
+        fs::create_dir_all(path).expect("create bare repo parent");
+        let status = Command::new("git")
+            .args(["init", "--bare"])
+            .arg(path)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", env::temp_dir())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git init --bare");
+        assert!(status.success(), "git init --bare failed");
+    }
+
+    fn add_dirty_worktree(gitdir: &Path, worktree: &Path, branch: &crate::runtime::BranchName) {
+        fs::create_dir_all(worktree.parent().expect("worktree parent")).unwrap();
+        let status = Command::new("git")
+            .args([
+                "--git-dir",
+                gitdir.to_str().expect("gitdir path"),
+                "worktree",
+                "add",
+                "--orphan",
+                "-b",
+                branch.as_str(),
+                worktree.to_str().expect("worktree path"),
+            ])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", env::temp_dir())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git worktree add");
+        assert!(status.success(), "git worktree add failed");
+        fs::write(worktree.join("dirty.txt"), "dirty\n").unwrap();
+    }
+
+    fn dirty_finish_fixture(name: &str) -> (TempDir, RuntimeEnvironment, UiState, PathBuf) {
+        use crate::{
+            runtime::{
+                BranchName, RepoKey,
+                task_rows::{TaskRow, TaskStatus},
+            },
+            tools::opencode::status::OpenCodeState,
+        };
+
+        let dir = TempDir::new(name);
+        let repos = dir.path().join("repos");
+        let wt = dir.path().join("wt");
+        let detached = dir.path().join("detached");
+        let repo_key = RepoKey::new("github.com/acme/app");
+        let branch = BranchName::new("dirty-task");
+        let gitdir = repos.join("github.com/acme/app.git");
+        let worktree = wt.join("github.com/acme/app/dirty-task");
+
+        init_bare_repo(&gitdir);
+        add_dirty_worktree(&gitdir, &worktree, &branch);
+
+        let context = RuntimeEnvironment::from_paths(&repos, &wt, &detached);
+        let row = TaskRow {
+            status: TaskStatus::Open,
+            repo: repo_key,
+            branch,
+            worktree_name: String::from("dirty-task"),
+            path: worktree.clone(),
+            opencode: OpenCodeState::None,
+        };
+        (
+            dir,
+            context,
+            UiState::new(vec![row], vec![], None),
+            worktree,
+        )
+    }
+
+    fn two_dirty_finish_fixture(
+        name: &str,
+    ) -> (TempDir, RuntimeEnvironment, UiState, PathBuf, PathBuf) {
+        use crate::{
+            runtime::{
+                BranchName, RepoKey,
+                task_rows::{TaskRow, TaskStatus},
+            },
+            tools::opencode::status::OpenCodeState,
+        };
+
+        let dir = TempDir::new(name);
+        let repos = dir.path().join("repos");
+        let wt = dir.path().join("wt");
+        let detached = dir.path().join("detached");
+        let repo_key = RepoKey::new("github.com/acme/app");
+        let branch_a = BranchName::new("dirty-a");
+        let branch_b = BranchName::new("dirty-b");
+        let gitdir = repos.join("github.com/acme/app.git");
+        let worktree_a = wt.join("github.com/acme/app/dirty-a");
+        let worktree_b = wt.join("github.com/acme/app/dirty-b");
+
+        init_bare_repo(&gitdir);
+        add_dirty_worktree(&gitdir, &worktree_a, &branch_a);
+        add_dirty_worktree(&gitdir, &worktree_b, &branch_b);
+
+        let rows = vec![
+            TaskRow {
+                status: TaskStatus::Open,
+                repo: repo_key.clone(),
+                branch: branch_a,
+                worktree_name: String::from("dirty-a"),
+                path: worktree_a.clone(),
+                opencode: OpenCodeState::None,
+            },
+            TaskRow {
+                status: TaskStatus::Open,
+                repo: repo_key,
+                branch: branch_b,
+                worktree_name: String::from("dirty-b"),
+                path: worktree_b.clone(),
+                opencode: OpenCodeState::None,
+            },
+        ];
+        (
+            dir,
+            RuntimeEnvironment::from_paths(&repos, &wt, &detached),
+            UiState::new(rows, vec![], None),
+            worktree_a,
+            worktree_b,
+        )
+    }
+
     // ── Quit ─────────────────────────────────────────────────────────────────
 
     #[test]
     fn quit_returns_quit_action() {
         let ctx = test_env();
         let mut state = empty_state();
-        let result =
-            apply_intent(&ctx, &mut state, &mut LoaderHandle::noop(), UiIntent::Quit).unwrap();
+        let result = apply_intent(&ctx, &mut state, &mut LoaderHandle::noop(), UiIntent::Quit);
         assert!(matches!(result, Some(UiAction::Quit)));
     }
 
@@ -685,8 +1139,7 @@ mod tests {
     fn noop_returns_none() {
         let ctx = test_env();
         let mut state = empty_state();
-        let result =
-            apply_intent(&ctx, &mut state, &mut LoaderHandle::noop(), UiIntent::Noop).unwrap();
+        let result = apply_intent(&ctx, &mut state, &mut LoaderHandle::noop(), UiIntent::Noop);
         assert!(result.is_none());
     }
 
@@ -697,21 +1150,19 @@ mod tests {
         let ctx = test_env();
         let mut state = empty_state();
         assert!(!state.show_help);
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::ToggleHelp,
-        )
-        .unwrap();
+        );
         assert!(state.show_help);
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::ToggleHelp,
-        )
-        .unwrap();
+        );
         assert!(!state.show_help);
     }
 
@@ -722,13 +1173,12 @@ mod tests {
         let ctx = test_env();
         let mut state = empty_state();
         assert_eq!(state.view, ViewMode::Tasks);
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::SwitchView,
-        )
-        .unwrap();
+        );
         assert_eq!(state.view, ViewMode::Repos);
         assert_eq!(state.message, "Switched to Repos view");
     }
@@ -738,13 +1188,12 @@ mod tests {
         let ctx = test_env();
         let mut state = empty_state();
         state.view = ViewMode::Repos;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::SwitchView,
-        )
-        .unwrap();
+        );
         assert_eq!(state.view, ViewMode::Tasks);
         assert_eq!(state.message, "Switched to Tasks view");
     }
@@ -755,13 +1204,12 @@ mod tests {
         let mut state = empty_state();
         state.mode = InputMode::Filter;
         // switch_view resets mode to Normal internally, then we force it back to Filter
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::SwitchView,
-        )
-        .unwrap();
+        );
         // After switch from Tasks→Repos in filter mode, mode stays Filter
         assert_eq!(state.mode, InputMode::Filter);
         assert!(
@@ -788,7 +1236,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/b"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from("/tmp/a"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
@@ -796,20 +1244,19 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/c"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from("/tmp/c"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
         ];
         let mut state = UiState::new(rows, vec![], None);
         assert_eq!(state.task_selected, 0);
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::MoveNext,
-        )
-        .unwrap();
+        );
         assert_eq!(state.task_selected, 1);
     }
 
@@ -828,7 +1275,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/b"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from("/tmp/a"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
@@ -836,20 +1283,19 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/c"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from("/tmp/c"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
         ];
         let mut state = UiState::new(rows, vec![], None);
         state.task_selected = 1;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::MovePrev,
-        )
-        .unwrap();
+        );
         assert_eq!(state.task_selected, 0);
     }
 
@@ -870,7 +1316,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(format!("github.com/a/r{i}")),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from(format!("/tmp/{i}")),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             })
@@ -878,13 +1324,12 @@ mod tests {
         let mut state = UiState::new(rows, vec![], None);
         state.visible_rows = 10;
         assert_eq!(state.task_selected, 0);
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::PageDown,
-        )
-        .unwrap();
+        );
         assert_eq!(state.task_selected, 10);
     }
 
@@ -903,7 +1348,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(format!("github.com/a/r{i}")),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from(format!("/tmp/{i}")),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             })
@@ -911,14 +1356,80 @@ mod tests {
         let mut state = UiState::new(rows, vec![], None);
         state.visible_rows = 10;
         state.task_selected = 20;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::PageUp,
-        )
-        .unwrap();
+        );
         assert_eq!(state.task_selected, 10);
+    }
+
+    #[test]
+    fn half_page_down_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..30)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                worktree_name: String::from("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.visible_rows = 10;
+
+        _ = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::HalfPageDown,
+        );
+
+        assert_eq!(state.task_selected, 5);
+    }
+
+    #[test]
+    fn half_page_up_delegates_to_state() {
+        use std::path::PathBuf;
+
+        use crate::runtime::{
+            BranchName, RepoKey,
+            task_rows::{TaskRow, TaskStatus},
+        };
+
+        let ctx = test_env();
+        let rows: Vec<TaskRow> = (0..30)
+            .map(|i| TaskRow {
+                status: TaskStatus::Open,
+                repo: RepoKey::new(format!("github.com/a/r{i}")),
+                branch: BranchName::new("main"),
+                worktree_name: String::from("main"),
+                path: PathBuf::from(format!("/tmp/{i}")),
+                opencode: crate::tools::opencode::status::OpenCodeState::None,
+            })
+            .collect();
+        let mut state = UiState::new(rows, vec![], None);
+        state.visible_rows = 10;
+        state.task_selected = 9;
+
+        _ = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::HalfPageUp,
+        );
+
+        assert_eq!(state.task_selected, 4);
     }
 
     #[test]
@@ -936,20 +1447,19 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(format!("github.com/a/r{i}")),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from(format!("/tmp/{i}")),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             })
             .collect();
         let mut state = UiState::new(rows, vec![], None);
         state.task_selected = 7;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::MoveFirst,
-        )
-        .unwrap();
+        );
         assert_eq!(state.task_selected, 0);
     }
 
@@ -968,20 +1478,19 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(format!("github.com/a/r{i}")),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from(format!("/tmp/{i}")),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             })
             .collect();
         let mut state = UiState::new(rows, vec![], None);
         state.task_selected = 3;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::MoveLast,
-        )
-        .unwrap();
+        );
         assert_eq!(state.task_selected, 9);
     }
 
@@ -991,14 +1500,15 @@ mod tests {
     fn enter_filter_mode_on_tasks_view() {
         let ctx = test_env();
         let mut state = empty_state();
-        apply_intent(
+        state.filter_text = String::from("abc");
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::EnterFilterMode,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::Filter);
+        assert_eq!(state.filter_cursor, state.filter_text.len());
         assert!(
             state.message.contains("tasks"),
             "message should mention tasks: {}",
@@ -1011,13 +1521,12 @@ mod tests {
         let ctx = test_env();
         let mut state = empty_state();
         state.view = ViewMode::Repos;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::EnterFilterMode,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::Filter);
         assert!(
             state.message.contains("repos"),
@@ -1032,14 +1541,13 @@ mod tests {
     fn enter_create_task_mode_in_tasks_view() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.create_branch = "leftover".to_string();
-        apply_intent(
+        state.create_branch = String::from("leftover");
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::EnterCreateTaskMode,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::CreateTask);
         assert!(state.create_branch.is_empty(), "branch should be cleared");
         assert!(
@@ -1070,7 +1578,7 @@ mod tests {
         ];
         let mut state = UiState::new(vec![], repo_rows, None);
         state.view = ViewMode::Repos;
-        state.create_branch = "leftover".to_string();
+        state.create_branch = String::from("leftover");
         state.repo_selected = 1;
 
         let result = apply_intent(
@@ -1078,14 +1586,13 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::EnterCreateTaskMode,
-        )
-        .unwrap();
+        );
         assert!(result.is_none());
         assert_eq!(state.mode, InputMode::CreateTask);
         assert!(state.create_branch.is_empty(), "branch should be cleared");
         assert_eq!(
             state.task_repo_scope,
-            Some("github.com/acme/ops".to_string())
+            Some(String::from("github.com/acme/ops"))
         );
         assert!(
             state.message.contains("github.com/acme/ops"),
@@ -1104,8 +1611,7 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::EnterCreateTaskMode,
-        )
-        .unwrap();
+        );
         assert!(result.is_none());
         assert!(
             state.message.contains("No repo selected"),
@@ -1121,13 +1627,12 @@ mod tests {
         let ctx = test_env();
         let mut state = empty_state();
         state.mode = InputMode::Filter;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::FilterCancel,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::Normal);
         assert!(
             state.message.contains("normal"),
@@ -1151,7 +1656,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/app"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from("/tmp/a"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
@@ -1159,23 +1664,22 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/ops"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from("/tmp/b"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             },
         ];
         let mut state = UiState::new(rows, vec![], None);
         state.mode = InputMode::Filter;
-        state.filter_text = "app".to_string();
+        state.filter_text = String::from("app");
         state.apply_task_filter();
 
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::FilterApply,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::Normal);
         assert!(
             state.message.contains('1'),
@@ -1206,16 +1710,15 @@ mod tests {
         let mut state = UiState::new(vec![], repo_rows, None);
         state.view = ViewMode::Repos;
         state.mode = InputMode::Filter;
-        state.filter_text = "ops".to_string();
+        state.filter_text = String::from("ops");
         state.apply_repo_filter();
 
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::FilterApply,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::Normal);
         assert!(
             state.message.contains('1'),
@@ -1230,13 +1733,13 @@ mod tests {
     fn filter_append_adds_char() {
         let ctx = test_env();
         let mut state = empty_state();
-        apply_intent(
+        state.mode = InputMode::Filter;
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::FilterAppend('x'),
-        )
-        .unwrap();
+        );
         assert_eq!(state.filter_text, "x");
     }
 
@@ -1244,14 +1747,15 @@ mod tests {
     fn filter_backspace_removes_last_char() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.filter_text = "ab".to_string();
-        apply_intent(
+        state.mode = InputMode::Filter;
+        state.filter_text = String::from("ab");
+        state.input_end();
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::FilterBackspace,
-        )
-        .unwrap();
+        );
         assert_eq!(state.filter_text, "a");
     }
 
@@ -1259,15 +1763,40 @@ mod tests {
     fn filter_clear_empties_filter() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.filter_text = "something".to_string();
-        apply_intent(
+        state.filter_text = String::from("something");
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::FilterClear,
-        )
-        .unwrap();
+        );
         assert_eq!(state.filter_text, "");
+        assert_eq!(state.filter_cursor, 0);
+    }
+
+    #[test]
+    fn input_start_and_end_update_filter_cursor() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        state.mode = InputMode::Filter;
+        state.filter_text = String::from("abc");
+        state.input_end();
+
+        _ = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::InputStart,
+        );
+        assert_eq!(state.filter_cursor, 0);
+
+        _ = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::InputEnd,
+        );
+        assert_eq!(state.filter_cursor, 3);
     }
 
     // ── CreateCancel / CreateAppend / CreateBackspace ────────────────────────
@@ -1277,13 +1806,12 @@ mod tests {
         let ctx = test_env();
         let mut state = empty_state();
         state.mode = InputMode::CreateTask;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CreateCancel,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::Normal);
         assert!(
             state.message.contains("cancel"),
@@ -1296,58 +1824,78 @@ mod tests {
     fn create_append_appends_char_to_branch() {
         let ctx = test_env();
         let mut state = empty_state();
-        apply_intent(
+        state.mode = InputMode::CreateTask;
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CreateAppend('f'),
-        )
-        .unwrap();
-        apply_intent(
+        );
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CreateAppend('e'),
-        )
-        .unwrap();
-        apply_intent(
+        );
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CreateAppend('a'),
-        )
-        .unwrap();
+        );
         assert_eq!(state.create_branch, "fea");
+        assert_eq!(state.create_cursor, 3);
     }
 
     #[test]
     fn create_backspace_removes_last_char() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.create_branch = "fea".to_string();
-        apply_intent(
+        state.mode = InputMode::CreateTask;
+        state.create_branch = String::from("fea");
+        state.input_end();
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CreateBackspace,
-        )
-        .unwrap();
+        );
         assert_eq!(state.create_branch, "fe");
+        assert_eq!(state.create_cursor, 2);
     }
 
     #[test]
     fn create_clear_empties_branch() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.create_branch = "some-branch".to_string();
-        apply_intent(
+        state.create_branch = String::from("some-branch");
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CreateClear,
-        )
-        .unwrap();
+        );
         assert!(state.create_branch.is_empty());
+        assert_eq!(state.create_cursor, 0);
+    }
+
+    #[test]
+    fn create_append_uses_cursor_position() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        state.mode = InputMode::CreateTask;
+        state.create_branch = String::from("ab");
+        state.create_cursor = 1;
+
+        _ = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::CreateAppend('x'),
+        );
+
+        assert_eq!(state.create_branch, "axb");
+        assert_eq!(state.create_cursor, 2);
     }
 
     // ── CloneCancel / CloneAppend / CloneBackspace / CloneClear ─────────────
@@ -1357,13 +1905,12 @@ mod tests {
         let ctx = test_env();
         let mut state = empty_state();
         state.mode = InputMode::CloneRepo;
-        apply_intent(
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CloneCancel,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::Normal);
         assert!(
             state.message.contains("cancel"),
@@ -1376,51 +1923,72 @@ mod tests {
     fn clone_append_appends_chars() {
         let ctx = test_env();
         let mut state = empty_state();
-        apply_intent(
+        state.mode = InputMode::CloneRepo;
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CloneAppend('g'),
-        )
-        .unwrap();
-        apply_intent(
+        );
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CloneAppend('h'),
-        )
-        .unwrap();
+        );
         assert_eq!(state.clone_input, "gh");
+        assert_eq!(state.clone_cursor, 2);
     }
 
     #[test]
     fn clone_backspace_removes_last_char() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.clone_input = "gh".to_string();
-        apply_intent(
+        state.mode = InputMode::CloneRepo;
+        state.clone_input = String::from("gh");
+        state.input_end();
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CloneBackspace,
-        )
-        .unwrap();
+        );
         assert_eq!(state.clone_input, "g");
+        assert_eq!(state.clone_cursor, 1);
     }
 
     #[test]
     fn clone_clear_empties_input() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.clone_input = "something".to_string();
-        apply_intent(
+        state.clone_input = String::from("something");
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CloneClear,
-        )
-        .unwrap();
+        );
         assert!(state.clone_input.is_empty());
+        assert_eq!(state.clone_cursor, 0);
+    }
+
+    #[test]
+    fn clone_backspace_uses_cursor_position() {
+        let ctx = test_env();
+        let mut state = empty_state();
+        state.mode = InputMode::CloneRepo;
+        state.clone_input = String::from("aéb");
+        state.clone_cursor = "aé".len();
+
+        _ = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::CloneBackspace,
+        );
+
+        assert_eq!(state.clone_input, "ab");
+        assert_eq!(state.clone_cursor, 1);
     }
 
     // ── EnterCloneMode ────────────────────────────────────────────────────
@@ -1436,8 +2004,7 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::EnterCloneMode,
-        )
-        .unwrap();
+        );
         assert!(result.is_none());
         assert_eq!(state.mode, InputMode::Normal, "mode should stay Normal");
         assert_eq!(state.message, old_message, "message should not change");
@@ -1448,19 +2015,19 @@ mod tests {
         let ctx = test_env();
         let mut state = empty_state();
         state.view = ViewMode::Repos;
-        state.clone_input = "leftover".to_string();
-        apply_intent(
+        state.clone_input = String::from("leftover");
+        _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::EnterCloneMode,
-        )
-        .unwrap();
+        );
         assert_eq!(state.mode, InputMode::CloneRepo);
         assert!(
             state.clone_input.is_empty(),
             "clone_input should be cleared"
         );
+        assert_eq!(state.clone_cursor, 0);
         assert!(
             state.message.contains("Clone"),
             "message should mention Clone: {}",
@@ -1480,14 +2047,276 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::FinishSelected,
-        )
-        .unwrap();
+        );
         assert!(result.is_none());
         assert!(
             state.message.contains("Tasks view"),
             "message should mention Tasks view: {}",
             state.message
         );
+    }
+
+    #[test]
+    fn finish_dirty_task_sets_pending_force_finish() {
+        let (_dir, ctx, mut state, worktree) = dirty_finish_fixture("dirty-pending");
+        let result = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::FinishSelected,
+        );
+
+        assert!(result.is_none());
+        assert!(worktree.exists(), "normal finish must leave dirty worktree");
+        assert!(state.pending_force_finish_matches_selected_task());
+        assert!(
+            state.message.starts_with("Press f again"),
+            "retry hint should lead narrow status message: {}",
+            state.message
+        );
+        assert!(
+            state.message.contains("Use --force") && state.message.contains("Press f again"),
+            "message should contain force prompt: {}",
+            state.message
+        );
+    }
+
+    #[test]
+    fn second_finish_on_pending_dirty_task_forces_and_refreshes() {
+        let (_dir, ctx, mut state, worktree) = dirty_finish_fixture("dirty-force");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+
+        assert!(!worktree.exists(), "forced finish should remove worktree");
+        assert!(!state.pending_force_finish_matches_selected_task());
+        assert!(
+            state.task_load.is_loading(),
+            "finish should refresh task list"
+        );
+        assert!(
+            state.message.contains("Finished task"),
+            "message should report finish: {}",
+            state.message
+        );
+    }
+
+    #[test]
+    fn actionable_intent_clears_pending_force_finish() {
+        let (_dir, ctx, mut state, worktree) = dirty_finish_fixture("dirty-clear");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        assert!(state.pending_force_finish_matches_selected_task());
+        assert!(state.message.contains("Press f again"));
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::MoveNext);
+        assert!(!state.pending_force_finish_matches_selected_task());
+        assert_eq!(state.message, "Ready");
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        assert!(
+            worktree.exists(),
+            "finish after another action should be normal"
+        );
+        assert!(state.pending_force_finish_matches_selected_task());
+    }
+
+    #[test]
+    fn unbound_key_clears_pending_force_finish() {
+        let (_dir, ctx, mut state, worktree) = dirty_finish_fixture("dirty-unbound");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        assert!(state.pending_force_finish_matches_selected_task());
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::UnboundKey);
+        assert!(!state.pending_force_finish_matches_selected_task());
+        assert_eq!(state.message, "Ready");
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        assert!(
+            worktree.exists(),
+            "finish after unbound key should be normal"
+        );
+        assert!(state.pending_force_finish_matches_selected_task());
+    }
+
+    #[test]
+    fn toggle_help_key_clears_pending_force_finish_prompt() {
+        let (_dir, ctx, mut state, _worktree) = dirty_finish_fixture("dirty-help-toggle");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::ToggleHelp);
+
+        assert!(state.pending_force_finish.is_none());
+        assert_eq!(state.message, "Ready");
+        assert!(state.show_help);
+    }
+
+    #[test]
+    fn handle_finish_error_clears_pending_on_non_dirty_error() {
+        let mut state = UiState::new(vec![task_row("github.com/acme/app", "main")], vec![], None);
+        assert!(state.set_pending_force_finish_to_selected_task());
+        state.message = format!(
+            "{} {}",
+            super::PENDING_FORCE_FINISH_PROMPT,
+            Error::DirtyWorktree
+        );
+
+        super::handle_finish_error(
+            &mut state,
+            super::FinishMode::Normal,
+            &Error::failed("boom"),
+        );
+
+        assert!(state.pending_force_finish.is_none());
+        assert_eq!(state.message, "boom");
+    }
+
+    #[test]
+    fn handle_finish_error_clears_pending_on_force_error() {
+        let mut state = UiState::new(vec![task_row("github.com/acme/app", "main")], vec![], None);
+        assert!(state.set_pending_force_finish_to_selected_task());
+
+        super::handle_finish_error(&mut state, super::FinishMode::Force, &Error::DirtyWorktree);
+
+        assert!(state.pending_force_finish.is_none());
+        assert_eq!(state.message, Error::DirtyWorktree.to_string());
+    }
+
+    #[test]
+    fn terminal_noise_does_not_clear_pending_force_finish() {
+        let (_dir, ctx, mut state, _worktree) = dirty_finish_fixture("dirty-terminal-noop");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        assert!(
+            apply_intent_with_source(
+                &ctx,
+                &mut state,
+                &mut loader,
+                UiIntent::Noop,
+                IntentSource::Terminal,
+            )
+            .is_none()
+        );
+
+        assert!(state.pending_force_finish_matches_selected_task());
+        assert!(state.message.contains("Press f again"));
+    }
+
+    #[test]
+    fn passive_mouse_moved_does_not_clear_pending_force_finish() {
+        let (_dir, ctx, mut state, _worktree) = dirty_finish_fixture("dirty-mouse-moved");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        let intent = from_mouse(&state, MouseEventKind::Moved, 0, 0);
+        assert!(
+            apply_intent_with_source(
+                &ctx,
+                &mut state,
+                &mut loader,
+                intent,
+                source_for_mouse(MouseEventKind::Moved),
+            )
+            .is_none()
+        );
+
+        assert!(state.pending_force_finish_matches_selected_task());
+        assert!(state.message.contains("Press f again"));
+    }
+
+    #[test]
+    fn mouse_scroll_to_another_task_clears_pending_force_finish_prompt() {
+        let (_dir, ctx, mut state, _worktree_a, _worktree_b) =
+            two_dirty_finish_fixture("dirty-mouse-scroll-away");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        let intent = from_mouse(&state, MouseEventKind::ScrollDown, 0, 0);
+        assert!(
+            apply_intent_with_source(
+                &ctx,
+                &mut state,
+                &mut loader,
+                intent,
+                source_for_mouse(MouseEventKind::ScrollDown),
+            )
+            .is_none()
+        );
+
+        assert!(state.pending_force_finish.is_none());
+        assert_eq!(state.message, "Ready");
+    }
+
+    #[test]
+    fn mouse_down_noop_clears_pending_force_finish_prompt() {
+        let (_dir, ctx, mut state, _worktree) = dirty_finish_fixture("dirty-mouse-noop");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        let kind = MouseEventKind::Down(MouseButton::Left);
+        let intent = from_mouse(&state, kind, 0, u16::MAX);
+        assert!(
+            apply_intent_with_source(
+                &ctx,
+                &mut state,
+                &mut loader,
+                intent,
+                source_for_mouse(kind),
+            )
+            .is_none()
+        );
+
+        assert!(state.pending_force_finish.is_none());
+        assert_eq!(state.message, "Ready");
+    }
+
+    #[test]
+    fn mouse_selecting_another_task_prevents_force_finish_from_applying_to_it() {
+        let (_dir, ctx, mut state, worktree_a, worktree_b) =
+            two_dirty_finish_fixture("dirty-mouse-select-away");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        assert!(
+            apply_intent_with_source(
+                &ctx,
+                &mut state,
+                &mut loader,
+                UiIntent::ClickTaskRow(1),
+                IntentSource::Mouse,
+            )
+            .is_none()
+        );
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+
+        assert!(
+            worktree_a.exists(),
+            "task A should remain dirty and armed only once"
+        );
+        assert!(
+            worktree_b.exists(),
+            "task B should not be force-finished after selecting away from A"
+        );
+        assert!(state.pending_force_finish_matches_selected_task());
+        assert!(state.message.contains("Press f again"));
+    }
+
+    #[test]
+    fn message_setting_intent_replaces_pending_force_finish_prompt() {
+        let (_dir, ctx, mut state, _worktree) = dirty_finish_fixture("dirty-message-replace");
+        let mut loader = LoaderHandle::noop();
+
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::FinishSelected);
+        _ = apply_intent(&ctx, &mut state, &mut loader, UiIntent::RefreshCurrentView);
+
+        assert!(!state.pending_force_finish_matches_selected_task());
+        assert_eq!(state.message, "Refreshing task list…");
     }
 
     #[test]
@@ -1500,8 +2329,7 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::ParkSelected,
-        )
-        .unwrap();
+        );
         assert!(result.is_none());
         assert!(
             state.message.contains("Tasks view"),
@@ -1523,8 +2351,7 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::ToggleDetach,
-        )
-        .unwrap();
+        );
         assert!(result.is_none());
         assert!(
             state.message.contains("Repos view"),
@@ -1544,8 +2371,7 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::ToggleDetach,
-        )
-        .unwrap();
+        );
         assert!(result.is_none());
         assert!(
             state.message.contains("No repo selected"),
@@ -1565,8 +2391,7 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::OpenSelected,
-        )
-        .unwrap();
+        );
         assert!(
             result.is_none(),
             "should not return an action with no tasks"
@@ -1589,7 +2414,7 @@ mod tests {
             status: TaskStatus::Open,
             repo: RepoKey::new("github.com/a/b"),
             branch: BranchName::new("my-branch"),
-            worktree_name: "my-branch".to_string(),
+            worktree_name: String::from("my-branch"),
             path: PathBuf::from("/tmp/a"),
             opencode: crate::tools::opencode::status::OpenCodeState::None,
         };
@@ -1599,11 +2424,248 @@ mod tests {
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::OpenSelected,
-        )
-        .unwrap();
+        );
         assert!(
             matches!(result, Some(UiAction::Open(_))),
             "should return Open action"
+        );
+    }
+
+    #[test]
+    fn mouse_down_on_task_hit_target_returns_task_click_intent() {
+        let mut state = UiState::new(
+            vec![
+                task_row("github.com/acme/app", "main"),
+                task_row("github.com/acme/app", "feature"),
+            ],
+            vec![],
+            None,
+        );
+        state.register_task_mouse_hit_targets(ratatui::layout::Rect::new(0, 0, 80, 8), 0);
+
+        assert_eq!(
+            from_mouse(&state, MouseEventKind::Down(MouseButton::Left), 2, 4),
+            UiIntent::ClickTaskRow(1)
+        );
+    }
+
+    #[test]
+    fn mouse_down_on_selected_task_hit_target_returns_task_click_intent() {
+        let mut state = UiState::new(vec![task_row("github.com/acme/app", "main")], vec![], None);
+        state.register_task_mouse_hit_targets(ratatui::layout::Rect::new(0, 0, 80, 4), 0);
+
+        assert_eq!(
+            from_mouse(&state, MouseEventKind::Down(MouseButton::Left), 2, 1),
+            UiIntent::ClickTaskRow(0)
+        );
+    }
+
+    #[test]
+    fn mouse_down_on_repo_hit_target_returns_repo_click_intent() {
+        let mut state = UiState::new(
+            vec![],
+            vec![
+                repo_row("github.com/acme/app"),
+                repo_row("github.com/acme/ops"),
+            ],
+            None,
+        );
+        state.view = ViewMode::Repos;
+        state.register_repo_mouse_hit_targets(ratatui::layout::Rect::new(0, 0, 80, 3), 0);
+
+        assert_eq!(
+            from_mouse(&state, MouseEventKind::Down(MouseButton::Left), 2, 2),
+            UiIntent::ClickRepoRow(1)
+        );
+    }
+
+    #[test]
+    fn mouse_down_outside_hit_targets_is_noop() {
+        let mut state = UiState::new(vec![task_row("github.com/acme/app", "main")], vec![], None);
+        state.register_task_mouse_hit_targets(ratatui::layout::Rect::new(0, 0, 80, 4), 0);
+
+        assert_eq!(
+            from_mouse(&state, MouseEventKind::Down(MouseButton::Left), 2, 10),
+            UiIntent::Noop
+        );
+    }
+
+    #[test]
+    fn mouse_down_while_not_normal_mode_is_noop() {
+        let mut state = UiState::new(vec![task_row("github.com/acme/app", "main")], vec![], None);
+        state.mode = InputMode::Filter;
+        state.register_task_mouse_hit_targets(ratatui::layout::Rect::new(0, 0, 80, 4), 0);
+
+        assert_eq!(
+            from_mouse(&state, MouseEventKind::Down(MouseButton::Left), 2, 1),
+            UiIntent::Noop
+        );
+    }
+
+    #[test]
+    fn clicking_unselected_task_selects_it() {
+        let ctx = test_env();
+        let mut state = UiState::new(
+            vec![
+                task_row("github.com/acme/app", "main"),
+                task_row("github.com/acme/app", "feature"),
+            ],
+            vec![],
+            None,
+        );
+
+        let result = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::ClickTaskRow(1),
+        );
+
+        assert!(result.is_none());
+        assert_eq!(state.task_selected, 1);
+    }
+
+    #[test]
+    fn clicking_unselected_repo_selects_it() {
+        let ctx = test_env();
+        let mut state = UiState::new(
+            vec![],
+            vec![
+                repo_row("github.com/acme/app"),
+                repo_row("github.com/acme/ops"),
+            ],
+            None,
+        );
+        state.view = ViewMode::Repos;
+
+        let result = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::ClickRepoRow(1),
+        );
+
+        assert!(result.is_none());
+        assert_eq!(state.repo_selected, 1);
+        assert_eq!(state.mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn task_click_in_repos_view_is_noop() {
+        let ctx = test_env();
+        let mut state = UiState::new(
+            vec![task_row("github.com/acme/app", "main")],
+            vec![repo_row("github.com/acme/app")],
+            None,
+        );
+        state.view = ViewMode::Repos;
+
+        let result = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::ClickTaskRow(0),
+        );
+
+        assert!(result.is_none());
+        assert_eq!(state.view, ViewMode::Repos);
+        assert_eq!(state.task_selected, 0);
+    }
+
+    #[test]
+    fn repo_click_in_tasks_view_is_noop() {
+        let ctx = test_env();
+        let mut state = UiState::new(
+            vec![task_row("github.com/acme/app", "main")],
+            vec![repo_row("github.com/acme/app")],
+            None,
+        );
+
+        let result = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::ClickRepoRow(0),
+        );
+
+        assert!(result.is_none());
+        assert_eq!(state.view, ViewMode::Tasks);
+        assert_eq!(state.repo_selected, 0);
+    }
+
+    #[test]
+    fn clicking_selected_task_opens_it() {
+        let ctx = test_env();
+        let mut state = UiState::new(
+            vec![task_row("github.com/acme/app", "feature")],
+            vec![],
+            None,
+        );
+
+        let result = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::ClickTaskRow(0),
+        );
+
+        let opened_branch = match result {
+            Some(UiAction::Open(row)) => Some(row.branch.to_string()),
+            Some(UiAction::Quit | UiAction::Create { .. }) | None => None,
+        };
+        assert_eq!(opened_branch.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn clicking_selected_repo_enters_create_task_mode_scoped_to_repo() {
+        let ctx = test_env();
+        let mut state = UiState::new(
+            vec![],
+            vec![
+                repo_row("github.com/acme/app"),
+                repo_row("github.com/acme/ops"),
+            ],
+            None,
+        );
+        state.view = ViewMode::Repos;
+        state.repo_selected = 1;
+        state.create_branch = String::from("leftover");
+
+        let result = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::ClickRepoRow(1),
+        );
+
+        assert!(result.is_none());
+        assert_eq!(state.mode, InputMode::CreateTask);
+        assert_eq!(
+            state.task_repo_scope,
+            Some(String::from("github.com/acme/ops"))
+        );
+        assert!(state.create_branch.is_empty());
+    }
+
+    #[test]
+    fn enter_on_selected_repo_still_opens_repo_tasks() {
+        let ctx = test_env();
+        let mut state = UiState::new(vec![], vec![repo_row("github.com/acme/app")], None);
+        state.view = ViewMode::Repos;
+
+        let result = apply_intent(
+            &ctx,
+            &mut state,
+            &mut LoaderHandle::noop(),
+            UiIntent::OpenSelected,
+        );
+
+        assert!(result.is_none());
+        assert_eq!(state.view, ViewMode::Tasks);
+        assert_eq!(state.mode, InputMode::Normal);
+        assert_eq!(
+            state.task_repo_scope,
+            Some(String::from("github.com/acme/app"))
         );
     }
 
@@ -1613,14 +2675,13 @@ mod tests {
     fn create_submit_with_empty_branch_sets_error_message() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.create_branch = "  ".to_string(); // whitespace only
+        state.create_branch = String::from("  "); // whitespace only
         let result = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
             UiIntent::CreateSubmit,
-        )
-        .unwrap();
+        );
         assert!(result.is_none(), "should not return action on empty branch");
         assert!(
             state.message.contains("empty") || state.message.contains("cannot"),
@@ -1646,7 +2707,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new(repo),
                 branch: BranchName::new(branch),
-                worktree_name: branch.to_string(),
+                worktree_name: branch.to_owned(),
                 path: PathBuf::from(format!("/tmp/{repo}/{branch}")),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             }
@@ -1654,8 +2715,8 @@ mod tests {
 
         fn fingerprint(repo_entry: &str, session: &str) -> TaskTopologyFingerprint {
             TaskTopologyFingerprint {
-                repos: vec![(RepoKey::new("github.com/acme/app"), repo_entry.to_string())],
-                sessions: vec![session.to_string()],
+                repos: vec![(RepoKey::new("github.com/acme/app"), repo_entry.to_owned())],
+                sessions: vec![session.to_owned()],
             }
         }
 
@@ -1776,7 +2837,7 @@ mod tests {
                 status: TaskStatus::Open,
                 repo: RepoKey::new("github.com/a/b"),
                 branch: BranchName::new("main"),
-                worktree_name: "main".to_string(),
+                worktree_name: String::from("main"),
                 path: PathBuf::from("/tmp/a/main"),
                 opencode: crate::tools::opencode::status::OpenCodeState::None,
             };
@@ -1787,14 +2848,17 @@ mod tests {
         /// `last_refresh`, so the interval-gate branch never blocks
         /// when a test wants a spawn to happen.
         fn past_interval(last: Instant) -> Instant {
-            last.checked_add(OPENCODE_REFRESH_INTERVAL + std::time::Duration::from_millis(1))
+            last.checked_add(OPENCODE_REFRESH_INTERVAL)
+                .and_then(|instant| instant.checked_add(std::time::Duration::from_millis(1)))
                 .expect("instant overflow")
         }
 
         #[test]
         fn skips_when_handle_in_flight() {
             let state = state_with_one_task();
-            let last = Instant::now() - OPENCODE_REFRESH_INTERVAL * 10;
+            let last = Instant::now()
+                .checked_sub(OPENCODE_REFRESH_INTERVAL)
+                .expect("instant underflow");
             let mut last_refresh = last;
             let mut handle: Option<LoaderHandle> = Some(LoaderHandle::noop());
             let now = past_interval(last);
@@ -1824,7 +2888,9 @@ mod tests {
         #[test]
         fn skips_when_task_rows_empty() {
             let state = UiState::new(vec![], vec![], None);
-            let last = Instant::now() - OPENCODE_REFRESH_INTERVAL * 10;
+            let last = Instant::now()
+                .checked_sub(OPENCODE_REFRESH_INTERVAL * 10)
+                .unwrap();
             let mut last_refresh = last;
             let mut handle: Option<LoaderHandle> = None;
             let now = past_interval(last);
@@ -1841,7 +2907,9 @@ mod tests {
         #[test]
         fn spawns_when_preconditions_met_and_bumps_last_refresh() {
             let state = state_with_one_task();
-            let last = Instant::now() - OPENCODE_REFRESH_INTERVAL * 10;
+            let last = Instant::now()
+                .checked_sub(OPENCODE_REFRESH_INTERVAL * 10)
+                .unwrap();
             let mut last_refresh = last;
             let mut handle: Option<LoaderHandle> = None;
             let now = past_interval(last);

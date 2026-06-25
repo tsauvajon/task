@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
+const HOME: &str = "HOME";
+
 /// Pins a detached worktree to a specific branch.
 ///
 /// Without an entry, `task detach add` / `task detach update` track the
@@ -35,25 +38,25 @@ pub struct DetachedEntry {
 ///
 /// Selected via the top-level `editor = "..."` key in `config.toml`.
 /// Defaults to [`EditorKind::Vscodium`] for backward compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString)]
 pub enum EditorKind {
     #[default]
+    #[strum(serialize = "vscodium", serialize = "codium")]
     Vscodium,
+    #[strum(serialize = "helix", serialize = "hx")]
     Helix,
 }
 
 impl EditorKind {
     fn parse(value: &str) -> Result<Self> {
-        match value {
-            "vscodium" | "codium" => Ok(Self::Vscodium),
-            "helix" | "hx" => Ok(Self::Helix),
-            other => Err(Error::failed(format!(
-                "Unknown editor `{other}` in config. Allowed values: \"vscodium\", \"helix\"."
-            ))),
-        }
+        value.parse::<Self>().map_err(|_| {
+            Error::failed(format!(
+                "Unknown editor `{value}` in config. Allowed values: \"vscodium\", \"helix\"."
+            ))
+        })
     }
 
-    fn as_config_string(self) -> &'static str {
+    const fn as_config_string(self) -> &'static str {
         match self {
             Self::Vscodium => "vscodium",
             Self::Helix => "helix",
@@ -182,7 +185,7 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<()> {
         editor: if config.editor == EditorKind::default() {
             None
         } else {
-            Some(config.editor.as_config_string().to_string())
+            Some(config.editor.as_config_string().to_owned())
         },
         vscodium: if config.codium_trusted_roots.is_empty() {
             None
@@ -274,8 +277,8 @@ pub fn config_file_path() -> Result<PathBuf> {
 
 fn config_dir_path() -> Result<PathBuf> {
     resolve_config_dir(
-        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
-        std::env::var("HOME").ok().as_deref(),
+        std::env::var(XDG_CONFIG_HOME).ok().as_deref(),
+        std::env::var(HOME).ok().as_deref(),
     )
 }
 
@@ -289,9 +292,9 @@ fn resolve_config_dir(xdg_config_home: Option<&str>, home: Option<&str>) -> Resu
 }
 
 fn home_dir() -> Result<PathBuf> {
-    std::env::var("HOME")
+    std::env::var(HOME)
         .map(PathBuf::from)
-        .map_err(|_| Error::failed("HOME is not set"))
+        .map_err(|_| Error::failed(format!("{HOME} is not set")))
 }
 
 #[must_use]
@@ -357,9 +360,9 @@ mod tests {
         #[test]
         fn supports_file_without_vscodium_section() {
             let config = to_runtime_config(TaskConfigFile {
-                repos_dir: "~/dev/repos".to_string(),
-                wt_dir: "~/dev/wt".to_string(),
-                detached_dir: "~/dev/detached".to_string(),
+                repos_dir: "~/dev/repos".to_owned(),
+                wt_dir: "~/dev/wt".to_owned(),
+                detached_dir: "~/dev/detached".to_owned(),
                 editor: None,
                 vscodium: None,
                 detached: Vec::new(),
@@ -372,12 +375,12 @@ mod tests {
         #[test]
         fn expands_vscodium_trusted_roots() {
             let config = to_runtime_config(TaskConfigFile {
-                repos_dir: "~/dev/repos".to_string(),
-                wt_dir: "~/dev/wt".to_string(),
-                detached_dir: "~/dev/detached".to_string(),
+                repos_dir: "~/dev/repos".to_owned(),
+                wt_dir: "~/dev/wt".to_owned(),
+                detached_dir: "~/dev/detached".to_owned(),
                 editor: None,
                 vscodium: Some(VscodiumConfigFile {
-                    trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_string()],
+                    trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_owned()],
                 }),
                 detached: Vec::new(),
             })
@@ -390,9 +393,9 @@ mod tests {
         #[test]
         fn expands_repos_wt_and_detached_dirs() {
             let config = to_runtime_config(TaskConfigFile {
-                repos_dir: "~/repos".to_string(),
-                wt_dir: "~/wt".to_string(),
-                detached_dir: "~/detached".to_string(),
+                repos_dir: "~/repos".to_owned(),
+                wt_dir: "~/wt".to_owned(),
+                detached_dir: "~/detached".to_owned(),
                 editor: None,
                 vscodium: None,
                 detached: Vec::new(),
@@ -408,18 +411,18 @@ mod tests {
         fn passes_through_detached_entries() {
             let entries = vec![
                 DetachedEntry {
-                    repo: "github.com/mattwparas/helix".to_string(),
-                    branch: "steel-event-system".to_string(),
+                    repo: "github.com/mattwparas/helix".to_owned(),
+                    branch: "steel-event-system".to_owned(),
                 },
                 DetachedEntry {
-                    repo: "github.com/org/fork".to_string(),
-                    branch: "custom".to_string(),
+                    repo: "github.com/org/fork".to_owned(),
+                    branch: "custom".to_owned(),
                 },
             ];
             let config = to_runtime_config(TaskConfigFile {
-                repos_dir: "/tmp/repos".to_string(),
-                wt_dir: "/tmp/wt".to_string(),
-                detached_dir: "/tmp/detached".to_string(),
+                repos_dir: "/tmp/repos".to_owned(),
+                wt_dir: "/tmp/wt".to_owned(),
+                detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
                 detached: entries.clone(),
@@ -432,9 +435,9 @@ mod tests {
         #[test]
         fn empty_detached_entries_by_default() {
             let config = to_runtime_config(TaskConfigFile {
-                repos_dir: "/tmp/repos".to_string(),
-                wt_dir: "/tmp/wt".to_string(),
-                detached_dir: "/tmp/detached".to_string(),
+                repos_dir: "/tmp/repos".to_owned(),
+                wt_dir: "/tmp/wt".to_owned(),
+                detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
                 detached: Vec::new(),
@@ -447,14 +450,14 @@ mod tests {
         #[test]
         fn rejects_detached_entry_with_empty_branch() {
             let err = to_runtime_config(TaskConfigFile {
-                repos_dir: "/tmp/repos".to_string(),
-                wt_dir: "/tmp/wt".to_string(),
-                detached_dir: "/tmp/detached".to_string(),
+                repos_dir: "/tmp/repos".to_owned(),
+                wt_dir: "/tmp/wt".to_owned(),
+                detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
                 detached: vec![DetachedEntry {
-                    repo: "github.com/org/repo".to_string(),
-                    branch: "".to_string(),
+                    repo: "github.com/org/repo".to_owned(),
+                    branch: String::new(),
                 }],
             })
             .unwrap_err();
@@ -470,14 +473,14 @@ mod tests {
         #[test]
         fn rejects_detached_entry_with_whitespace_only_branch() {
             let err = to_runtime_config(TaskConfigFile {
-                repos_dir: "/tmp/repos".to_string(),
-                wt_dir: "/tmp/wt".to_string(),
-                detached_dir: "/tmp/detached".to_string(),
+                repos_dir: "/tmp/repos".to_owned(),
+                wt_dir: "/tmp/wt".to_owned(),
+                detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
                 detached: vec![DetachedEntry {
-                    repo: "github.com/org/repo".to_string(),
-                    branch: "   ".to_string(),
+                    repo: "github.com/org/repo".to_owned(),
+                    branch: "   ".to_owned(),
                 }],
             })
             .unwrap_err();
@@ -488,14 +491,14 @@ mod tests {
         #[test]
         fn rejects_detached_entry_with_empty_repo() {
             let err = to_runtime_config(TaskConfigFile {
-                repos_dir: "/tmp/repos".to_string(),
-                wt_dir: "/tmp/wt".to_string(),
-                detached_dir: "/tmp/detached".to_string(),
+                repos_dir: "/tmp/repos".to_owned(),
+                wt_dir: "/tmp/wt".to_owned(),
+                detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
                 detached: vec![DetachedEntry {
-                    repo: "".to_string(),
-                    branch: "main".to_string(),
+                    repo: String::new(),
+                    branch: "main".to_owned(),
                 }],
             })
             .unwrap_err();
@@ -509,10 +512,10 @@ mod tests {
 
         fn file_with_editor(editor: Option<&str>) -> TaskConfigFile {
             TaskConfigFile {
-                repos_dir: "/tmp/repos".to_string(),
-                wt_dir: "/tmp/wt".to_string(),
-                detached_dir: "/tmp/detached".to_string(),
-                editor: editor.map(str::to_string),
+                repos_dir: "/tmp/repos".to_owned(),
+                wt_dir: "/tmp/wt".to_owned(),
+                detached_dir: "/tmp/detached".to_owned(),
+                editor: editor.map(str::to_owned),
                 vscodium: None,
                 detached: Vec::new(),
             }
@@ -645,7 +648,7 @@ mod tests {
         impl TempDir {
             fn new(name: &str) -> Self {
                 let path = env::temp_dir().join(format!("task-rs-config-{name}"));
-                let _ = fs::remove_dir_all(&path);
+                _ = fs::remove_dir_all(&path);
                 fs::create_dir_all(&path).expect("create temp dir");
                 Self(path)
             }
@@ -657,7 +660,7 @@ mod tests {
 
         impl Drop for TempDir {
             fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
+                _ = fs::remove_dir_all(&self.0);
             }
         }
 
@@ -829,7 +832,7 @@ branch = "custom"
         impl TempDir {
             fn new(name: &str) -> Self {
                 let path = env::temp_dir().join(format!("task-rs-config-write-{name}"));
-                let _ = fs::remove_dir_all(&path);
+                _ = fs::remove_dir_all(&path);
                 fs::create_dir_all(&path).expect("create temp dir");
                 Self(path)
             }
@@ -841,7 +844,7 @@ branch = "custom"
 
         impl Drop for TempDir {
             fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
+                _ = fs::remove_dir_all(&self.0);
             }
         }
 
@@ -913,12 +916,12 @@ branch = "custom"
                 codium_trusted_roots: Vec::new(),
                 detached_entries: vec![
                     super::super::DetachedEntry {
-                        repo: "github.com/mattwparas/helix".to_string(),
-                        branch: "steel-event-system".to_string(),
+                        repo: "github.com/mattwparas/helix".to_owned(),
+                        branch: "steel-event-system".to_owned(),
                     },
                     super::super::DetachedEntry {
-                        repo: "github.com/org/fork".to_string(),
-                        branch: "custom".to_string(),
+                        repo: "github.com/org/fork".to_owned(),
+                        branch: "custom".to_owned(),
                     },
                 ],
                 editor: EditorKind::default(),
@@ -1011,12 +1014,12 @@ branch = "custom"
                 codium_trusted_roots: Vec::new(),
                 detached_entries: vec![
                     super::super::DetachedEntry {
-                        repo: "github.com/mattwparas/helix".to_string(),
-                        branch: "steel-event-system".to_string(),
+                        repo: "github.com/mattwparas/helix".to_owned(),
+                        branch: "steel-event-system".to_owned(),
                     },
                     super::super::DetachedEntry {
-                        repo: "github.com/org/fork".to_string(),
-                        branch: "custom".to_string(),
+                        repo: "github.com/org/fork".to_owned(),
+                        branch: "custom".to_owned(),
                     },
                 ],
                 editor: EditorKind::Helix,
@@ -1049,9 +1052,9 @@ branch = "custom"
         #[test]
         fn trims_whitespace_around_paths() {
             let config = to_runtime_config(TaskConfigFile {
-                repos_dir: "  /tmp/repos  ".to_string(),
-                wt_dir: "  /tmp/wt  ".to_string(),
-                detached_dir: "  /tmp/detached  ".to_string(),
+                repos_dir: "  /tmp/repos  ".to_owned(),
+                wt_dir: "  /tmp/wt  ".to_owned(),
+                detached_dir: "  /tmp/detached  ".to_owned(),
                 editor: None,
                 vscodium: None,
                 detached: Vec::new(),
@@ -1089,7 +1092,7 @@ branch = "custom"
         impl TempDir {
             fn new(name: &str) -> Self {
                 let path = env::temp_dir().join(format!("task-rs-config-edge-{name}"));
-                let _ = fs::remove_dir_all(&path);
+                _ = fs::remove_dir_all(&path);
                 fs::create_dir_all(&path).expect("create temp dir");
                 Self(path)
             }
@@ -1101,7 +1104,7 @@ branch = "custom"
 
         impl Drop for TempDir {
             fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
+                _ = fs::remove_dir_all(&self.0);
             }
         }
 

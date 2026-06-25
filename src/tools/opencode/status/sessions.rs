@@ -9,7 +9,7 @@ use crate::tools::opencode::db::SessionMeta;
 
 /// Upper bound on sessions inspected per directory in one refresh.
 ///
-/// No real OpenCode installation is anywhere near this — the busiest
+/// No real `OpenCode` installation is anywhere near this — the busiest
 /// directory observed in a dev laptop had 116 active sessions — but
 /// we keep a ceiling so a pathological DB can't stall a refresh.
 /// Raising from the original 20 ensures that a stuck session in a
@@ -48,5 +48,5 @@ pub(super) fn sessions_in_db(conn: &Connection, directories: &[String]) -> Vec<S
     let Some(rows) = rows else {
         return Vec::new();
     };
-    rows.filter_map(|row| row.ok()).collect()
+    rows.filter_map(std::result::Result::ok).collect()
 }

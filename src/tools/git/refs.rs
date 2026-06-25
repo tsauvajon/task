@@ -35,18 +35,18 @@ pub fn detect_default_base(gitdir: &Path) -> String {
             return remote_branch;
         }
         if rev_exists(gitdir, branch) {
-            return branch.to_string();
+            return branch.to_owned();
         }
     }
 
     // Fallback: try common default branch names when ls-remote is unavailable.
     for fallback in ["origin/main", "origin/master"] {
         if rev_exists(gitdir, fallback) {
-            return fallback.to_string();
+            return fallback.to_owned();
         }
     }
 
-    "HEAD".to_string()
+    "HEAD".to_owned()
 }
 
 pub fn fetch_origin_refs(gitdir: &Path) -> Result<()> {
@@ -120,7 +120,7 @@ mod tests {
     /// Create a temporary bare git repository, isolated from user config.
     fn make_bare_repo(name: &str) -> std::path::PathBuf {
         let dir = env::temp_dir().join(format!("task-rs-refs-bare-{name}.git"));
-        let _ = fs::remove_dir_all(&dir);
+        _ = fs::remove_dir_all(&dir);
         let status = Command::new("git")
             .args(["init", "--bare", dir.to_str().expect("valid utf-8")])
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -140,7 +140,7 @@ mod tests {
     /// races with parallel tests that mutate `HOME`.
     fn make_regular_repo_with_commit(name: &str) -> std::path::PathBuf {
         let dir = env::temp_dir().join(format!("task-rs-refs-regular-{name}"));
-        let _ = fs::remove_dir_all(&dir);
+        _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create dir");
 
         let run = |args: &[&str]| {
@@ -174,13 +174,13 @@ mod tests {
             let dir = make_bare_repo("ref-exists-false");
             let exists = ref_exists(&dir, "refs/heads/nonexistent-branch-xyz");
             assert!(!exists, "nonexistent ref should return false");
-            let _ = fs::remove_dir_all(&dir);
+            _ = fs::remove_dir_all(&dir);
         }
 
         #[test]
         fn returns_false_on_nonexistent_gitdir() {
             let dir = env::temp_dir().join("task-rs-refs-nonexistent-gitdir.git");
-            let _ = fs::remove_dir_all(&dir);
+            _ = fs::remove_dir_all(&dir);
             let exists = ref_exists(&dir, "refs/heads/main");
             assert!(!exists, "nonexistent gitdir should return false");
         }
@@ -191,7 +191,7 @@ mod tests {
             let gitdir = repo.join(".git");
             let exists = ref_exists(&gitdir, "refs/heads/main");
             assert!(exists, "main branch should exist after initial commit");
-            let _ = fs::remove_dir_all(&repo);
+            _ = fs::remove_dir_all(&repo);
         }
     }
 
@@ -203,13 +203,13 @@ mod tests {
             let dir = make_bare_repo("rev-exists-false");
             let exists = rev_exists(&dir, "nonexistent-branch-xyz");
             assert!(!exists, "nonexistent revision should return false");
-            let _ = fs::remove_dir_all(&dir);
+            _ = fs::remove_dir_all(&dir);
         }
 
         #[test]
         fn returns_false_on_nonexistent_gitdir() {
             let dir = env::temp_dir().join("task-rs-refs-nonexistent-rev-gitdir.git");
-            let _ = fs::remove_dir_all(&dir);
+            _ = fs::remove_dir_all(&dir);
             let exists = rev_exists(&dir, "HEAD");
             assert!(!exists, "nonexistent gitdir should return false");
         }
@@ -222,7 +222,7 @@ mod tests {
                 rev_exists(&gitdir, "HEAD"),
                 "HEAD should exist after commit"
             );
-            let _ = fs::remove_dir_all(&repo);
+            _ = fs::remove_dir_all(&repo);
         }
 
         #[test]
@@ -233,7 +233,7 @@ mod tests {
                 rev_exists(&gitdir, "main"),
                 "main should resolve to a commit"
             );
-            let _ = fs::remove_dir_all(&repo);
+            _ = fs::remove_dir_all(&repo);
         }
     }
 
@@ -249,7 +249,7 @@ mod tests {
                 Some("main"),
                 "expected 'main' branch, got {branch:?}"
             );
-            let _ = fs::remove_dir_all(&dir);
+            _ = fs::remove_dir_all(&dir);
         }
 
         #[test]
@@ -261,11 +261,8 @@ mod tests {
             // "master", "main", or nothing; all are acceptable.
             let dir = make_bare_repo("current-branch-bare");
             let branch = current_branch(&dir);
-            assert!(matches!(
-                branch.as_deref(),
-                None | Some("main") | Some("master")
-            ));
-            let _ = fs::remove_dir_all(&dir);
+            assert!(matches!(branch.as_deref(), None | Some("main" | "master")));
+            _ = fs::remove_dir_all(&dir);
         }
     }
 

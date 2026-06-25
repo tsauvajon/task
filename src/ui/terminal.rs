@@ -33,21 +33,20 @@ impl TerminalGuard {
     }
 }
 
-fn restore_terminal(terminal: &mut AppTerminal) -> crate::error::Result<()> {
-    disable_raw_mode()?;
-    execute!(
+fn restore_terminal_best_effort(terminal: &mut AppTerminal) {
+    let _raw_mode_result = disable_raw_mode();
+    let _screen_result = execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
         crossterm::event::DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-    Ok(())
+    );
+    let _cursor_result = terminal.show_cursor();
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if let Some(terminal) = self.terminal.as_mut() {
-            let _ = restore_terminal(terminal);
+            restore_terminal_best_effort(terminal);
         }
     }
 }

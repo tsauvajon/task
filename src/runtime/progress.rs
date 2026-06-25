@@ -16,7 +16,12 @@ use std::{
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
-use crate::runtime::spinner::FRAMES_STR;
+use crate::{
+    error::Result,
+    runtime::{process, spinner::FRAMES_STR},
+};
+
+const TERM: &str = "TERM";
 
 /// Phase of a running work item. Kept as an enum rather than a free-form
 /// string so the renderer owns the wording and we get a fixed vocabulary.
@@ -27,7 +32,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Fetching => "Fetching",
             Self::Syncing => "Syncing",
@@ -45,7 +50,7 @@ pub enum Outcome {
 
 impl Outcome {
     #[must_use]
-    pub fn is_failure(&self) -> bool {
+    pub const fn is_failure(&self) -> bool {
         matches!(self, Self::Failed { .. })
     }
 }
@@ -71,7 +76,7 @@ struct RowState {
 }
 
 impl RowState {
-    fn new(label: String, label_width: usize) -> Self {
+    const fn new(label: String, label_width: usize) -> Self {
         Self {
             label,
             label_width,
@@ -96,6 +101,7 @@ impl RowState {
 /// Batch progress reporter. Spawn once per batch, hand out `RowHandle`s
 /// to workers, and call [`ProgressReporter::finish`] to render the final
 /// snapshot and drop the animation.
+#[derive(Debug)]
 pub struct ProgressReporter {
     mode: Mode,
     multi: Option<MultiProgress>,
@@ -106,6 +112,7 @@ pub struct ProgressReporter {
     completed: Arc<Mutex<usize>>,
 }
 
+#[derive(Debug)]
 struct Row {
     bar: Option<ProgressBar>,
     state: Arc<Mutex<RowState>>,
@@ -113,6 +120,7 @@ struct Row {
 
 /// Worker-side handle for one row. Cheap to clone; all state mutations
 /// go through the shared `Arc<Mutex<...>>` behind the handle.
+#[derive(Debug)]
 pub struct RowHandle {
     state: Arc<Mutex<RowState>>,
     bar: Option<ProgressBar>,
@@ -129,15 +137,15 @@ impl ProgressReporter {
     /// * `title` — verb shown in the header, e.g. `"Updating"`.
     /// * `labels` — one string per work item, rendered in the row prefix.
     #[must_use]
-    pub fn new(title: impl Into<String>, labels: Vec<String>) -> Self {
+    pub fn new(title: impl Into<String>, labels: &[String]) -> Self {
         let title: String = title.into();
         let total = labels.len();
-        let completed = Arc::new(Mutex::new(0usize));
+        let completed = Arc::new(Mutex::new(0_usize));
         let mode = detect_mode(total);
 
         let (multi, header, rows) = match mode {
-            Mode::Tty => build_tty(&title, &labels, total),
-            Mode::Headless => build_headless(&labels),
+            Mode::Tty => build_tty(&title, labels, total),
+            Mode::Headless => build_headless(labels),
         };
 
         Self {
@@ -158,7 +166,10 @@ impl ProgressReporter {
     pub fn begin(&self, index: usize) -> Option<RowHandle> {
         let row = self.rows.get(index)?;
         {
-            let mut state = row.state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut state = row
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.started_at = Some(Instant::now());
             state.current_phase = Some(Phase::Fetching);
         }
@@ -178,13 +189,16 @@ impl ProgressReporter {
 
     /// Finish the batch. In TTY mode, leaves the final snapshot drawn
     /// on-screen; in headless mode, prints one plain line per item.
-    pub fn finish(self) {
+    pub fn finish(self) -> Result<()> {
         match self.mode {
             Mode::Tty => {
                 if let Some(header) = &self.header {
                     header.set_message(format!(
                         "{}/{} complete",
-                        *self.completed.lock().unwrap_or_else(|err| err.into_inner()),
+                        *self
+                            .completed
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
                         self.total,
                     ));
                     header.finish();
@@ -198,14 +212,19 @@ impl ProgressReporter {
                 drop(self.multi);
             }
             Mode::Headless => {
-                // In headless mode rows carry no bar; print one summary
-                // line per row so CI logs record the final state.
                 for row in &self.rows {
-                    let state = row.state.lock().unwrap_or_else(|err| err.into_inner());
-                    println!("{}", render_headless_line(&state));
+                    let line = {
+                        let state = row
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        render_headless_line(&state)
+                    };
+                    process::write_stdout_line(line)?;
                 }
             }
         }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -213,7 +232,10 @@ impl ProgressReporter {
         self.rows
             .iter()
             .map(|row| {
-                let s = row.state.lock().unwrap_or_else(|err| err.into_inner());
+                let s = row
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 RowSnapshot {
                     label: s.label.clone(),
                     phase: s.current_phase,
@@ -232,7 +254,10 @@ impl RowHandle {
             return;
         }
         {
-            let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.current_phase = Some(phase);
         }
         if let Some(bar) = &self.bar {
@@ -259,7 +284,10 @@ impl RowHandle {
         }
         self.finalized = true;
         {
-            let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.finished_at = Some(Instant::now());
             state.current_phase = None;
             state.outcome = Some(outcome);
@@ -270,10 +298,16 @@ impl RowHandle {
             bar.set_style(finished_style());
             bar.set_message(render_row_message(&self.state));
         }
-        let mut count = self.completed.lock().unwrap_or_else(|err| err.into_inner());
-        *count += 1;
+        let count = {
+            let mut count = self
+                .completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *count = count.saturating_add(1);
+            *count
+        };
         if let Some(header) = &self.header {
-            header.set_message(format!("{} {}/{}", self.title, *count, self.total));
+            header.set_message(format!("{} {}/{}", self.title, count, self.total));
         }
     }
 }
@@ -290,7 +324,7 @@ impl Drop for RowHandle {
         // a failure so the final snapshot is coherent.
         if !self.finalized {
             self.finalize(Outcome::Failed {
-                message: "worker dropped handle without reporting outcome".into(),
+                message: String::from("worker dropped handle without reporting outcome"),
             });
         }
     }
@@ -311,11 +345,11 @@ fn detect_mode(row_count: usize) -> Mode {
     if std::env::var_os("NO_COLOR").is_some() {
         return Mode::Headless;
     }
-    if std::env::var("TERM").ok().as_deref() == Some("dumb") {
+    if std::env::var(TERM).ok().as_deref() == Some("dumb") {
         return Mode::Headless;
     }
     match crossterm::terminal::size() {
-        Ok((_, rows)) if (rows as usize) < row_count.saturating_add(2) => Mode::Headless,
+        Ok((_, rows)) if usize::from(rows) < row_count.saturating_add(2) => Mode::Headless,
         _ => Mode::Tty,
     }
 }
@@ -376,32 +410,38 @@ fn build_headless(labels: &[String]) -> (Option<MultiProgress>, Option<ProgressB
 /// The spinner glyph comes from the `{spinner}` template slot and
 /// animates automatically while the bar is running.
 fn render_row_message(state: &Mutex<RowState>) -> String {
-    let state = state.lock().unwrap_or_else(|err| err.into_inner());
-    let label_width = state.label_width;
-    let right = match (&state.outcome, state.current_phase) {
+    let (label, label_width, outcome, current_phase, elapsed) = {
+        let state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            state.label.clone(),
+            state.label_width,
+            state.outcome.clone(),
+            state.current_phase,
+            state.elapsed(),
+        )
+    };
+    let right = match (&outcome, current_phase) {
         (Some(Outcome::Succeeded { note }), _) => {
-            format!("✓ {note:<10}  {:.1}s", state.elapsed().as_secs_f64())
+            format!("✓ {note:<10}  {:.1}s", elapsed.as_secs_f64())
         }
         (Some(Outcome::Failed { message }), _) => format!(
             "✗ Failed       {:.1}s  ({})",
-            state.elapsed().as_secs_f64(),
+            elapsed.as_secs_f64(),
             short(message, 48),
         ),
-        (None, Some(phase)) => format!(
-            "  {:<13}  {:.1}s",
-            phase.label(),
-            state.elapsed().as_secs_f64()
-        ),
-        (None, None) => "  Pending".to_string(),
+        (None, Some(phase)) => format!("  {:<13}  {:.1}s", phase.label(), elapsed.as_secs_f64()),
+        (None, None) => "  Pending".to_owned(),
     };
-    format!("{:<width$}  {}", state.label, right, width = label_width)
+    format!("{label:<label_width$}  {right}")
 }
 
 fn render_headless_line(state: &RowState) -> String {
     let tag = match &state.outcome {
         Some(Outcome::Succeeded { note }) => format!("✓ {note}"),
         Some(Outcome::Failed { message }) => format!("✗ Failed: {message}"),
-        None => "… Pending".to_string(),
+        None => "… Pending".to_owned(),
     };
     format!(
         "{}  {} ({:.1}s)",
@@ -413,7 +453,7 @@ fn render_headless_line(state: &RowState) -> String {
 
 fn short(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
-        return s.to_string();
+        return s.to_owned();
     }
     let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
@@ -423,7 +463,7 @@ fn short(s: &str, max: usize) -> String {
 #[cfg(test)]
 #[derive(Debug, Clone)]
 struct RowSnapshot {
-    #[expect(dead_code)] // read via Debug output during test failures.
+    #[expect(dead_code, reason = "read via Debug output during test failures")]
     label: String,
     phase: Option<Phase>,
     outcome: Option<Outcome>,
@@ -437,10 +477,8 @@ mod tests {
     use super::{Outcome, Phase, ProgressReporter, short};
 
     fn make(labels: &[&str]) -> ProgressReporter {
-        ProgressReporter::new(
-            "Updating",
-            labels.iter().map(|s| (*s).to_string()).collect(),
-        )
+        let labels = labels.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        ProgressReporter::new("Updating", &labels)
     }
 
     mod transitions {
@@ -545,7 +583,7 @@ mod tests {
         fn failure_predicate_covers_failed_only() {
             assert!(
                 Outcome::Failed {
-                    message: "x".into(),
+                    message: String::from("x"),
                 }
                 .is_failure()
             );
@@ -588,12 +626,12 @@ mod tests {
             let counter = Arc::new(AtomicUsize::new(0));
 
             let mut handles = Vec::new();
-            for i in 0..4 {
+            for (i, delay_ms) in [(0, 5), (1, 10), (2, 15), (3, 20)] {
                 let progress = Arc::clone(&progress);
                 let counter = Arc::clone(&counter);
                 handles.push(thread::spawn(move || {
                     let h = progress.begin(i).expect("row handle");
-                    thread::sleep(Duration::from_millis(5 * (i as u64 + 1)));
+                    thread::sleep(Duration::from_millis(delay_ms));
                     h.succeeded("Updated");
                     counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }));

@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use crate::tools::zellij::naming::session_name;
 
-/// VSCodium profile key derived from repo key and stable worktree identity.
+const HOME_ENV: &str = "HOME";
+const XDG_STATE_HOME_ENV: &str = "XDG_STATE_HOME";
+
+/// `VSCodium` profile key derived from repo key and stable worktree identity.
 ///
 /// Uses the same sanitization as Zellij session names so that both tools
 /// agree on the identity even after a Git branch rename.
@@ -13,8 +16,8 @@ pub fn key(repo_key: &str, worktree_name: &str) -> String {
 
 #[must_use]
 pub fn codium_state_root() -> PathBuf {
-    let xdg = std::env::var("XDG_STATE_HOME").ok();
-    let home = std::env::var("HOME").ok();
+    let xdg = std::env::var(XDG_STATE_HOME_ENV).ok();
+    let home = std::env::var(HOME_ENV).ok();
     codium_state_root_from(xdg.as_deref(), home.as_deref())
 }
 
@@ -22,15 +25,11 @@ fn codium_state_root_from(xdg_state_home: Option<&str>, home: Option<&str>) -> P
     if let Some(value) = xdg_state_home
         && !value.trim().is_empty()
     {
-        return PathBuf::from(value).join("task").join("codium");
+        return PathBuf::from(value).join("task/codium");
     }
 
     let home = home.unwrap_or("/tmp");
-    PathBuf::from(home)
-        .join(".local")
-        .join("state")
-        .join("task")
-        .join("codium")
+    PathBuf::from(home).join(".local/state/task/codium")
 }
 
 #[must_use]

@@ -15,7 +15,7 @@ enum Importance {
     Recommended,
 }
 
-fn importance_for(tool: ExternalTool, editor: EditorKind) -> Importance {
+const fn importance_for(tool: ExternalTool, editor: EditorKind) -> Importance {
     match tool {
         // `git` is the only unconditional hard requirement — almost every
         // code path shells out to it.
@@ -41,7 +41,7 @@ fn importance_for(tool: ExternalTool, editor: EditorKind) -> Importance {
 /// The two editor-specific tools (`codium`, `hx`) are only relevant for
 /// their respective `EditorKind`; reporting both unconditionally produces
 /// false-positive `[warn]` lines (e.g. warning about missing `hx` on a
-/// default VSCodium setup).
+/// default `VSCodium` setup).
 fn expected_tools(editor: EditorKind) -> Vec<ExternalTool> {
     ExternalTool::all()
         .iter()
@@ -59,20 +59,23 @@ fn expected_tools(editor: EditorKind) -> Vec<ExternalTool> {
 }
 
 pub fn run(env: &RuntimeEnvironment) -> Result<()> {
-    if check(env) {
+    if check(env)? {
         return Err(Error::failed("Doctor check found missing dependencies"));
     }
 
     Ok(())
 }
 
-fn check(env: &RuntimeEnvironment) -> bool {
+fn check(env: &RuntimeEnvironment) -> Result<bool> {
     let layout = env.layout();
     let mut missing_required = false;
 
-    println!("repos_dir: {}", layout.repos_dir().display());
-    println!("wt_dir: {}", layout.wt_dir().display());
-    println!("detached_dir: {}", layout.detached_dir().display());
+    process::write_stdout_line(format_args!("repos_dir: {}", layout.repos_dir().display()))?;
+    process::write_stdout_line(format_args!("wt_dir: {}", layout.wt_dir().display()))?;
+    process::write_stdout_line(format_args!(
+        "detached_dir: {}",
+        layout.detached_dir().display()
+    ))?;
 
     let editor = env.tasks().editor();
     for tool in expected_tools(editor) {
@@ -81,30 +84,30 @@ fn check(env: &RuntimeEnvironment) -> bool {
         let present = process::command_exists(binary);
 
         match (present, importance) {
-            (true, _) => println!("[ok]      {binary}"),
+            (true, _) => process::write_stdout_line(format_args!("[ok]      {binary}"))?,
             (false, Importance::Required) => {
-                println!(
+                process::write_stdout_line(format_args!(
                     "[missing] {binary:<9} install: {hint}",
                     hint = tool.install_hint()
-                );
+                ))?;
                 missing_required = true;
             }
             (false, Importance::Recommended) => {
-                println!(
+                process::write_stdout_line(format_args!(
                     "[warn]    {binary:<9} install: {hint}",
                     hint = tool.install_hint()
-                );
+                ))?;
             }
         }
     }
 
     if process::command_exists("opencode") && opencode::auth_storage_reachable() {
-        println!("[ok]      opencode auth storage reachable");
+        process::write_stdout_line("[ok]      opencode auth storage reachable")?;
     } else if process::command_exists("opencode") {
-        println!("[warn]    opencode auth storage not initialized yet");
+        process::write_stdout_line("[warn]    opencode auth storage not initialized yet")?;
     }
 
-    missing_required
+    Ok(missing_required)
 }
 
 #[cfg(test)]

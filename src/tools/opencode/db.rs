@@ -1,7 +1,7 @@
-//! Locate OpenCode SQLite databases and query them read-only.
+//! Locate `OpenCode` `SQLite` databases and query them read-only.
 //!
-//! OpenCode ships multiple release channels (stable, dev, …) and each
-//! channel writes to its own `opencode*.db` file under the OpenCode data
+//! `OpenCode` ships multiple release channels (stable, dev, …) and each
+//! channel writes to its own `opencode*.db` file under the `OpenCode` data
 //! directory. This module discovers every such file and resolves the
 //! most recently-updated session for a given worktree across all of
 //! them.
@@ -17,12 +17,15 @@ use std::{
 
 use rusqlite::{Connection, OpenFlags};
 
+const HOME_ENV: &str = "HOME";
+const XDG_DATA_HOME_ENV: &str = "XDG_DATA_HOME";
+
 /// Minimal session metadata needed by callers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionMeta {
     pub id: String,
     pub title: String,
-    /// Milliseconds since UNIX_EPOCH, as stored by OpenCode.
+    /// Milliseconds since `UNIX_EPOCH`, as stored by `OpenCode`.
     pub time_updated: i64,
 }
 
@@ -34,7 +37,7 @@ pub struct OwnedSession {
     pub session: SessionMeta,
 }
 
-/// Discover every `opencode*.db` file under the OpenCode data directory
+/// Discover every `opencode*.db` file under the `OpenCode` data directory
 /// that exists and is readable. Returns an empty vector when the
 /// directory is missing.
 #[must_use]
@@ -67,7 +70,7 @@ pub(crate) fn discover_in(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Resolve the most recently-updated non-archived session for
-/// `directory` across every installed OpenCode database. Returns
+/// `directory` across every installed `OpenCode` database. Returns
 /// `None` when no session exists for that directory.
 #[must_use]
 pub fn latest_session_for(directory: &Path) -> Option<SessionMeta> {
@@ -141,7 +144,7 @@ fn latest_session_in_db(db_path: &Path, directories: &[String]) -> Option<Sessio
 }
 
 /// Open a database read-only without taking the mutex, so the call is
-/// non-blocking even while OpenCode is writing through its WAL.
+/// non-blocking even while `OpenCode` is writing through its WAL.
 pub(crate) fn open_ro(path: &Path) -> Option<Connection> {
     Connection::open_with_flags(
         path,
@@ -150,12 +153,12 @@ pub(crate) fn open_ro(path: &Path) -> Option<Connection> {
     .ok()
 }
 
-/// Candidate strings to probe the `directory` column with. OpenCode may
+/// Candidate strings to probe the `directory` column with. `OpenCode` may
 /// record the path before macOS canonicalised `/var` → `/private/var`,
 /// so we try both the caller's path and its canonical form.
 pub(crate) fn directory_candidates(directory: &Path, canonical: &Path) -> Vec<String> {
-    let raw = directory.to_string_lossy().to_string();
-    let canonical = canonical.to_string_lossy().to_string();
+    let raw = directory.to_string_lossy().into_owned();
+    let canonical = canonical.to_string_lossy().into_owned();
     if raw == canonical {
         vec![raw]
     } else {
@@ -168,10 +171,10 @@ pub(crate) fn canonical_dir(directory: &Path) -> PathBuf {
 }
 
 fn opencode_data_dir() -> Option<PathBuf> {
-    if let Ok(base) = std::env::var("XDG_DATA_HOME") {
+    if let Ok(base) = std::env::var(XDG_DATA_HOME_ENV) {
         return Some(PathBuf::from(base).join("opencode"));
     }
-    let home = std::env::var("HOME").ok()?;
+    let home = std::env::var(HOME_ENV).ok()?;
     Some(PathBuf::from(home).join(".local/share/opencode"))
 }
 
@@ -190,8 +193,7 @@ fn is_opencode_db_name(name: &str) -> bool {
 pub fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 #[cfg(test)]
@@ -247,7 +249,7 @@ mod tests {
 
     fn temp_dir(tag: &str) -> PathBuf {
         let base = std::env::temp_dir().join(format!("task-rs-opencode-db-{tag}"));
-        let _ = fs::remove_dir_all(&base);
+        _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         base
     }
@@ -283,7 +285,7 @@ mod tests {
         #[test]
         fn returns_empty_when_dir_missing() {
             let base = temp_dir("discover-empty");
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
             assert!(discover_in(&base).is_empty());
         }
 
@@ -300,7 +302,7 @@ mod tests {
             assert!(dbs.iter().any(|p| p.ends_with("opencode.db")));
             assert!(dbs.iter().any(|p| p.ends_with("opencode-stable.db")));
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 
@@ -324,7 +326,7 @@ mod tests {
             assert_eq!(got.session.time_updated, 200);
             assert_eq!(got.db_path, stable);
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -339,7 +341,7 @@ mod tests {
                 .expect("session");
             assert_eq!(got.session.id, "ses_live");
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -353,7 +355,7 @@ mod tests {
                 .expect("session");
             assert_eq!(got.session.title, "Ship card view");
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -366,7 +368,7 @@ mod tests {
             let got = latest_owned_session_in_dbs(&discover_in(&base), Path::new("/worktree"));
             assert!(got.is_none());
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
 
         #[test]
@@ -395,7 +397,7 @@ mod tests {
             let got = latest_owned_session_in_dbs(&dbs, Path::new("/worktree")).expect("session");
             assert_eq!(got.session.id, "ses_a");
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 
@@ -407,7 +409,7 @@ mod tests {
             let raw = Path::new("/exact/match");
             let canonical = Path::new("/exact/match");
             let got = directory_candidates(raw, canonical);
-            assert_eq!(got, vec!["/exact/match".to_string()]);
+            assert_eq!(got, vec!["/exact/match".to_owned()]);
         }
 
         #[test]
@@ -418,8 +420,8 @@ mod tests {
             assert_eq!(
                 got,
                 vec![
-                    "/var/folders/x/y/worktree".to_string(),
-                    "/private/var/folders/x/y/worktree".to_string(),
+                    "/var/folders/x/y/worktree".to_owned(),
+                    "/private/var/folders/x/y/worktree".to_owned(),
                 ]
             );
         }
@@ -446,7 +448,7 @@ mod tests {
             assert!(got.is_absolute(), "canonical must be absolute: {got:?}");
             assert!(got.exists(), "canonical must resolve: {got:?}");
 
-            let _ = fs::remove_dir_all(&base);
+            _ = fs::remove_dir_all(&base);
         }
     }
 }

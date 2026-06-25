@@ -1,0 +1,36 @@
+[workspace.metadata.dylint]
+libraries = [
+  { path = "lints" },
+  { git = "https://github.com/trailofbits/dylint", tag = "v6.0.0", pattern = [
+    "examples/general/abs_home_path",
+    "examples/general/await_holding_span_guard",
+    "examples/general/basic_dead_store",
+    "examples/general/crate_wide_allow",
+    "examples/general/incorrect_matches_operation",
+    "examples/general/non_local_effect_before_unhandled_error",
+    "examples/general/wrong_serialize_struct_arg",
+    "examples/supplementary/commented_out_code",
+    "examples/supplementary/escaping_doc_link",
+    "examples/supplementary/inconsistent_struct_pattern",
+    "examples/supplementary/local_ref_cell",
+    "examples/supplementary/redundant_reference",
+    "examples/supplementary/unnecessary_borrow_mut",
+    "examples/restriction/collapsible_unwrap",
+    "examples/restriction/const_path_join",
+    "examples/restriction/env_literal",
+    "examples/restriction/ref_aware_redundant_closure_for_method_calls",
+  ] },
+]
+
+[perfectionist]
+disable = [
+  { name = "arc_rc_clone", reason = "covered by clippy::clone_on_ref_ptr" },
+  { name = "flat_module_pattern", reason = "repo currently uses mod.rs layout" },
+  { name = "macro_argument_binding", reason = "debug/assert macros often intentionally receive expressions" },
+  { name = "macro_trailing_comma", reason = "covered by rustfmt where the project wants it" },
+  { name = "prefer_raw_string", reason = "subjective style preference" },
+  { name = "single_letter_generic", reason = "single-letter generics are idiomatic in small scopes" },
+]
+
+[non_local_effect_before_unhandled_error]
+work_limit = 500_000
