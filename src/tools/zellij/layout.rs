@@ -240,6 +240,13 @@ mod tests {
         ))
     }
 
+    fn custom_opencode_startup_with_args() -> SessionStartup {
+        SessionStartup::WithOpencode(CommandPlan::for_program(
+            "/opt/OpenCode Shared/opencode-shared",
+            vec!["--session".to_owned(), "ses_123".to_owned()],
+        ))
+    }
+
     fn task_binary() -> PathBuf {
         PathBuf::from("/usr/local/bin/task")
     }
@@ -387,6 +394,26 @@ mod tests {
                 layout.contains("args \"--session\" \"ses_123\""),
                 "opencode args must follow the command: {layout}"
             );
+        }
+
+        #[test]
+        fn custom_opencode_program_is_emitted_as_one_command() {
+            let path = PathBuf::from("/wt/repo");
+            let bin = task_binary();
+            let layout = render_layout(&LayoutInput {
+                session: "repo-branch",
+                path: &path,
+                editor: EditorKind::Vscodium,
+                startup: custom_opencode_startup_with_args(),
+                task_binary: Some(&bin),
+                terminal_width: Some(REFERENCE_TERMINAL_WIDTH),
+            });
+
+            assert!(
+                layout.contains("command \"/opt/OpenCode Shared/opencode-shared\""),
+                "custom executable must be one KDL command value: {layout}"
+            );
+            assert!(layout.contains("args \"--session\" \"ses_123\""));
         }
 
         #[test]

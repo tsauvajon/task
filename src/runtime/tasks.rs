@@ -13,7 +13,7 @@ use crate::{
     error::{Error, Result},
     runtime::{
         BranchName, RepoKey,
-        config::{EditorKind, is_interactive_terminal},
+        config::{EditorKind, OpenCodeCommand, is_interactive_terminal},
         paths::WorkspacePaths,
         process,
         task_rows::{TaskRow, TaskStatus, build_task_rows},
@@ -42,6 +42,7 @@ pub struct TaskResolver {
     layout: WorkspacePaths,
     codium_trusted_roots: Vec<PathBuf>,
     editor: EditorKind,
+    opencode_command: OpenCodeCommand,
     interactive: bool,
 }
 
@@ -57,8 +58,15 @@ impl TaskResolver {
             layout,
             codium_trusted_roots,
             editor,
+            opencode_command: OpenCodeCommand::DEFAULT,
             interactive,
         }
+    }
+
+    #[must_use]
+    pub fn with_opencode_command(mut self, command: OpenCodeCommand) -> Self {
+        self.opencode_command = command;
+        self
     }
 
     #[must_use]
@@ -75,6 +83,11 @@ impl TaskResolver {
     #[must_use]
     pub const fn editor(&self) -> EditorKind {
         self.editor
+    }
+
+    #[must_use]
+    pub const fn opencode_command(&self) -> &OpenCodeCommand {
+        &self.opencode_command
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
@@ -234,6 +247,7 @@ impl TaskResolver {
             &wt_name,
             path,
             self.editor,
+            &self.opencode_command,
             &self.codium_trusted_roots,
         )? == OpenResult::Attached
         {

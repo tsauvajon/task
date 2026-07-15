@@ -29,7 +29,8 @@ impl RuntimeEnvironment {
             config.codium_trusted_roots,
             config.editor,
             is_interactive_terminal(),
-        );
+        )
+        .with_opencode_command(config.opencode_command);
         Self {
             layout,
             tasks,
@@ -51,6 +52,7 @@ impl RuntimeEnvironment {
         detached_dir: impl AsRef<Path>,
     ) -> Self {
         let layout = WorkspacePaths::new(repos_dir, wt_dir, detached_dir);
+        // `from_paths` callers do not launch OpenCode, so the default command is intentional.
         let tasks = TaskResolver::new(
             layout.clone(),
             Vec::new(),
@@ -149,7 +151,7 @@ mod tests {
 
     mod from_config {
         use super::*;
-        use crate::runtime::config::{EditorKind, TaskConfig};
+        use crate::runtime::config::{EditorKind, OpenCodeCommand, TaskConfig};
 
         #[test]
         fn preserves_codium_trusted_roots() {
@@ -163,6 +165,7 @@ mod tests {
                 ],
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::default(),
             };
             let env = RuntimeEnvironment::from_config(config);
             assert_eq!(env.tasks().codium_trusted_roots().len(), 2);
@@ -185,6 +188,7 @@ mod tests {
                 codium_trusted_roots: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::default(),
             };
             let env = RuntimeEnvironment::from_config(config);
             assert_eq!(env.layout().repos_dir(), env.tasks().layout().repos_dir());
@@ -204,9 +208,28 @@ mod tests {
                 codium_trusted_roots: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::Helix,
+                opencode_command: OpenCodeCommand::default(),
             };
             let env = RuntimeEnvironment::from_config(config);
             assert_eq!(env.tasks().editor(), EditorKind::Helix);
+        }
+
+        #[test]
+        fn propagates_opencode_command_to_resolver() {
+            let command = OpenCodeCommand::try_new("opencode-shared").expect("valid command");
+            let config = TaskConfig {
+                repos_dir: std::path::PathBuf::from("/tmp/repos"),
+                wt_dir: std::path::PathBuf::from("/tmp/wt"),
+                detached_dir: std::path::PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
+                opencode_command: command.clone(),
+            };
+
+            let env = RuntimeEnvironment::from_config(config);
+
+            assert_eq!(env.tasks().opencode_command(), &command);
         }
     }
 }
