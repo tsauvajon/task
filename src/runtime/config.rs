@@ -1,16 +1,79 @@
 use std::{
-    fs,
+    borrow::Cow,
+    fmt, fs,
     io::{self, IsTerminal},
     path::{Path, PathBuf},
 };
 
 use dialoguer::{Input, theme::ColorfulTheme};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{Error, Result};
 
 const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 const HOME: &str = "HOME";
+const DEFAULT_OPENCODE_COMMAND: &str = "opencode";
+
+/// Executable used to launch `OpenCode`.
+///
+/// The value is passed directly to the process launcher as either one
+/// PATH-resolvable program name or one absolute path. It is never parsed as a
+/// shell command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct OpenCodeCommand(Cow<'static, str>);
+
+impl OpenCodeCommand {
+    pub const DEFAULT: Self = Self(Cow::Borrowed(DEFAULT_OPENCODE_COMMAND));
+
+    pub fn try_new(command: impl Into<String>) -> Result<Self> {
+        let command = command.into();
+        let command = command.trim();
+        if command.is_empty() {
+            return Err(Error::failed(
+                "OpenCode command in config must not be empty",
+            ));
+        }
+        if has_unix_path_separator(command) && !Path::new(command).is_absolute() {
+            return Err(Error::failed(format!(
+                "OpenCode command `{command}` must be a PATH-resolvable executable name or an \
+                 absolute path; relative paths are not supported"
+            )));
+        }
+        Ok(Self(Cow::Owned(command.to_owned())))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+fn has_unix_path_separator(command: &str) -> bool {
+    command.contains('/')
+}
+
+impl Default for OpenCodeCommand {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl fmt::Display for OpenCodeCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for OpenCodeCommand {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let command = String::deserialize(deserializer)?;
+        Self::try_new(command).map_err(serde::de::Error::custom)
+    }
+}
 
 /// Pins a detached worktree to a specific branch.
 ///
@@ -72,6 +135,7 @@ pub struct TaskConfig {
     pub codium_trusted_roots: Vec<PathBuf>,
     pub detached_entries: Vec<DetachedEntry>,
     pub editor: EditorKind,
+    pub opencode_command: OpenCodeCommand,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,6 +147,8 @@ struct TaskConfigFile {
     editor: Option<String>,
     #[serde(default)]
     vscodium: Option<VscodiumConfigFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    opencode: Option<OpenCodeConfigFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     detached: Vec<DetachedEntry>,
 }
@@ -91,6 +157,12 @@ struct TaskConfigFile {
 struct VscodiumConfigFile {
     #[serde(default)]
     trusted_roots: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenCodeConfigFile {
+    #[serde(default)]
+    command: OpenCodeCommand,
 }
 
 impl TaskConfig {
@@ -162,6 +234,7 @@ fn initialize_config(config_path: &Path) -> Result<TaskConfig> {
         detached_dir,
         editor: None,
         vscodium: None,
+        opencode: None,
         detached: Vec::new(),
     })?;
     write_config(config_path, &config)?;
@@ -198,6 +271,13 @@ fn write_config(config_path: &Path, config: &TaskConfig) -> Result<()> {
                     .collect(),
             })
         },
+        opencode: if config.opencode_command == OpenCodeCommand::default() {
+            None
+        } else {
+            Some(OpenCodeConfigFile {
+                command: config.opencode_command.clone(),
+            })
+        },
         detached: config.detached_entries.clone(),
     };
     let text = toml::to_string_pretty(&file)?;
@@ -228,6 +308,9 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig> {
         None | Some("") => EditorKind::default(),
         Some(value) => EditorKind::parse(value)?,
     };
+    let opencode_command = file
+        .opencode
+        .map_or_else(OpenCodeCommand::default, |config| config.command);
     Ok(TaskConfig {
         repos_dir,
         wt_dir,
@@ -235,6 +318,7 @@ fn to_runtime_config(file: TaskConfigFile) -> Result<TaskConfig> {
         codium_trusted_roots,
         detached_entries: file.detached,
         editor,
+        opencode_command,
     })
 }
 
@@ -307,8 +391,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        DetachedEntry, EditorKind, TaskConfigFile, VscodiumConfigFile, expand_path,
-        to_runtime_config,
+        DetachedEntry, EditorKind, OpenCodeCommand, TaskConfigFile, VscodiumConfigFile,
+        expand_path, to_runtime_config,
     };
 
     mod expand_path {
@@ -365,6 +449,7 @@ mod tests {
                 detached_dir: "~/dev/detached".to_owned(),
                 editor: None,
                 vscodium: None,
+                opencode: None,
                 detached: Vec::new(),
             })
             .expect("runtime config");
@@ -382,6 +467,7 @@ mod tests {
                 vscodium: Some(VscodiumConfigFile {
                     trusted_roots: vec!["~/dev/wt/github.com/tsauvajon".to_owned()],
                 }),
+                opencode: None,
                 detached: Vec::new(),
             })
             .expect("runtime config");
@@ -398,6 +484,7 @@ mod tests {
                 detached_dir: "~/detached".to_owned(),
                 editor: None,
                 vscodium: None,
+                opencode: None,
                 detached: Vec::new(),
             })
             .expect("runtime config");
@@ -425,6 +512,7 @@ mod tests {
                 detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
+                opencode: None,
                 detached: entries.clone(),
             })
             .expect("runtime config");
@@ -440,6 +528,7 @@ mod tests {
                 detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
+                opencode: None,
                 detached: Vec::new(),
             })
             .expect("runtime config");
@@ -455,6 +544,7 @@ mod tests {
                 detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
+                opencode: None,
                 detached: vec![DetachedEntry {
                     repo: "github.com/org/repo".to_owned(),
                     branch: String::new(),
@@ -478,6 +568,7 @@ mod tests {
                 detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
+                opencode: None,
                 detached: vec![DetachedEntry {
                     repo: "github.com/org/repo".to_owned(),
                     branch: "   ".to_owned(),
@@ -496,6 +587,7 @@ mod tests {
                 detached_dir: "/tmp/detached".to_owned(),
                 vscodium: None,
                 editor: None,
+                opencode: None,
                 detached: vec![DetachedEntry {
                     repo: String::new(),
                     branch: "main".to_owned(),
@@ -517,6 +609,7 @@ mod tests {
                 detached_dir: "/tmp/detached".to_owned(),
                 editor: editor.map(str::to_owned),
                 vscodium: None,
+                opencode: None,
                 detached: Vec::new(),
             }
         }
@@ -569,6 +662,76 @@ mod tests {
             let config =
                 to_runtime_config(file_with_editor(Some("  helix  "))).expect("runtime config");
             assert_eq!(config.editor, EditorKind::Helix);
+        }
+    }
+
+    mod opencode_command {
+        use super::*;
+
+        fn parse_config(
+            opencode_section: &str,
+        ) -> std::result::Result<TaskConfigFile, toml::de::Error> {
+            toml::from_str(&format!(
+                "repos_dir = \"/tmp/repos\"\nwt_dir = \"/tmp/wt\"\ndetached_dir = \"/tmp/detached\"\n{opencode_section}"
+            ))
+        }
+
+        #[test]
+        fn defaults_to_opencode_when_section_is_omitted() {
+            let file = parse_config("").expect("config file");
+            let config = to_runtime_config(file).expect("runtime config");
+
+            assert_eq!(config.opencode_command, OpenCodeCommand::default());
+            assert_eq!(config.opencode_command.as_str(), "opencode");
+        }
+
+        #[test]
+        fn defaults_to_opencode_when_section_is_empty() {
+            let file = parse_config("\n[opencode]\n").expect("config file");
+            let config = to_runtime_config(file).expect("runtime config");
+
+            assert_eq!(config.opencode_command, OpenCodeCommand::default());
+            assert_eq!(config.opencode_command.as_str(), "opencode");
+        }
+
+        #[test]
+        fn parses_custom_executable() {
+            let file =
+                parse_config("\n[opencode]\ncommand = \"opencode-shared\"\n").expect("config file");
+            let config = to_runtime_config(file).expect("runtime config");
+
+            assert_eq!(config.opencode_command.as_str(), "opencode-shared");
+        }
+
+        #[test]
+        fn parses_absolute_executable_path() {
+            let file = parse_config("\n[opencode]\ncommand = \"/opt/opencode-shared\"\n")
+                .expect("config file");
+            let config = to_runtime_config(file).expect("runtime config");
+
+            assert_eq!(config.opencode_command.as_str(), "/opt/opencode-shared");
+        }
+
+        #[test]
+        fn rejects_empty_executable() {
+            let err = parse_config("\n[opencode]\ncommand = \"\"\n").unwrap_err();
+
+            assert!(err.to_string().contains("must not be empty"));
+        }
+
+        #[test]
+        fn rejects_whitespace_only_executable() {
+            let err = parse_config("\n[opencode]\ncommand = \"   \"\n").unwrap_err();
+
+            assert!(err.to_string().contains("must not be empty"));
+        }
+
+        #[test]
+        fn rejects_relative_executable_path() {
+            let err =
+                parse_config("\n[opencode]\ncommand = \"bin/opencode-shared\"\n").unwrap_err();
+
+            assert!(err.to_string().contains("relative paths are not supported"));
         }
     }
 
@@ -825,7 +988,7 @@ branch = "custom"
     mod write_config_tests {
         use std::{env, fs, path::PathBuf};
 
-        use super::super::{EditorKind, TaskConfig, load_config, write_config};
+        use super::super::{EditorKind, OpenCodeCommand, TaskConfig, load_config, write_config};
 
         struct TempDir(PathBuf);
 
@@ -859,6 +1022,7 @@ branch = "custom"
                 codium_trusted_roots: vec![PathBuf::from("/tmp/trusted")],
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -881,6 +1045,7 @@ branch = "custom"
                 codium_trusted_roots: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -898,6 +1063,7 @@ branch = "custom"
                 codium_trusted_roots: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -925,6 +1091,7 @@ branch = "custom"
                     },
                 ],
                 editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -944,6 +1111,7 @@ branch = "custom"
                 codium_trusted_roots: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -965,6 +1133,7 @@ branch = "custom"
                 codium_trusted_roots: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::Helix,
+                opencode_command: OpenCodeCommand::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -989,6 +1158,7 @@ branch = "custom"
                 codium_trusted_roots: Vec::new(),
                 detached_entries: Vec::new(),
                 editor: EditorKind::Vscodium,
+                opencode_command: OpenCodeCommand::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -997,6 +1167,76 @@ branch = "custom"
                 !content.contains("editor ="),
                 "default editor should be omitted: {content}"
             );
+        }
+
+        #[test]
+        fn omits_opencode_section_when_default() {
+            let dir = TempDir::new("write-opencode-default");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::default(),
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).expect("read config");
+
+            assert!(!content.contains("[opencode]"));
+        }
+
+        #[test]
+        fn round_trips_custom_opencode_command() {
+            let dir = TempDir::new("write-opencode-custom");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: Vec::new(),
+                detached_entries: Vec::new(),
+                editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::try_new("opencode-shared")
+                    .expect("valid command"),
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let content = fs::read_to_string(&config_path).expect("read config");
+            let loaded = load_config(&config_path).expect("load config");
+
+            assert!(content.contains("[opencode]"));
+            assert!(content.contains("command = \"opencode-shared\""));
+            assert_eq!(loaded.opencode_command, config.opencode_command);
+        }
+
+        #[test]
+        fn round_trips_custom_opencode_vscodium_and_detached_entries() {
+            let dir = TempDir::new("write-opencode-vscodium-detached");
+            let config_path = dir.path().join("config.toml");
+            let config = TaskConfig {
+                repos_dir: PathBuf::from("/tmp/repos"),
+                wt_dir: PathBuf::from("/tmp/wt"),
+                detached_dir: PathBuf::from("/tmp/detached"),
+                codium_trusted_roots: vec![PathBuf::from("/tmp/trusted")],
+                detached_entries: vec![super::super::DetachedEntry {
+                    repo: "github.com/org/repo".to_owned(),
+                    branch: "main".to_owned(),
+                }],
+                editor: EditorKind::default(),
+                opencode_command: OpenCodeCommand::try_new("opencode-shared")
+                    .expect("valid command"),
+            };
+
+            write_config(&config_path, &config).expect("write config");
+            let loaded = load_config(&config_path).expect("load config");
+
+            assert_eq!(loaded.opencode_command, config.opencode_command);
+            assert_eq!(loaded.codium_trusted_roots, config.codium_trusted_roots);
+            assert_eq!(loaded.detached_entries, config.detached_entries);
         }
 
         /// Guards against future serializer changes that might couple the
@@ -1023,6 +1263,7 @@ branch = "custom"
                     },
                 ],
                 editor: EditorKind::Helix,
+                opencode_command: OpenCodeCommand::default(),
             };
 
             write_config(&config_path, &config).expect("write config");
@@ -1057,6 +1298,7 @@ branch = "custom"
                 detached_dir: "  /tmp/detached  ".to_owned(),
                 editor: None,
                 vscodium: None,
+                opencode: None,
                 detached: Vec::new(),
             })
             .expect("runtime config");

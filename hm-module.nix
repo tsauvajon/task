@@ -11,6 +11,7 @@
 #     wtDir = "~/dev/wt";
 #     detachedDir = "~/dev/detached";
 #     editor = "helix";
+#     opencodeCommand = "opencode-shared";
 #     extraConfig = { vscodium.trusted_roots = [ "/path/one" ]; };
 #   };
 #
@@ -28,6 +29,19 @@ self:
 
 let
   cfg = config.programs.task;
+  # Keep in sync with DEFAULT_OPENCODE_COMMAND in src/runtime/config.rs.
+  defaultOpencodeCommand = "opencode";
+  validOpencodeCommand = command:
+    let
+      normalized = lib.strings.trim command;
+      hasSeparator = lib.hasInfix "/" normalized;
+      isAbsolute = lib.hasPrefix "/" normalized;
+    in
+    normalized != "" && (!hasSeparator || isAbsolute);
+  opencodeCommandType = (types.addCheck types.nonEmptyStr validOpencodeCommand) // {
+    description = "non-whitespace PATH executable name or absolute Unix path";
+  };
+  normalizedOpencodeCommand = lib.strings.trim cfg.opencodeCommand;
   inherit (lib)
     mkEnableOption
     mkOption
@@ -40,6 +54,9 @@ let
     wt_dir = cfg.wtDir;
     detached_dir = cfg.detachedDir;
     editor = cfg.editor;
+  }
+  // lib.optionalAttrs (normalizedOpencodeCommand != defaultOpencodeCommand) {
+    opencode.command = normalizedOpencodeCommand;
   };
 
   mergedConfig = lib.recursiveUpdate baseConfig cfg.extraConfig;
@@ -79,6 +96,15 @@ in
       type = types.str;
       default = "helix";
       description = "Default editor task should open files in.";
+    };
+
+    opencodeCommand = mkOption {
+      type = opencodeCommandType;
+      default = defaultOpencodeCommand;
+      description = ''
+        PATH-resolvable executable name or absolute Unix path used to launch OpenCode.
+        Relative paths and whitespace-only values are rejected.
+      '';
     };
 
     extraConfig = mkOption {

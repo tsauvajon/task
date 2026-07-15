@@ -173,6 +173,7 @@ impl LiveOpencodeProcesses {
 }
 
 fn is_opencode_process(name: &str) -> bool {
+    // Custom launch wrappers must `exec` stock OpenCode so its process keeps one of these names.
     // `opencode` is the canonical binary name. `.opencode-wrapped` is
     // the Nix wrapper exec that shows up in `sysinfo` on NixOS and
     // nix-darwin installs.

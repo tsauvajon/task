@@ -144,7 +144,7 @@
       {
         packages.default = rustPlatform.buildRustPackage {
           pname = "task";
-          version = "7.0.0";
+          version = "7.1.0";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;

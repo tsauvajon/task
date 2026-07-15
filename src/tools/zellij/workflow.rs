@@ -12,8 +12,8 @@ use super::{
 use crate::{
     error::{Error, Result},
     runtime::{
-        config::EditorKind,
-        process::{self, ExternalTool},
+        config::{EditorKind, OpenCodeCommand},
+        process,
     },
     tools::{
         opencode,
@@ -142,6 +142,7 @@ pub fn open_session(
     worktree_name: &str,
     path: &Path,
     editor: EditorKind,
+    opencode_command: &OpenCodeCommand,
     codium_trusted_roots: &[PathBuf],
 ) -> Result<OpenResult> {
     if !is_available() {
@@ -159,7 +160,7 @@ pub fn open_session(
     if has_session(&session) {
         attach_existing_session(&session)?;
     } else {
-        let startup = resolve_startup(path);
+        let startup = resolve_startup(opencode_command, path);
         let task_binary = resolve_task_binary();
         let layout = render_layout(&LayoutInput {
             session: &session,
@@ -181,11 +182,13 @@ pub fn open_session(
 /// When opencode is on PATH the layout spawns it directly; otherwise
 /// the pane falls back to the user's default shell so the rest of the
 /// session can still come up.
-fn resolve_startup(path: &Path) -> SessionStartup {
-    if process::command_exists(ExternalTool::Opencode.binary_name()) {
-        SessionStartup::WithOpencode(opencode::launch_command(path))
+fn resolve_startup(command: &OpenCodeCommand, path: &Path) -> SessionStartup {
+    if process::command_exists(command.as_str()) {
+        SessionStartup::WithOpencode(opencode::launch_command(command, path))
     } else {
-        process::warn("'opencode' is not available; the primary pane will start as a plain shell.");
+        process::warn(&format!(
+            "'{command}' is not available; the primary pane will start as a plain shell."
+        ));
         SessionStartup::ShellOnly
     }
 }
@@ -312,8 +315,10 @@ fn remove_layout_file(session: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TeardownAction, ZELLIJ_ENV, is_inside_zellij, teardown_actions, zellij_env_indicates_inside,
+        SessionStartup, TeardownAction, ZELLIJ_ENV, is_inside_zellij, resolve_startup,
+        teardown_actions, zellij_env_indicates_inside,
     };
+    use crate::runtime::config::OpenCodeCommand;
 
     mod park_teardown {
         use super::*;
@@ -407,6 +412,39 @@ mod tests {
         #[test]
         fn accepts_any_non_empty_string() {
             assert!(zellij_env_indicates_inside(Some("1")));
+        }
+    }
+
+    mod resolve_startup_tests {
+        use std::path::Path;
+
+        use super::*;
+
+        #[test]
+        fn checks_and_plans_with_configured_executable() {
+            let executable = std::env::current_exe().expect("current executable");
+            let command = OpenCodeCommand::try_new(executable.to_string_lossy().into_owned())
+                .expect("valid command");
+
+            let startup = resolve_startup(&command, Path::new("/nonexistent/worktree"));
+
+            assert!(
+                matches!(&startup, SessionStartup::WithOpencode(_)),
+                "existing configured executable should be available"
+            );
+            if let SessionStartup::WithOpencode(plan) = startup {
+                assert_eq!(plan.program(), command.as_str());
+            }
+        }
+
+        #[test]
+        fn falls_back_to_shell_when_configured_executable_is_missing() {
+            let command =
+                OpenCodeCommand::try_new("/nonexistent/opencode-shared").expect("valid command");
+
+            let startup = resolve_startup(&command, Path::new("/nonexistent/worktree"));
+
+            assert_eq!(startup, SessionStartup::ShellOnly);
         }
     }
 }

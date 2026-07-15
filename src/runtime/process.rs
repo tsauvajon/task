@@ -3,6 +3,7 @@ use std::{
     ffi::OsStr,
     fmt,
     io::{self, BufRead, BufReader, Read, Write},
+    os::unix::fs::PermissionsExt,
     path::Path,
     process::{Command, Stdio},
     sync::{Arc, Mutex, OnceLock},
@@ -257,19 +258,21 @@ pub struct CommandPlan {
 impl CommandPlan {
     #[must_use]
     pub fn from_program(program: &str, args: &[&str]) -> Self {
+        Self::for_program(program, args.iter().map(|&arg| arg.to_owned()).collect())
+    }
+
+    #[must_use]
+    pub fn for_program(program: &str, args: Vec<String>) -> Self {
         Self {
             program: program.to_owned(),
-            args: args.iter().map(|&a| a.to_owned()).collect(),
+            args,
         }
     }
 
     /// Build a plan invoking a known external tool directly from PATH.
     #[must_use]
     pub fn for_tool(tool: ExternalTool, tool_args: Vec<String>) -> Self {
-        Self {
-            program: tool.binary_name().to_owned(),
-            args: tool_args,
-        }
+        Self::for_program(tool.binary_name(), tool_args)
     }
 
     #[must_use]
@@ -288,16 +291,21 @@ impl CommandPlan {
     }
 }
 
-/// Returns true if the named binary is reachable via PATH (or exists as an
-/// absolute path).
+/// Returns true if the named binary is reachable via PATH (or is an executable
+/// filesystem path).
 #[must_use]
 pub fn command_exists(name: &str) -> bool {
     if name.contains('/') {
-        return Path::new(name).exists();
+        return is_executable_file(Path::new(name));
     }
 
     let path_var = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path_var).any(|dir| dir.join(name).exists())
+    std::env::split_paths(&path_var).any(|dir| is_executable_file(&dir.join(name)))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 /// Maps an `io::Error` from spawning a process into a user-friendlier error.
@@ -531,7 +539,7 @@ fn capture_log_line(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
+    use std::{ffi::OsStr, fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
     use super::{CommandPlan, ExternalTool, InstallHint, command_exists, spawn_error};
     use crate::error::Error;
@@ -775,6 +783,18 @@ mod tests {
     mod command_exists {
         use super::*;
 
+        fn temp_path(name: &str) -> PathBuf {
+            std::env::temp_dir().join(format!("task-command-exists-{}-{name}", std::process::id()))
+        }
+
+        fn remove_temp_file(path: &std::path::Path) {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("failed to remove temp file {}: {error}", path.display()),
+            }
+        }
+
         #[test]
         fn returns_true_for_known_system_binary() {
             // `true` is universally available on POSIX systems
@@ -795,6 +815,39 @@ mod tests {
         #[test]
         fn returns_false_for_nonexistent_absolute_path() {
             assert!(!command_exists("/this/path/does/not/exist/xyz"));
+        }
+
+        #[test]
+        fn returns_false_for_existing_absolute_directory() {
+            assert!(!command_exists("/tmp"));
+        }
+
+        #[test]
+        fn returns_false_for_existing_non_executable_file() {
+            let path = temp_path("non-executable");
+            remove_temp_file(&path);
+            fs::write(&path, "#!/bin/sh\n").expect("write temp file");
+            let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+            permissions.set_mode(0o600);
+            fs::set_permissions(&path, permissions).expect("set permissions");
+
+            assert!(!command_exists(&path.to_string_lossy()));
+
+            remove_temp_file(&path);
+        }
+
+        #[test]
+        fn returns_true_for_existing_executable_file() {
+            let path = temp_path("executable");
+            remove_temp_file(&path);
+            fs::write(&path, "#!/bin/sh\n").expect("write temp file");
+            let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&path, permissions).expect("set permissions");
+
+            assert!(command_exists(&path.to_string_lossy()));
+
+            remove_temp_file(&path);
         }
 
         #[test]

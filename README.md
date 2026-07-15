@@ -45,6 +45,25 @@ Note: both commands kill the Zellij session, which terminates `hx` and
 discards any unsaved buffers. Save with `:w` inside Helix before parking
 or finishing.
 
+## OpenCode executable
+
+By default, `task start` launches the `opencode` executable. To use another
+executable name or path, configure it in `~/.config/task/config.toml`:
+
+```toml
+[opencode]
+command = "opencode-shared"
+```
+
+The value must be either a PATH-resolvable executable name or an absolute Unix path.
+Relative paths such as `bin/opencode` are rejected. It is passed directly as
+one executable, is not parsed as a shell command, and cannot include separate
+command-line arguments.
+
+A custom command is expected to be an OpenCode-compatible wrapper that uses
+the standard OpenCode session and data behavior. It should `exec` stock
+OpenCode so task's existing live-process and status detection remains accurate.
+
 ## Build and test
 
 ```bash
