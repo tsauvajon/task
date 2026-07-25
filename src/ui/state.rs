@@ -921,12 +921,6 @@ impl UiState {
         self.apply_filters();
     }
 
-    pub(super) fn filter_clear(&mut self) {
-        self.filter_text.clear();
-        self.filter_cursor = 0;
-        self.apply_filters();
-    }
-
     pub(super) fn filter_append(&mut self, ch: char) {
         let cursor = clamp_to_char_boundary(&self.filter_text, self.filter_cursor);
         self.filter_cursor = insert_at_cursor(&mut self.filter_text, cursor, ch);
@@ -977,6 +971,41 @@ impl UiState {
             InputMode::Filter => self.filter_cursor = self.filter_text.len(),
             InputMode::CreateTask => self.create_cursor = self.create_branch.len(),
             InputMode::CloneRepo => self.clone_cursor = self.clone_input.len(),
+            InputMode::Normal => {}
+        }
+    }
+
+    pub(super) fn input_kill_backward(&mut self) {
+        match self.mode {
+            InputMode::Filter => {
+                kill_before_cursor(&mut self.filter_text, self.filter_cursor);
+                self.filter_cursor = 0;
+                self.apply_filters();
+            }
+            InputMode::CreateTask => {
+                kill_before_cursor(&mut self.create_branch, self.create_cursor);
+                self.create_cursor = 0;
+            }
+            InputMode::CloneRepo => {
+                kill_before_cursor(&mut self.clone_input, self.clone_cursor);
+                self.clone_cursor = 0;
+            }
+            InputMode::Normal => {}
+        }
+    }
+
+    pub(super) fn input_kill_forward(&mut self) {
+        match self.mode {
+            InputMode::Filter => {
+                self.filter_cursor = kill_after_cursor(&mut self.filter_text, self.filter_cursor);
+                self.apply_filters();
+            }
+            InputMode::CreateTask => {
+                self.create_cursor = kill_after_cursor(&mut self.create_branch, self.create_cursor);
+            }
+            InputMode::CloneRepo => {
+                self.clone_cursor = kill_after_cursor(&mut self.clone_input, self.clone_cursor);
+            }
             InputMode::Normal => {}
         }
     }
@@ -1040,6 +1069,17 @@ fn remove_before_cursor(text: &mut String, cursor: usize) -> usize {
         .unwrap_or_default();
     text.drain(previous..cursor);
     previous
+}
+
+fn kill_before_cursor(text: &mut String, cursor: usize) {
+    let cursor = clamp_to_char_boundary(text, cursor);
+    text.replace_range(..cursor, "");
+}
+
+fn kill_after_cursor(text: &mut String, cursor: usize) -> usize {
+    let cursor = clamp_to_char_boundary(text, cursor);
+    text.truncate(cursor);
+    cursor
 }
 
 #[cfg(test)]
@@ -1246,25 +1286,6 @@ mod tests {
         }
 
         #[test]
-        fn clear_resets_and_shows_all_rows() {
-            let mut state = UiState::new(
-                vec![
-                    task_row_for_repo("github.com/acme/app"),
-                    task_row_for_repo("github.com/acme/ops"),
-                ],
-                vec![],
-                None,
-            );
-            state.filter_text = "app".to_owned();
-            state.apply_filters();
-            assert_eq!(state.task_filtered_indices.len(), 1);
-
-            state.filter_clear();
-            assert_eq!(state.filter_text, "");
-            assert_eq!(state.task_filtered_indices.len(), 2);
-        }
-
-        #[test]
         fn append_inserts_at_filter_cursor() {
             let mut state = UiState::new(vec![], vec![], None);
             state.mode = super::super::InputMode::Filter;
@@ -1291,7 +1312,7 @@ mod tests {
         }
 
         #[test]
-        fn start_end_and_clear_update_filter_cursor() {
+        fn start_and_end_update_filter_cursor() {
             let mut state = UiState::new(vec![], vec![], None);
             state.mode = super::super::InputMode::Filter;
             state.filter_text = "abc".to_owned();
@@ -1299,8 +1320,6 @@ mod tests {
             state.input_end();
             assert_eq!(state.filter_cursor, 3);
             state.input_start();
-            assert_eq!(state.filter_cursor, 0);
-            state.filter_clear();
             assert_eq!(state.filter_cursor, 0);
         }
 
@@ -1316,6 +1335,48 @@ mod tests {
 
             assert_eq!(state.filter_text, "ab");
             assert_eq!(state.filter_cursor, 2);
+        }
+
+        #[test]
+        fn kill_backward_keeps_suffix_and_reapplies_filter() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/app"),
+                    task_row_for_repo("github.com/acme/ops"),
+                ],
+                vec![],
+                None,
+            );
+            state.mode = super::super::InputMode::Filter;
+            state.filter_text = "aéops".to_owned();
+            state.filter_cursor = "aé".len();
+
+            state.input_kill_backward();
+
+            assert_eq!(state.filter_text, "ops");
+            assert_eq!(state.filter_cursor, 0);
+            assert_eq!(state.task_filtered_indices, vec![1]);
+        }
+
+        #[test]
+        fn kill_forward_keeps_prefix_and_reapplies_filter() {
+            let mut state = UiState::new(
+                vec![
+                    task_row_for_repo("github.com/acme/app"),
+                    task_row_for_repo("github.com/acme/ops"),
+                ],
+                vec![],
+                None,
+            );
+            state.mode = super::super::InputMode::Filter;
+            state.filter_text = "appéops".to_owned();
+            state.filter_cursor = "app".len();
+
+            state.input_kill_forward();
+
+            assert_eq!(state.filter_text, "app");
+            assert_eq!(state.filter_cursor, 3);
+            assert_eq!(state.task_filtered_indices, vec![0]);
         }
     }
 
@@ -1367,6 +1428,48 @@ mod tests {
             assert_eq!(state.create_cursor, 0);
             assert!(state.clone_input.is_empty());
             assert_eq!(state.clone_cursor, 0);
+        }
+
+        #[test]
+        fn create_kill_operations_clamp_to_utf8_boundaries() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.mode = super::super::InputMode::CreateTask;
+            state.create_branch = "aéb".to_owned();
+            state.create_cursor = 2;
+
+            state.input_kill_backward();
+
+            assert_eq!(state.create_branch, "éb");
+            assert_eq!(state.create_cursor, 0);
+
+            state.create_branch = "aéb".to_owned();
+            state.create_cursor = "aé".len();
+
+            state.input_kill_forward();
+
+            assert_eq!(state.create_branch, "aé");
+            assert_eq!(state.create_cursor, "aé".len());
+        }
+
+        #[test]
+        fn clone_kill_operations_preserve_the_expected_side() {
+            let mut state = UiState::new(vec![], vec![], None);
+            state.mode = super::super::InputMode::CloneRepo;
+            state.clone_input = "repo-éx".to_owned();
+            state.clone_cursor = "repo-é".len();
+
+            state.input_kill_backward();
+
+            assert_eq!(state.clone_input, "x");
+            assert_eq!(state.clone_cursor, 0);
+
+            state.clone_input = "repo-éx".to_owned();
+            state.clone_cursor = "repo-".len().saturating_add(1);
+
+            state.input_kill_forward();
+
+            assert_eq!(state.clone_input, "repo-");
+            assert_eq!(state.clone_cursor, "repo-".len());
         }
     }
 

@@ -54,7 +54,6 @@ fn input_line(
 
 #[derive(Clone, Copy)]
 struct TextInputActions<'a> {
-    clear_description: &'static str,
     submit_description: &'static str,
     label: &'static str,
     text: &'a str,
@@ -68,7 +67,8 @@ fn text_input_actions(
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = vec![
-        keybind_line("ctrl-u", args.clear_description, key_color, theme),
+        keybind_line("ctrl-u", "delete before cursor", key_color, theme),
+        keybind_line("ctrl-k", "delete after cursor", key_color, theme),
         keybind_line("ctrl-a/e", "cursor start/end", key_color, theme),
         keybind_line("enter", args.submit_description, key_color, theme),
         keybind_line("esc", "return to normal", key_color, theme),
@@ -127,7 +127,8 @@ pub(super) fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'stat
             let mut lines = vec![
                 keybind_line("tab", "switch tasks/repos", kc, theme),
                 keybind_line("ctrl-a/e", "cursor start/end", kc, theme),
-                keybind_line("ctrl-u", "clear filter", kc, theme),
+                keybind_line("ctrl-u", "delete before cursor", kc, theme),
+                keybind_line("ctrl-k", "delete after cursor", kc, theme),
                 keybind_line("enter", "apply and return", kc, theme),
                 keybind_line("esc", "return to normal", kc, theme),
             ];
@@ -144,7 +145,6 @@ pub(super) fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'stat
         }
         InputMode::CreateTask => text_input_actions(
             TextInputActions {
-                clear_description: "clear branch name",
                 submit_description: "create and open task",
                 label: "branch ",
                 text: &state.create_branch,
@@ -156,7 +156,6 @@ pub(super) fn actions_for_mode(state: &UiState, theme: &Theme) -> Vec<Line<'stat
         ),
         InputMode::CloneRepo => text_input_actions(
             TextInputActions {
-                clear_description: "clear input",
                 submit_description: "clone repository",
                 label: "url ",
                 text: &state.clone_input,
@@ -265,7 +264,8 @@ mod tests {
         let state = state_with_mode(InputMode::Filter, ViewMode::Tasks);
         let lines = actions_for_mode(&state, &theme);
         let text: String = lines.iter().map(std::string::ToString::to_string).collect();
-        assert!(text.contains("clear filter"));
+        assert!(text.contains("ctrl-u") && text.contains("delete before cursor"));
+        assert!(text.contains("ctrl-k") && text.contains("delete after cursor"));
         assert!(text.contains("cursor start/end"));
         assert!(text.contains("esc"));
     }
@@ -276,7 +276,8 @@ mod tests {
         let state = state_with_mode(InputMode::CreateTask, ViewMode::Tasks);
         let lines = actions_for_mode(&state, &theme);
         let text: String = lines.iter().map(std::string::ToString::to_string).collect();
-        assert!(text.contains("clear branch name"));
+        assert!(text.contains("ctrl-u") && text.contains("delete before cursor"));
+        assert!(text.contains("ctrl-k") && text.contains("delete after cursor"));
         assert!(text.contains("cursor start/end"));
         assert!(text.contains("create and open"));
     }
@@ -287,7 +288,8 @@ mod tests {
         let state = state_with_mode(InputMode::CloneRepo, ViewMode::Repos);
         let lines = actions_for_mode(&state, &theme);
         let text: String = lines.iter().map(std::string::ToString::to_string).collect();
-        assert!(text.contains("clear input"));
+        assert!(text.contains("ctrl-u") && text.contains("delete before cursor"));
+        assert!(text.contains("ctrl-k") && text.contains("delete after cursor"));
         assert!(text.contains("cursor start/end"));
         assert!(text.contains("clone repository"));
     }
@@ -442,14 +444,17 @@ mod tests {
     }
 
     #[test]
-    fn create_task_mode_shows_ctrl_u_action() {
+    fn create_task_mode_shows_kill_actions() {
         let theme = Theme::dark();
         let state = state_with_mode(InputMode::CreateTask, ViewMode::Tasks);
         let lines = actions_for_mode(&state, &theme);
         let text: String = lines.iter().map(std::string::ToString::to_string).collect();
         assert!(
-            text.contains("ctrl-u") && text.contains("clear branch name"),
-            "create task mode should include ctrl-u clear action: {text}"
+            text.contains("ctrl-u")
+                && text.contains("delete before cursor")
+                && text.contains("ctrl-k")
+                && text.contains("delete after cursor"),
+            "create task mode should include both kill actions: {text}"
         );
     }
 

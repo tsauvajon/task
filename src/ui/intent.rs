@@ -30,19 +30,18 @@ pub(super) enum UiIntent {
     FilterCancel,
     FilterApply,
     FilterBackspace,
-    FilterClear,
     InputStart,
     InputEnd,
+    InputKillBackward,
+    InputKillForward,
     FilterAppend(char),
     CreateCancel,
     CreateSubmit,
     CreateBackspace,
-    CreateClear,
     CreateAppend(char),
     CloneCancel,
     CloneSubmit,
     CloneBackspace,
-    CloneClear,
     CloneAppend(char),
     UnboundKey,
     Noop,
@@ -118,7 +117,10 @@ const fn from_key_filter(key: KeyEvent) -> UiIntent {
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputStart,
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputEnd,
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            UiIntent::FilterClear
+            UiIntent::InputKillBackward
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            UiIntent::InputKillForward
         }
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::FilterAppend(ch)
@@ -157,7 +159,10 @@ const fn from_key_create(key: KeyEvent) -> UiIntent {
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputStart,
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputEnd,
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            UiIntent::CreateClear
+            UiIntent::InputKillBackward
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            UiIntent::InputKillForward
         }
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CreateAppend(ch)
@@ -196,7 +201,12 @@ const fn from_key_clone(key: KeyEvent) -> UiIntent {
         KeyCode::Backspace => UiIntent::CloneBackspace,
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputStart,
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::InputEnd,
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => UiIntent::CloneClear,
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            UiIntent::InputKillBackward
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            UiIntent::InputKillForward
+        }
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             UiIntent::CloneAppend(ch)
         }
@@ -360,6 +370,12 @@ mod tests {
         }
 
         #[test]
+        fn ctrl_k_keeps_previous_row_navigation() {
+            let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+            assert_eq!(from_key(InputMode::Normal, ctrl_k), UiIntent::MovePrev);
+        }
+
+        #[test]
         fn unhandled_ctrl_letter_keeps_existing_plain_key_behavior() {
             let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
             assert_eq!(
@@ -425,9 +441,17 @@ mod tests {
         }
 
         #[test]
-        fn ctrl_u_maps_to_filter_clear() {
+        fn ctrl_u_and_ctrl_k_map_to_kill_intents() {
             let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
-            assert_eq!(from_key(InputMode::Filter, ctrl_u), UiIntent::FilterClear);
+            let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+            assert_eq!(
+                from_key(InputMode::Filter, ctrl_u),
+                UiIntent::InputKillBackward
+            );
+            assert_eq!(
+                from_key(InputMode::Filter, ctrl_k),
+                UiIntent::InputKillForward
+            );
         }
 
         #[test]
@@ -475,11 +499,16 @@ mod tests {
         }
 
         #[test]
-        fn ctrl_u_maps_to_create_clear() {
+        fn ctrl_u_and_ctrl_k_map_to_kill_intents() {
             let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+            let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
             assert_eq!(
                 from_key(InputMode::CreateTask, ctrl_u),
-                UiIntent::CreateClear
+                UiIntent::InputKillBackward
+            );
+            assert_eq!(
+                from_key(InputMode::CreateTask, ctrl_k),
+                UiIntent::InputKillForward
             );
         }
 
@@ -523,9 +552,17 @@ mod tests {
         }
 
         #[test]
-        fn ctrl_u_maps_to_clone_clear() {
+        fn ctrl_u_and_ctrl_k_map_to_kill_intents() {
             let ctrl_u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
-            assert_eq!(from_key(InputMode::CloneRepo, ctrl_u), UiIntent::CloneClear);
+            let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+            assert_eq!(
+                from_key(InputMode::CloneRepo, ctrl_u),
+                UiIntent::InputKillBackward
+            );
+            assert_eq!(
+                from_key(InputMode::CloneRepo, ctrl_k),
+                UiIntent::InputKillForward
+            );
         }
 
         #[test]
