@@ -85,17 +85,20 @@ fn help_lines(theme: &Theme, inner_w: usize) -> Vec<Line<'static>> {
         section("Filter", filter_c),
         hk("tab", "Switch tasks/repos view"),
         hk("ctrl-a/e", "Cursor start/end"),
-        hk("ctrl-u", "Clear filter"),
+        hk("ctrl-u", "Delete before cursor"),
+        hk("ctrl-k", "Delete after cursor"),
         hk("esc", "Return to view"),
         Line::from(""),
         section("Create task", create_c),
         hk("ctrl-a/e", "Cursor start/end"),
-        hk("ctrl-u", "Clear branch name"),
+        hk("ctrl-u", "Delete before cursor"),
+        hk("ctrl-k", "Delete after cursor"),
         hk("esc", "Return to view"),
         Line::from(""),
         section("Clone repo", clone_c),
         hk("ctrl-a/e", "Cursor start/end"),
-        hk("ctrl-u", "Clear input"),
+        hk("ctrl-u", "Delete before cursor"),
+        hk("ctrl-k", "Delete after cursor"),
         hk("esc", "Return to view"),
     ];
 
@@ -198,13 +201,15 @@ mod tests {
     }
 
     #[test]
-    fn help_lists_half_page_and_input_cursor_keys() {
+    fn help_lists_navigation_and_input_editing_keys() {
         let theme = Theme::dark();
         let lines = help_lines(&theme, 52);
         let text: String = lines.iter().map(std::string::ToString::to_string).collect();
 
         assert!(text.contains("Half page up/down"));
         assert!(text.contains("Cursor start/end"));
+        assert!(text.contains("ctrl-u") && text.contains("Delete before cursor"));
+        assert!(text.contains("ctrl-k") && text.contains("Delete after cursor"));
         assert!(text.contains("press again to force if dirty"));
     }
 }

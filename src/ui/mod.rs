@@ -519,19 +519,18 @@ fn apply_intent_with_source(
         UiIntent::FilterCancel => apply_filter_cancel_intent(state),
         UiIntent::FilterApply => apply_filter_apply_intent(state),
         UiIntent::FilterBackspace
-        | UiIntent::FilterClear
         | UiIntent::FilterAppend(_)
         | UiIntent::InputStart
-        | UiIntent::InputEnd => apply_text_input_intent(state, intent),
+        | UiIntent::InputEnd
+        | UiIntent::InputKillBackward
+        | UiIntent::InputKillForward => apply_text_input_intent(state, intent),
         UiIntent::CreateCancel
         | UiIntent::CreateSubmit
         | UiIntent::CreateBackspace
-        | UiIntent::CreateClear
         | UiIntent::CreateAppend(_) => return apply_create_intent(context, state, intent),
         UiIntent::CloneCancel
         | UiIntent::CloneSubmit
         | UiIntent::CloneBackspace
-        | UiIntent::CloneClear
         | UiIntent::CloneAppend(_) => apply_clone_intent(context, state, loader, intent),
         UiIntent::UnboundKey | UiIntent::Noop => {}
     }
@@ -689,14 +688,16 @@ fn apply_click_repo_intent(
 fn apply_text_input_intent(state: &mut UiState, intent: UiIntent) {
     if intent == UiIntent::FilterBackspace {
         state.filter_backspace();
-    } else if intent == UiIntent::FilterClear {
-        state.filter_clear();
     } else if let UiIntent::FilterAppend(ch) = intent {
         state.filter_append(ch);
     } else if intent == UiIntent::InputStart {
         state.input_start();
     } else if intent == UiIntent::InputEnd {
         state.input_end();
+    } else if intent == UiIntent::InputKillBackward {
+        state.input_kill_backward();
+    } else if intent == UiIntent::InputKillForward {
+        state.input_kill_forward();
     }
 }
 
@@ -724,8 +725,6 @@ fn apply_create_intent(
     }
     if intent == UiIntent::CreateBackspace {
         state.create_backspace();
-    } else if intent == UiIntent::CreateClear {
-        state.create_clear();
     } else if let UiIntent::CreateAppend(ch) = intent {
         state.create_append(ch);
     }
@@ -752,8 +751,6 @@ fn apply_clone_intent(
         }
     } else if intent == UiIntent::CloneBackspace {
         state.clone_backspace();
-    } else if intent == UiIntent::CloneClear {
-        state.clone_clear();
     } else if let UiIntent::CloneAppend(ch) = intent {
         state.clone_append(ch);
     }
@@ -1760,17 +1757,19 @@ mod tests {
     }
 
     #[test]
-    fn filter_clear_empties_filter() {
+    fn filter_kill_backward_removes_text_before_cursor() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.filter_text = String::from("something");
+        state.mode = InputMode::Filter;
+        state.filter_text = String::from("before-after");
+        state.filter_cursor = "before-".len();
         _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
-            UiIntent::FilterClear,
+            UiIntent::InputKillBackward,
         );
-        assert_eq!(state.filter_text, "");
+        assert_eq!(state.filter_text, "after");
         assert_eq!(state.filter_cursor, 0);
     }
 
@@ -1865,18 +1864,20 @@ mod tests {
     }
 
     #[test]
-    fn create_clear_empties_branch() {
+    fn create_kill_forward_removes_text_after_cursor() {
         let ctx = test_env();
         let mut state = empty_state();
+        state.mode = InputMode::CreateTask;
         state.create_branch = String::from("some-branch");
+        state.create_cursor = "some".len();
         _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
-            UiIntent::CreateClear,
+            UiIntent::InputKillForward,
         );
-        assert!(state.create_branch.is_empty());
-        assert_eq!(state.create_cursor, 0);
+        assert_eq!(state.create_branch, "some");
+        assert_eq!(state.create_cursor, 4);
     }
 
     #[test]
@@ -1898,7 +1899,7 @@ mod tests {
         assert_eq!(state.create_cursor, 2);
     }
 
-    // ── CloneCancel / CloneAppend / CloneBackspace / CloneClear ─────────────
+    // ── CloneCancel / CloneAppend / CloneBackspace ──────────────────────────
 
     #[test]
     fn clone_cancel_returns_to_normal() {
@@ -1958,17 +1959,19 @@ mod tests {
     }
 
     #[test]
-    fn clone_clear_empties_input() {
+    fn clone_kill_backward_removes_text_before_cursor() {
         let ctx = test_env();
         let mut state = empty_state();
-        state.clone_input = String::from("something");
+        state.mode = InputMode::CloneRepo;
+        state.clone_input = String::from("repo-url");
+        state.clone_cursor = "repo-".len();
         _ = apply_intent(
             &ctx,
             &mut state,
             &mut LoaderHandle::noop(),
-            UiIntent::CloneClear,
+            UiIntent::InputKillBackward,
         );
-        assert!(state.clone_input.is_empty());
+        assert_eq!(state.clone_input, "url");
         assert_eq!(state.clone_cursor, 0);
     }
 
